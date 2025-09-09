@@ -66,6 +66,18 @@ function percentile(sortedAsc: number[], q: number): number {
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, i))];
 }
 
+// **FIX**: tolerant uitlezen van IL-risk op pools (type-safe; geen directe field-access)
+function hasIlRisk(pool: any): boolean {
+  const v =
+    pool?.ilRisk ??
+    pool?.il_risk ??
+    pool?.impermanentLossRisk ??
+    pool?.impermanent_loss_risk ??
+    "";
+  const s = String(v).toLowerCase().trim();
+  return s === "yes" || s === "true" || s === "1";
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -132,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           let qual = 1;
           if (p?.stablecoin === true) qual *= 0.85;                 // stables iets omlaag
-          if (String(p?.ilRisk).toLowerCase() === "yes") qual *= 0.70; // IL-risk sterker omlaag
+          if (hasIlRisk(p)) qual *= 0.70;                            // ← FIX: typesafe IL-risk
 
           const eff = apy * qual;
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
