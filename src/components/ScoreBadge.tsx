@@ -1,0 +1,1 @@
+export default function ScoreBadge({score}:{score:number}){ const s= score>=66?'BUY': score<=33?'SELL':'HOLD'; const cls= s==='BUY'?'badge-buy': s==='SELL'?'badge-sell':'badge-hold'; return <span className={cls}>{s} · {score}</span>; }
