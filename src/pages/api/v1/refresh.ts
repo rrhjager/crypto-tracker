@@ -66,7 +66,7 @@ function percentile(sortedAsc: number[], q: number): number {
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, i))];
 }
 
-// **FIX**: tolerant uitlezen van IL-risk op pools (type-safe; geen directe field-access)
+// **FIX**: tolerant uitlezen van IL-risk op pools
 function hasIlRisk(pool: any): boolean {
   const v =
     pool?.ilRisk ??
@@ -75,7 +75,7 @@ function hasIlRisk(pool: any): boolean {
     pool?.impermanent_loss_risk ??
     "";
   const s = String(v).toLowerCase().trim();
-  return s === "yes" || s === "true" || s === "1";
+  return s === "yes" || s === "true" || s === "1" || s === "high";
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           let qual = 1;
           if (p?.stablecoin === true) qual *= 0.85;                 // stables iets omlaag
-          if (hasIlRisk(p)) qual *= 0.70;                            // ← FIX: typesafe IL-risk
+          if (hasIlRisk(p)) qual *= 0.70;                            // IL-risk sterker omlaag
 
           const eff = apy * qual;
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
@@ -211,7 +211,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55);
       }
 
-      // **OI demping**: 0..1 → 0.2..0.8, en bij bearish momentum cap 0.6
+      // OI demping: 0..1 → 0.2..0.8, en bij bearish momentum cap 0.6
       let oiScore: number | null = (typeof p.oi === "number") ? p.oi : null;
       if (typeof oiScore === "number") {
         oiScore = 0.2 + 0.6 * Math.max(0, Math.min(1, oiScore));
@@ -219,24 +219,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) oiScore = Math.min(oiScore, 0.6);
       }
 
-      // ✅ LSR demping + crowding-penalty + bearish cap
+      // LSR demping + crowding-penalty + bearish cap
       let lsrScore: number | null = (typeof p.lsr === "number") ? p.lsr : null;
       if (typeof lsrScore === "number") {
-        // demp naar 0.2..0.8 rond 0.5 neutraal
         const centered = lsrScore - 0.5;         // -0.5..+0.5
         let s = 0.5 + centered * 0.6;            // 0.2..0.8
-
-        // crowding-penalty: extreem veel longs (>0.65) of shorts (<0.35)
         if (lsrScore > 0.65) s -= (lsrScore - 0.65) * 1.0;
         if (lsrScore < 0.35) s += (0.35 - lsrScore) * 1.0;
-
-        // hard-bounds
         s = Math.max(0.3, Math.min(0.7, s));
-
-        // bearish context: cap maximaal 0.55
         const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
         if (mom < 0.45) s = Math.min(s, 0.55);
-
         lsrScore = s;
       }
 
@@ -247,17 +239,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         m: pctChangeFromCloses(p.closes1d, 30),
       };
 
-      const breakdown: ComponentScoreNullable = {
+      // ❗ TypeScript-fix: bouw een base dat exact aan de type voldoet, voeg momentum apart toe
+      const baseBreakdown: ComponentScoreNullable = {
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
-        momentum: (typeof p.momentum === "number") ? p.momentum : null,
         volatilityRegime: volRegScores[i],
         funding: fundingScore,
         openInterest: oiScore,
-        longShortSkew: lsrScore,                 // ← gedempte LSR
+        longShortSkew: lsrScore,
         breadth,
         fearGreed: fearGreed,
         yield: yieldScore,
       };
+
+      const breakdown = {
+        ...baseBreakdown,
+        momentum: (typeof p.momentum === "number") ? p.momentum : null,
+      } as any;
 
       const score = combineScores(breakdown);
 
@@ -284,6 +281,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               oiScore,
               lsrRaw: p.lsr,
               lsrScore,
+              momentum: p.momentum,
             }
           } : {})
         },
