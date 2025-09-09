@@ -22,7 +22,6 @@ async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p 
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────────
 
-// σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
 function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null {
   const n = Math.min(lookback, closes.length - 1);
   if (n <= 5) return null;
@@ -40,7 +39,6 @@ function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null
   return Number.isFinite(stdev) ? stdev : null;
 }
 
-// Normaliseer een lijst ruwe waarden naar 0..1 via min-max (safe)
 function minMaxNormalize(values: Array<number | null | undefined>): number[] {
   const xs = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
   if (!xs.length) return values.map(() => 0.5);
@@ -50,7 +48,6 @@ function minMaxNormalize(values: Array<number | null | undefined>): number[] {
   return values.map(v => (typeof v === "number" ? (v - min) / (max - min) : 0.5));
 }
 
-// % change tov N candles terug
 function pctChangeFromCloses(closes: number[], lookback: number): number {
   if (!Array.isArray(closes) || closes.length <= lookback) return 0;
   const last = closes[closes.length - 1];
@@ -59,14 +56,13 @@ function pctChangeFromCloses(closes: number[], lookback: number): number {
   return ((last - prev) / prev) * 100;
 }
 
-// eenvoudige percentiel helper (0..1 kwantiel)
 function percentile(sortedAsc: number[], q: number): number {
   if (!sortedAsc.length) return 0;
   const i = Math.round(q * (sortedAsc.length - 1));
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, i))];
 }
 
-// **FIX**: tolerant uitlezen van IL-risk op pools
+// Tolerant uitlezen van IL-risk op pools (verschillende veldnamen)
 function hasIlRisk(pool: any): boolean {
   const v =
     pool?.ilRisk ??
@@ -85,12 +81,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const q = String(req.query.debug || "").toLowerCase();
     const DEBUG = q === "1" || q === "true";
 
-    // 1) Market Fear & Greed (0..1)
     const fng = await safe(getFearGreed(), { value: 50 } as any);
     const fngVal = Number((fng as any)?.value ?? 50);
     const fearGreed = 1 - Math.abs((fngVal / 100) - 0.5) * 2;
 
-    // 2) Klines ophalen (180×1h voor signalen, 60×1d voor 30d perf)
     const klinesByCoin = await Promise.all(
       COINS.map(async (coin) => {
         const symbol = coin.pairUSD?.binance;
@@ -105,7 +99,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 3) Lokale signalen + pools
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -117,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       oi: number | null;
       lsr: number | null;
       pools: any[];
-      bestApyEff: number | null; // robuuste “beste” APY per coin
+      bestApyEff: number | null;
     };
 
     const prelim: Pre[] = await Promise.all(
@@ -132,7 +125,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const pools    = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
 
-        // Robuuste “beste APY”: combineer base+reward en penaliseer risicovoller
         let bestApyEff: number | null = null;
         for (const p of Array.isArray(pools) ? pools : []) {
           const apy = Number.isFinite(Number(p?.apy))
@@ -143,8 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!Number.isFinite(apy) || apy <= 0 || tvl < 3_000_000) continue;
 
           let qual = 1;
-          if (p?.stablecoin === true) qual *= 0.85;                 // stables iets omlaag
-          if (hasIlRisk(p)) qual *= 0.70;                            // IL-risk sterker omlaag
+          if (p?.stablecoin === true) qual *= 0.85;
+          if (hasIlRisk(p)) qual *= 0.70;
 
           const eff = apy * qual;
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
@@ -154,64 +146,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 4) Breadth (marktbreedte) – aandeel coins met momentum ≥ 0.6
     const momentumScores = prelim.map(p => (typeof p.momentum === "number" ? p.momentum : 0));
     const greenCount = momentumScores.filter(m => m >= 0.6).length;
     const breadth = COINS.length ? greenCount / COINS.length : 0.5;
 
-    // 5) Volatility Regime: cross-sectionele normalisatie + demping
     const rawVols = prelim.map(p => p.rawVol);
-    const volNorm01 = minMaxNormalize(rawVols); // 0 (laagst) .. 1 (hoogst)
-    // lager σ ⇒ hoger; daarna dempen naar 0.3..0.7 en bij bearish momentum max 0.6
+    const volNorm01 = minMaxNormalize(rawVols);
     const volRegScores = volNorm01.map((v, i) => {
-      let s = 1 - v;                        // 0..1
-      s = 0.3 + 0.4 * s;                    // 0.3..0.7
+      let s = 1 - v;
+      s = 0.3 + 0.4 * s;
       const mom = typeof prelim[i].momentum === "number" ? prelim[i].momentum : 0.5;
-      if (mom < 0.45) s = Math.min(s, 0.6); // cap bij bearish trend
+      if (mom < 0.45) s = Math.min(s, 0.6);
       return s;
     });
 
-    // 6) Yield-schaal op basis van percentielen over alle coins
     const apysAll = prelim
       .map(p => (typeof p.bestApyEff === "number" ? p.bestApyEff : null))
       .filter((x): x is number => x != null && Number.isFinite(x) && x > 0)
       .sort((a,b) => a - b);
 
-    const p10 = apysAll.length >= 5 ? percentile(apysAll, 0.10) : 1.5;  // ~1.5% baseline
-    const p90 = apysAll.length >= 5 ? percentile(apysAll, 0.90) : 12;   // ~12% cap
+    const p10 = apysAll.length >= 5 ? percentile(apysAll, 0.10) : 1.5;
+    const p90 = apysAll.length >= 5 ? percentile(apysAll, 0.90) : 12;
 
     function yieldScoreFrom(apyEff: number | null): number | null {
       if (apyEff == null || !Number.isFinite(apyEff) || apyEff <= 0) return null;
-
       let z: number;
       if (p90 - p10 <= 1e-9) {
-        // edge-case: clip op 12% en demp naar 0.2..0.8
         z = Math.max(0, Math.min(1, apyEff / 12));
       } else {
         z = (apyEff - p10) / (p90 - p10);
         z = Math.max(0, Math.min(1, z));
       }
-      // demp: 0..1 → 0.2..0.8 (voorkomt 100%)
       return 0.2 + 0.6 * z;
     }
 
-    // 7) Output
     const results = prelim.map((p, i) => {
-      // Funding schalen rond 0 (cap ±0.05% = 0.0005)
       let fundingScore: number | null = null;
       if (typeof p.funding === "number" && Number.isFinite(p.funding)) {
         const capped = Math.max(-0.0005, Math.min(0.0005, p.funding));
-        fundingScore = 0.5 + (capped / 0.0005) * 0.5; // -cap→0, +cap→1
+        fundingScore = 0.5 + (capped / 0.0005) * 0.5;
       }
 
-      // Yield-score + bearish-cap
       let yieldScore = yieldScoreFrom(p.bestApyEff);
       if (yieldScore != null) {
         const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
         if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55);
       }
 
-      // OI demping: 0..1 → 0.2..0.8, en bij bearish momentum cap 0.6
       let oiScore: number | null = (typeof p.oi === "number") ? p.oi : null;
       if (typeof oiScore === "number") {
         oiScore = 0.2 + 0.6 * Math.max(0, Math.min(1, oiScore));
@@ -219,11 +200,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) oiScore = Math.min(oiScore, 0.6);
       }
 
-      // LSR demping + crowding-penalty + bearish cap
       let lsrScore: number | null = (typeof p.lsr === "number") ? p.lsr : null;
       if (typeof lsrScore === "number") {
-        const centered = lsrScore - 0.5;         // -0.5..+0.5
-        let s = 0.5 + centered * 0.6;            // 0.2..0.8
+        const centered = lsrScore - 0.5;
+        let s = 0.5 + centered * 0.6;
         if (lsrScore > 0.65) s -= (lsrScore - 0.65) * 1.0;
         if (lsrScore < 0.35) s += (0.35 - lsrScore) * 1.0;
         s = Math.max(0.3, Math.min(0.7, s));
@@ -232,29 +212,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         lsrScore = s;
       }
 
-      // Performance: 24h (24×1h), 7d (168×1h), 30d (30×1d)
       const perf = {
         d: pctChangeFromCloses(p.closes1h, 24),
         w: pctChangeFromCloses(p.closes1h, 168),
         m: pctChangeFromCloses(p.closes1d, 30),
       };
 
-      // ❗ TypeScript-fix: bouw een base dat exact aan de type voldoet, voeg momentum apart toe
-      const baseBreakdown: ComponentScoreNullable = {
+      // 👉 Eén object met álle velden, daarna casten i.p.v. literal-annotatie
+      const breakdown = {
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
+        momentum: (typeof p.momentum === "number") ? p.momentum : null,
         volatilityRegime: volRegScores[i],
         funding: fundingScore,
         openInterest: oiScore,
         longShortSkew: lsrScore,
         breadth,
-        fearGreed: fearGreed,
+        fearGreed,
         yield: yieldScore,
-      };
-
-      const breakdown = {
-        ...baseBreakdown,
-        momentum: (typeof p.momentum === "number") ? p.momentum : null,
-      } as any;
+      } as unknown as ComponentScoreNullable;
 
       const score = combineScores(breakdown);
 
