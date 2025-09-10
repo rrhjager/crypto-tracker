@@ -22,10 +22,6 @@ async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p;
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────────
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 8000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -58,6 +54,86 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
     } catch { /* probeer volgende host */ }
   }
   return [];
+}
+
+// ── OI: Futures helpers ────────────────────────────────────────────────────────
+
+// Map spot symbols (…USDC/BUSD/FDUSD/… ) naar USDT-perp voor USDT-M Futures
+function toUsdtPerp(symbol?: string | null): string | null {
+  if (!symbol) return null;
+  let s = symbol.toUpperCase();
+  if (s.startsWith("WETH")) s = "ETH" + s.slice(4);
+  if (s.startsWith("WBTC")) s = "BTC" + s.slice(4);
+  const stable = ["USDT","FDUSD","BUSD","USDC","TUSD","DAI","USD"];
+  for (const st of stable) {
+    if (s.endsWith(st)) {
+      const base = s.slice(0, -st.length);
+      return base + "USDT";
+    }
+  }
+  if (!s.endsWith("USDT")) s = s + "USDT";
+  return s;
+}
+
+// Map naar COIN-M perpetual (BASEUSD_PERP)
+function toCoinMarginedPerp(symbol?: string | null): string | null {
+  if (!symbol) return null;
+  let s = symbol.toUpperCase();
+  if (s.startsWith("WETH")) s = "ETH" + s.slice(4);
+  if (s.startsWith("WBTC")) s = "BTC" + s.slice(4);
+  const stable = ["USDT","FDUSD","BUSD","USDC","TUSD","DAI","USD"];
+  let base = s;
+  for (const st of stable) {
+    if (s.endsWith(st)) base = s.slice(0, -st.length);
+  }
+  // Voor multipliers (1000SHIB, etc.) is dit ook prima: BASEUSD_PERP
+  return base + "USD_PERP";
+}
+
+// OI van USDT-M (contracts)
+async function fetchFuturesOpenInterestUSDT(usdtPerp: string | null): Promise<number | null> {
+  if (!usdtPerp) return null;
+  const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
+  const path = `/fapi/v1/openInterest?symbol=${encodeURIComponent(usdtPerp)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 7000);
+      const oi = data ? Number(data.openInterest) : null; // aantal contracten
+      if (Number.isFinite(oi)) return oi;
+    } catch { /* next host */ }
+  }
+  return null;
+}
+
+// OI van COIN-M (contracts)
+async function fetchFuturesOpenInterestCOIN(coinPerp: string | null): Promise<number | null> {
+  if (!coinPerp) return null;
+  const hosts = ["https://dapi.binance.com","https://dapi1.binance.com","https://dapi2.binance.com","https://dapi3.binance.com"];
+  const path = `/dapi/v1/openInterest?symbol=${encodeURIComponent(coinPerp)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 7000);
+      const oi = data ? Number(data.openInterest) : null;
+      if (Number.isFinite(oi)) return oi;
+    } catch { /* next host */ }
+  }
+  return null;
+}
+
+// Laatste redmiddel: binance.com "futures/data" (USDT-M & COIN-M) – public, geen key
+async function fetchOpenInterestHist(symbol: string, coinMargined = false): Promise<number | null> {
+  const base = "https://www.binance.com";
+  const path = `/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=5m&limit=1`;
+  try {
+    const data = await fetchWithTimeout(base + path, {}, 7000);
+    if (Array.isArray(data) && data.length) {
+      // response items hebben vaak sumOpenInterest (contracts) en sumOpenInterestValue (USD)
+      const last = data[data.length - 1];
+      const oi = Number(last?.sumOpenInterest ?? last?.openInterest ?? last?.sumOpenInterestValue);
+      return Number.isFinite(oi) ? oi : null;
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 
 // σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
@@ -116,88 +192,6 @@ function hasIlRisk(pool: any): boolean {
   return s === "yes" || s === "true" || s === "1" || s === "high";
 }
 
-// ── OI: Futures helpers ────────────────────────────────────────────────────────
-
-// Map spot symbols (…USDC/BUSD/FDUSD/… ) naar USDT-perp voor USDT-M Futures
-function toUsdtPerp(symbol?: string | null): string | null {
-  if (!symbol) return null;
-  let s = symbol.toUpperCase();
-  if (s.startsWith("WETH")) s = "ETH" + s.slice(4);
-  if (s.startsWith("WBTC")) s = "BTC" + s.slice(4);
-  const stable = ["USDT","FDUSD","BUSD","USDC","TUSD","DAI","USD"];
-  for (const st of stable) {
-    if (s.endsWith(st)) {
-      const base = s.slice(0, -st.length);
-      return base + "USDT";
-    }
-  }
-  if (!s.endsWith("USDT")) s = s + "USDT";
-  return s;
-}
-
-// Map naar COIN-M perpetual (BASEUSD_PERP)
-function toCoinMarginedPerp(symbol?: string | null): string | null {
-  if (!symbol) return null;
-  let s = symbol.toUpperCase();
-  if (s.startsWith("WETH")) s = "ETH" + s.slice(4);
-  if (s.startsWith("WBTC")) s = "BTC" + s.slice(4);
-  const stable = ["USDT","FDUSD","BUSD","USDC","TUSD","DAI","USD"];
-  let base = s;
-  for (const st of stable) {
-    if (s.endsWith(st)) base = s.slice(0, -st.length);
-  }
-  return base + "USD_PERP";
-}
-
-// OI van USDT-M
-async function fetchFuturesOpenInterestUSDT(usdtPerp: string | null): Promise<number | null> {
-  if (!usdtPerp) return null;
-  const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
-  const path = `/fapi/v1/openInterest?symbol=${encodeURIComponent(usdtPerp)}`;
-  for (const h of hosts) {
-    try {
-      const data = await fetchWithTimeout(h + path, {}, 8000);
-      const oi = data ? Number(data.openInterest) : null; // aantal contracten
-      if (Number.isFinite(oi)) return oi;
-    } catch { /* next */ }
-  }
-  return null;
-}
-
-// OI van COIN-M
-async function fetchFuturesOpenInterestCOIN(coinPerp: string | null): Promise<number | null> {
-  if (!coinPerp) return null;
-  const hosts = ["https://dapi.binance.com","https://dapi1.binance.com","https://dapi2.binance.com","https://dapi3.binance.com"];
-  const path = `/dapi/v1/openInterest?symbol=${encodeURIComponent(coinPerp)}`;
-  for (const h of hosts) {
-    try {
-      const data = await fetchWithTimeout(h + path, {}, 8000);
-      const oi = data ? Number(data.openInterest) : null;
-      if (Number.isFinite(oi)) return oi;
-    } catch { /* next */ }
-  }
-  return null;
-}
-
-// Concurrency limiter (p-limit 5)
-function pLimit(concurrency: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  const next = () => {
-    active--;
-    if (queue.length) queue.shift()!();
-  };
-  return function <T>(fn: () => Promise<T>): Promise<T> {
-    return new Promise((resolve, reject) => {
-      const run = () => {
-        active++;
-        fn().then((v) => { next(); resolve(v); }, (e) => { next(); reject(e); });
-      };
-      if (active < concurrency) run(); else queue.push(run);
-    });
-  };
-}
-
 // ───────────────────────────────────────────────────────────────────────────────
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -234,30 +228,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 3) Precompute OI met concurrency-limit (om 429 te vermijden)
-    type OIEntry = { coinIdx: number; spotSym: string | null; usdtPerp: string | null; coinPerp: string | null };
-    const oiEntries: OIEntry[] = COINS.map((coin, i) => {
-      const spotSym = coin.pairUSD?.binance ?? null;
-      return { coinIdx: i, spotSym, usdtPerp: toUsdtPerp(spotSym), coinPerp: toCoinMarginedPerp(spotSym) };
-    });
-
-    const limit = pLimit(5);
-    const oiResults: Array<number | null> = await Promise.all(oiEntries.map(({ spotSym, usdtPerp, coinPerp }) =>
-      limit(async () => {
-        // 1) provider
-        let oi = await safe(currentOpenInterest(spotSym || undefined), null);
-        if (typeof oi === "number" && Number.isFinite(oi)) return oi;
-        // 2) USDT-M
-        oi = await safe(fetchFuturesOpenInterestUSDT(usdtPerp), null);
-        if (typeof oi === "number" && Number.isFinite(oi)) return oi;
-        // 3) COIN-M
-        oi = await safe(fetchFuturesOpenInterestCOIN(coinPerp), null);
-        if (typeof oi === "number" && Number.isFinite(oi)) return oi;
-        return null;
-      })
-    ));
-
-    // 4) Lokale signalen + pools (nu met oiResults)
+    // 3) Lokale signalen + pools + OI (met meerdere fallbacks)
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -270,15 +241,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lsr: number | null;
       pools: any[];
       bestApyEff: number | null;
+      _futSym?: string | null;
+      _coinPerp?: string | null;
+      _oiSource?: "provider" | "usdt-m" | "coin-m" | "hist-usdt" | "hist-coin" | null;
     };
 
     const prelim: Pre[] = await Promise.all(
-      klinesByCoin.map(async ({ coin, closes1h, closes1d }, idx) => {
+      klinesByCoin.map(async ({ coin, closes1h, closes1d }) => {
         const spotSym = coin.pairUSD?.binance;
+        const futSym  = toUsdtPerp(spotSym);
+        const coinPerp = toCoinMarginedPerp(spotSym);
 
         const momentum = closes1h.length ? momentumScoreFromCloses(closes1h) : null;
         const rawVol   = closes1h.length ? rawVolatilityFromCloses(closes1h, 72) : null;
         const tv       = await safe(tvSignalScore(spotSym), null);
+
+        let _oiSource: Pre["_oiSource"] = null;
+
+        // 1) Provider OI
+        let oi = await safe(currentOpenInterest(spotSym), null);
+        if (typeof oi === "number" && Number.isFinite(oi)) {
+          _oiSource = "provider";
+        } else {
+          // 2) USDT-M direct
+          oi = await safe(fetchFuturesOpenInterestUSDT(futSym), null);
+          if (typeof oi === "number" && Number.isFinite(oi)) {
+            _oiSource = "usdt-m";
+          } else {
+            // 3) COIN-M direct
+            oi = await safe(fetchFuturesOpenInterestCOIN(coinPerp), null);
+            if (typeof oi === "number" && Number.isFinite(oi)) {
+              _oiSource = "coin-m";
+            } else {
+              // 4) Binance.com futures/data (USDT-M)
+              const histUsdtSym = futSym ?? "";
+              if (histUsdtSym) {
+                const histOi = await safe(fetchOpenInterestHist(histUsdtSym, false), null);
+                if (typeof histOi === "number" && Number.isFinite(histOi)) {
+                  oi = histOi;
+                  _oiSource = "hist-usdt";
+                }
+              }
+              // 5) Binance.com futures/data (COIN-M) als USDT-M leeg is
+              if (!oi) {
+                const histCoinSym = coinPerp ?? "";
+                if (histCoinSym) {
+                  const histOiCoin = await safe(fetchOpenInterestHist(histCoinSym, true), null);
+                  if (typeof histOiCoin === "number" && Number.isFinite(histOiCoin)) {
+                    oi = histOiCoin;
+                    _oiSource = "hist-coin";
+                  }
+                }
+              }
+            }
+          }
+        }
 
         const funding  = await safe(latestFundingRate(spotSym), null);
         const lsr      = await safe(globalLongShortSkew(spotSym), null);
@@ -303,17 +320,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
         }
 
-        const oi = oiResults[idx] ?? null;
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff };
+        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff, _futSym: futSym, _coinPerp: coinPerp, _oiSource };
       })
     );
 
-    // 5) Breadth
+    // 4) Breadth
     const momentumScores = prelim.map(p => (typeof p.momentum === "number" ? p.momentum : 0));
     const greenCount = momentumScores.filter(m => m >= 0.6).length;
     const breadth = COINS.length ? greenCount / COINS.length : 0.5;
 
-    // 6) Volatility Regime
+    // 5) Volatility Regime
     const rawVols = prelim.map(p => p.rawVol);
     const volNorm01 = minMaxNormalize(rawVols);
     const volRegScores = volNorm01.map((v, i) => {
@@ -324,7 +340,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return s;
     });
 
-    // 7) Yield percentielen
+    // 6) Yield percentielen
     const apysAll = prelim
       .map(p => (typeof p.bestApyEff === "number" ? p.bestApyEff : null))
       .filter((x): x is number => x != null && Number.isFinite(x) && x > 0)
@@ -346,7 +362,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return 0.2 + 0.6 * z;
     }
 
-    // 8) OI normaliseren cross-sectioneel
+    // 6b) OI normaliseren cross-sectioneel
     const oiRaw = prelim.map(p => (typeof p.oi === "number" && Number.isFinite(p.oi)) ? p.oi : null);
     const oiFinite = oiRaw.filter((x): x is number => x != null);
     let oiNorm: number[] = oiRaw.map(() => 0.5);
@@ -357,7 +373,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       oiNorm = oiRaw.map((_, i) => (i === idx ? 0.8 : 0.5));
     }
 
-    // 9) Output
+    // 7) Output
     const results = prelim.map((p, i) => {
       // Funding rond 0 (cap ±0.05% = 0.0005)
       let fundingScore: number | null = null;
@@ -406,6 +422,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
       const price = (last1h ?? last1d ?? null);
 
+      // Breakdown
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
         momentum: (typeof p.momentum === "number") ? p.momentum : null,
@@ -435,8 +452,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [],
           ...(DEBUG ? {
             __debug: {
+              futSym: p._futSym,
+              coinPerp: p._coinPerp,
+              oiSource: p._oiSource,
               oiRaw: p.oi,
               oiNorm: oiNorm[i],
+              momentum: p.momentum,
               closes1hLen: p.closes1h.length,
               closes1dLen: p.closes1d.length,
             }
