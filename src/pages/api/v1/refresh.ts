@@ -34,14 +34,14 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs =
   }
 }
 
-// Fallback rechtstreeks naar Binance **spot** hosts wanneer de provider niks/te weinig geeft
+// Fallback rechtstreeks naar Binance hosts wanneer de provider niks/te weinig geeft
 async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit: number) {
   const hosts = [
     "https://api.binance.com",
     "https://api1.binance.com",
     "https://api2.binance.com",
     "https://api3.binance.com",
-    "https://data-api.binance.vision",
+    "https://data-api.binance.vision"
   ];
   const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
   for (const h of hosts) {
@@ -56,61 +56,43 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
   return [];
 }
 
-// Fallbacks rechtstreeks naar **Binance Futures** voor funding / OI / long-short
-async function fetchFuturesFunding(symbol: string): Promise<number | null> {
-  const hosts = [
-    "https://fapi.binance.com",
-    "https://fapi1.binance.com",
-    "https://fapi2.binance.com",
-    "https://fapi3.binance.com",
-  ];
-  const path = `/fapi/v1/fundingRate?symbol=${encodeURIComponent(symbol)}&limit=1`;
-  for (const h of hosts) {
-    try {
-      const data = await fetchWithTimeout(h + path, {}, 8000);
-      const item = Array.isArray(data) && data[0] ? data[0] : null;
-      const fr = item ? Number(item.fundingRate) : null; // 8h rate, bv 0.0001
-      return Number.isFinite(fr) ? fr : null;
-    } catch { /* try next */ }
+// ── OI: Futures helpers ────────────────────────────────────────────────────────
+
+// Map spot symbols (…USDC/BUSD/FDUSD/… ) naar USDT-perp voor Futures
+function toUsdtPerp(symbol?: string | null): string | null {
+  if (!symbol) return null;
+  let s = symbol.toUpperCase();
+  // soms wrapped assets
+  if (s.startsWith("WETH")) s = "ETH" + s.slice(4);
+  if (s.startsWith("WBTC")) s = "BTC" + s.slice(4);
+
+  const stable = ["USDT","FDUSD","BUSD","USDC","TUSD","DAI","USD"];
+  for (const st of stable) {
+    if (s.endsWith(st)) {
+      const base = s.slice(0, -st.length);
+      return base + "USDT";
+    }
   }
-  return null;
+  // geen suffix? gok USDT
+  if (!s.endsWith("USDT")) s = s + "USDT";
+  return s;
 }
 
-async function fetchFuturesOpenInterest(symbol: string): Promise<number | null> {
+// Pak open interest (raw) direct van Binance Futures (USDT-M)
+async function fetchFuturesOpenInterest(usdtPerp: string | null): Promise<number | null> {
+  if (!usdtPerp) return null;
   const hosts = [
     "https://fapi.binance.com",
     "https://fapi1.binance.com",
     "https://fapi2.binance.com",
     "https://fapi3.binance.com",
   ];
-  const path = `/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol)}`;
+  const path = `/fapi/v1/openInterest?symbol=${encodeURIComponent(usdtPerp)}`;
   for (const h of hosts) {
     try {
       const data = await fetchWithTimeout(h + path, {}, 8000);
       const oi = data ? Number(data.openInterest) : null; // in contracten, raw
-      return Number.isFinite(oi) ? oi : null;
-    } catch { /* try next */ }
-  }
-  return null;
-}
-
-async function fetchFuturesLongShortSkew(symbol: string): Promise<number | null> {
-  const hosts = [
-    "https://fapi.binance.com",
-    "https://fapi1.binance.com",
-    "https://fapi2.binance.com",
-    "https://fapi3.binance.com",
-  ];
-  // Globale long/short account ratio (5m window, laatste punt)
-  const path = `/futures/data/globalLongShortAccountRatio?symbol=${encodeURIComponent(symbol)}&period=5m&limit=1`;
-  for (const h of hosts) {
-    try {
-      const data = await fetchWithTimeout(h + path, {}, 8000);
-      const item = Array.isArray(data) && data[0] ? data[0] : null;
-      const ratio = item ? Number(item.longShortRatio) : null; // bv 2.0 → 66.7% long
-      if (!Number.isFinite(ratio) || ratio <= 0) continue;
-      const longShare = ratio / (1 + ratio); // 0..1
-      return Math.max(0, Math.min(1, longShare));
+      if (Number.isFinite(oi)) return oi;
     } catch { /* try next */ }
   }
   return null;
@@ -190,7 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const symbol = coin.pairUSD?.binance;
         if (!symbol) return { coin, closes1h: [] as number[], closes1d: [] as number[] };
 
-        // Belangrijk: typ als any[] zodat fallback ({close}) toewijsbaar is
+        // Eerst de bestaande provider proberen
         let ks1h: any[] = await safe(fetchSpotKlines(symbol, "1h", 180) as any, []);
         let ks1d: any[] = await safe(fetchSpotKlines(symbol, "1d", 60) as any, []);
 
@@ -208,7 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 3) Lokale signalen + pools + futures met fallbacks
+    // 3) Lokale signalen + pools + OI (met futures fallback)
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -216,38 +198,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tv: number | null;
       momentum: number | null;
       rawVol: number | null;
-      funding: number | null;          // 8h rate (kan negatief)
-      oi: number | null;               // raw OI (of al genormaliseerd 0..1)
-      lsr: number | null;              // 0..1 (long share)
+      funding: number | null;
+      oi: number | null;   // raw OI (kan groot zijn)
+      lsr: number | null;
       pools: any[];
       bestApyEff: number | null;
+      _futSym?: string | null; // debug
     };
 
     const prelim: Pre[] = await Promise.all(
       klinesByCoin.map(async ({ coin, closes1h, closes1d }) => {
-        const symbol = coin.pairUSD?.binance;
+        const spotSym = coin.pairUSD?.binance;
+        const futSym  = toUsdtPerp(spotSym);
 
         const momentum = closes1h.length ? momentumScoreFromCloses(closes1h) : null;
         const rawVol   = closes1h.length ? rawVolatilityFromCloses(closes1h, 72) : null;
-        const tv       = await safe(tvSignalScore(symbol), null);
+        const tv       = await safe(tvSignalScore(spotSym), null);
 
-        // Providers
-        let funding  = await safe(latestFundingRate(symbol), null);
-        let oi       = await safe(currentOpenInterest(symbol), null);
-        let lsr      = await safe(globalLongShortSkew(symbol), null);
-
-        // Fallbacks direct naar Binance Futures wanneer providers geen bruikbare waarde geven
-        if (!(typeof funding === "number" && Number.isFinite(funding))) {
-          funding = await safe(fetchFuturesFunding(symbol), null);
-        }
+        // Provider OI
+        let oi = await safe(currentOpenInterest(spotSym), null);
+        // Fallback naar Binance Futures (USDT-M) als provider niets geeft
         if (!(typeof oi === "number" && Number.isFinite(oi))) {
-          oi = await safe(fetchFuturesOpenInterest(symbol), null); // raw waarde
-        }
-        if (!(typeof lsr === "number" && Number.isFinite(lsr))) {
-          lsr = await safe(fetchFuturesLongShortSkew(symbol), null); // 0..1
+          oi = await safe(fetchFuturesOpenInterest(futSym), null);
         }
 
-        const pools  = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
+        const funding  = await safe(latestFundingRate(spotSym), null);
+        const lsr      = await safe(globalLongShortSkew(spotSym), null);
+
+        const pools    = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
 
         // Beste APY per coin (robuust)
         let bestApyEff: number | null = null;
@@ -255,6 +233,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const apy = Number.isFinite(Number(p?.apy))
             ? Number(p.apy)
             : Number(p?.apyBase || 0) + Number(p?.apyReward || 0);
+
           const tvl = Number(p?.tvlUsd || 0);
           if (!Number.isFinite(apy) || apy <= 0 || tvl < 3_000_000) continue;
 
@@ -266,7 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
         }
 
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff };
+        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff, _futSym: futSym };
       })
     );
 
@@ -308,19 +287,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return 0.2 + 0.6 * z;
     }
 
-    // 6b) Open Interest normaliseren (provider kan raw of 0..1 geven)
-    const oiVals = prelim.map(p => (typeof p.oi === "number" && Number.isFinite(p.oi) ? p.oi : null));
-    const oiFinite = oiVals.filter((x): x is number => x != null);
-    let oiNorm: number[] = [];
-    if (oiFinite.length) {
-      const minOi = Math.min(...oiFinite);
-      const maxOi = Math.max(...oiFinite);
-      const already01 = minOi >= 0 && maxOi <= 1.5; // ruwe heuristic
-      oiNorm = already01 ? oiVals.map(v => (typeof v === "number" ? Math.max(0, Math.min(1, v)) : 0.5))
-                         : minMaxNormalize(oiVals);
-    } else {
-      oiNorm = oiVals.map(() => 0.5);
+    // 6b) OI normaliseren cross-sectioneel (voorkom “alles 0.5”)
+    const oiRaw = prelim.map(p => (typeof p.oi === "number" && Number.isFinite(p.oi)) ? p.oi : null);
+    const oiFinite = oiRaw.filter((x): x is number => x != null);
+    let oiNorm: number[] = oiRaw.map(() => 0.5); // default 0.5
+
+    if (oiFinite.length >= 2) {
+      oiNorm = minMaxNormalize(oiRaw);
+    } else if (oiFinite.length === 1) {
+      // slechts één coin heeft OI → geef die zichtbaar gewicht (0.8), rest 0.5
+      const idx = oiRaw.findIndex(v => typeof v === "number");
+      oiNorm = oiRaw.map((_, i) => (i === idx ? 0.8 : 0.5));
     }
+    // (0 → laagste OI, 1 → hoogste OI in deze batch)
 
     // 7) Output
     const results = prelim.map((p, i) => {
@@ -346,11 +325,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) oiScore = Math.min(oiScore, 0.6);
       }
 
-      // LSR demping + crowding-penalty (p.lsr is 0..1)
+      // LSR demping + crowding-penalty (ongewijzigd)
       let lsrScore: number | null = (typeof p.lsr === "number") ? p.lsr : null;
       if (typeof lsrScore === "number") {
         const centered = lsrScore - 0.5;
-        let s = 0.5 + centered * 0.6; // 0.2..0.8
+        let s = 0.5 + centered * 0.6;
         if (lsrScore > 0.65) s -= (lsrScore - 0.65) * 1.0;
         if (lsrScore < 0.35) s += (0.35 - lsrScore) * 1.0;
         s = Math.max(0.3, Math.min(0.7, s));
@@ -371,7 +350,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
       const price = (last1h ?? last1d ?? null);
 
-      // Breakdown (let op: types)
+      // Breakdown
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
         momentum: (typeof p.momentum === "number") ? p.momentum : null,
@@ -401,14 +380,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [],
           ...(DEBUG ? {
             __debug: {
-              bestApyEff: p.bestApyEff,
-              p10, p90,
-              rawVol: p.rawVol,
-              volRegScore: volRegScores[i],
-              fundingRaw: p.funding,
+              futSym: p._futSym,
               oiRaw: p.oi,
               oiNorm: oiNorm[i],
-              lsrRaw: p.lsr,
               momentum: p.momentum,
               closes1hLen: p.closes1h.length,
               closes1dLen: p.closes1d.length,
