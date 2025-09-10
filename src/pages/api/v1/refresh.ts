@@ -56,6 +56,53 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
   return [];
 }
 
+// ── Spot Ticker (PRIJZEN) ──────────────────────────────────────────────────────
+
+// Haal alle spot-prijzen in één bulk-call op en maak er een map van.
+async function fetchAllSpotPricesBulk(): Promise<Record<string, number>> {
+  const hosts = [
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com"
+  ];
+  const path = `/api/v3/ticker/price`;
+  for (const h of hosts) {
+    try {
+      const arr = await fetchWithTimeout(h + path, {}, 5000);
+      if (Array.isArray(arr) && arr.length) {
+        const out: Record<string, number> = {};
+        for (const it of arr) {
+          const sym = String(it?.symbol || "");
+          const px  = Number(it?.price);
+          if (sym && Number.isFinite(px)) out[sym] = px;
+        }
+        if (Object.keys(out).length) return out;
+      }
+    } catch { /* volgende host */ }
+  }
+  return {};
+}
+
+// Single fallback voor 1 symbool (als bulk faalt of symbool ontbreekt)
+async function fetchSpotPriceSingle(symbol: string): Promise<number | null> {
+  const hosts = [
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com"
+  ];
+  const path = `/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 4000);
+      const px = Number(data?.price);
+      if (Number.isFinite(px)) return px;
+    } catch { /* volgende host */ }
+  }
+  return null;
+}
+
 // ── OI: Futures helpers ────────────────────────────────────────────────────────
 
 // Map spot symbols (…USDC/BUSD/FDUSD/… ) naar USDT-perp voor USDT-M Futures
@@ -198,6 +245,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const q = String(req.query.debug || "").toLowerCase();
     const DEBUG = q === "1" || q === "true";
+
+    // 0) Spot prijzen bulk ophalen (parallel aan alles)
+    const spotPriceMapPromise = fetchAllSpotPricesBulk();
 
     // 1) Market Fear & Greed (0..1)
     const fng = await safe(getFearGreed(), { value: 50 } as any);
@@ -374,19 +424,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 7) Output
-    const results = prelim.map((p, i) => {
+    const spotPriceMap = await safe(spotPriceMapPromise, {} as Record<string, number>);
+
+    const results = await Promise.all(prelim.map(async (p, i) => {
       // Funding rond 0 (cap ±0.05% = 0.0005)
       let fundingScore: number | null = null;
       if (typeof p.funding === "number" && Number.isFinite(p.funding)) {
         const capped = Math.max(-0.0005, Math.min(0.0005, p.funding));
         fundingScore = 0.5 + (capped / 0.0005) * 0.5;
-      }
-
-      // Yield-score + bearish-cap
-      let yieldScore = yieldScoreFrom(p.bestApyEff);
-      if (yieldScore != null) {
-        const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
-        if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55);
       }
 
       // OI demping (genormaliseerde OI)
@@ -417,10 +462,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         m: pctChangeFromCloses(p.closes1d, 30),
       };
 
-      // Laatste prijs (voor kolom "Prijs" in UI)
+      // ── LAATSTE PRIJS (spot) ────────────────────────────────────────────────
+      const spotSym = p.coin.pairUSD?.binance;
+      let livePrice: number | null = null;
+      if (spotSym && typeof spotPriceMap[spotSym] === "number") {
+        livePrice = spotPriceMap[spotSym];
+      } else if (spotSym) {
+        // single fallback als bulk het symbool niet leverde
+        livePrice = await safe(fetchSpotPriceSingle(spotSym), null);
+      }
+      // ultieme fallback: laatste kline-close
       const last1h = p.closes1h.length ? p.closes1h[p.closes1h.length - 1] : null;
       const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
-      const price = (last1h ?? last1d ?? null);
+      const price = livePrice ?? (last1h ?? last1d ?? null);
 
       // Breakdown
       const breakdown = ({
@@ -432,8 +486,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         longShortSkew: lsrScore,
         breadth,
         fearGreed: fearGreed,
-        yield: yieldScore,
+        yield: ((): number | null => {
+          const apysAll: number[] = []; // niet nodig hier; yieldScore via helper
+          return null;
+        })(),
       } as unknown) as ComponentScoreNullable;
+
+      // combineScores verwacht alle keys; we vullen yield apart onder
+      // We houden de bestaande yield-berekening aan:
+      const bestApyEff = p.bestApyEff;
+      const apysAllDummy = [] as number[]; // placeholder
+      // maar combineScores gebruikt breakdown.yield; dus zet die alsnog:
+      (breakdown as any).yield = ((): number | null => {
+        const p10 = 1.5, p90 = 12;
+        if (bestApyEff == null || !Number.isFinite(bestApyEff) || bestApyEff <= 0) return null;
+        let z: number;
+        if (p90 - p10 <= 1e-9) z = Math.max(0, Math.min(1, bestApyEff / 12));
+        else {
+          z = (bestApyEff - p10) / (p90 - p10);
+          z = Math.max(0, Math.min(1, z));
+        }
+        const base = 0.2 + 0.6 * z;
+        const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
+        return mom < 0.45 ? Math.min(base, 0.55) : base;
+      })();
 
       const score = combineScores(breakdown);
 
@@ -444,7 +520,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: score.status,
         score: score.total,
         breakdown: score.breakdown,
+        // prijsvelden
         price,
+        priceUsd: price,     // alias tbv UI-compat
+        lastPrice: price,    // alias tbv UI-compat
         perf,
         meta: {
           fng: fngVal,
@@ -452,11 +531,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [],
           ...(DEBUG ? {
             __debug: {
-              futSym: p._futSym,
-              coinPerp: p._coinPerp,
-              oiSource: p._oiSource,
-              oiRaw: p.oi,
-              oiNorm: oiNorm[i],
+              usedBulkTicker: spotSym ? typeof spotPriceMap[spotSym] === "number" : false,
               momentum: p.momentum,
               closes1hLen: p.closes1h.length,
               closes1dLen: p.closes1d.length,
@@ -465,7 +540,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       };
       return out;
-    });
+    }));
 
     const payload: any = { updatedAt: Date.now(), results };
     setCache("SUMMARY", payload, 55_000);
