@@ -22,6 +22,40 @@ async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p;
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────────
 
+async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal, cache: "no-store" as RequestCache });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Fallback rechtstreeks naar Binance hosts wanneer de provider niks/te weinig geeft
+async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit: number) {
+  const hosts = [
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+    "https://data-api.binance.vision"
+  ];
+  const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 8000);
+      if (Array.isArray(data) && data.length) {
+        // Binance klines: [openTime, open, high, low, close, ...]
+        return data.map((row: any[]) => ({ close: Number(row?.[4]) })).filter(x => Number.isFinite(x.close));
+      }
+    } catch { /* probeer volgende host */ }
+  }
+  return [];
+}
+
 // σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
 function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null {
   const n = Math.min(lookback, closes.length - 1);
@@ -96,11 +130,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const symbol = coin.pairUSD?.binance;
         if (!symbol) return { coin, closes1h: [] as number[], closes1d: [] as number[] };
 
-        const ks1h = await safe(fetchSpotKlines(symbol, "1h", 180), []);
-        const ks1d = await safe(fetchSpotKlines(symbol, "1d", 60), []);
+        // Eerst de bestaande provider proberen
+        let ks1h = await safe(fetchSpotKlines(symbol, "1h", 180), []);
+        let ks1d = await safe(fetchSpotKlines(symbol, "1d", 60), []);
 
-        const closes1h = ks1h.map(k => k.close).filter(Number.isFinite);
-        const closes1d = ks1d.map(k => k.close).filter(Number.isFinite);
+        // Fallback wanneer er (bijv. op Vercel) te weinig/geen data terugkomt
+        if (!Array.isArray(ks1h) || ks1h.length < 30) {
+          ks1h = await safe(fetchKlinesFallback(symbol, "1h", 180), []);
+        }
+        if (!Array.isArray(ks1d) || ks1d.length < 10) {
+          ks1d = await safe(fetchKlinesFallback(symbol, "1d", 60), []);
+        }
+
+        const closes1h = (ks1h as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
+        const closes1d = (ks1d as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
         return { coin, closes1h, closes1d };
       })
     );
@@ -235,6 +278,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         m: pctChangeFromCloses(p.closes1d, 30),
       };
 
+      // Laatste prijs (voor kolom "Prijs" in UI)
+      const last1h = p.closes1h.length ? p.closes1h[p.closes1h.length - 1] : null;
+      const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
+      const price = (last1h ?? last1d ?? null);
+
       // ❗ FIX: maak het object eerst en cast daarna naar ComponentScoreNullable
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
@@ -257,6 +305,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: score.status,
         score: score.total,
         breakdown: score.breakdown,
+        price, // ⇦ nieuw
         perf,
         meta: {
           fng: fngVal,
@@ -274,6 +323,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               lsrRaw: p.lsr,
               lsrScore,
               momentum: p.momentum,
+              closes1hLen: p.closes1h.length,
+              closes1dLen: p.closes1d.length,
             }
           } : {})
         },
