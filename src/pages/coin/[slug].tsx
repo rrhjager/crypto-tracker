@@ -17,6 +17,19 @@ const fetcher = (url: string) =>
     return data
   })
 
+// Voor live prijzen willen we alle caching vermijden
+const fetcherNoStore = (url: string) =>
+  fetch(url, { cache: 'no-store' }).then(async (r) => {
+    const data = await r.json().catch(() => null)
+    if (!r.ok) {
+      const msg = (data && (data.error || data.message)) || `HTTP ${r.status}`
+      const err = new Error(msg) as Error & { status?: number }
+      err.status = r.status
+      throw err
+    }
+    return data
+  })
+
 type Breakdown = {
   tvSignal: number | null
   momentum: number | null
@@ -69,7 +82,7 @@ export default function CoinDetail() {
   const router = useRouter()
   const slug = String(router.query.slug || '')
 
-  // hoofddata
+  // Hoofdlijst (met fallback prijs per coin)
   const { data, error } = useSWR('/api/v1/coins', fetcher, {
     refreshInterval: 55_000,
     revalidateOnFocus: true,
@@ -106,13 +119,19 @@ export default function CoinDetail() {
     }
   }, [coin.breakdown, volResp?.volumeTrend])
 
-  // ➌ Live prijs ophalen (15s refresh)
+  // ➌ Live prijs ophalen (15s refresh) + nette fallback
   const { data: priceResp } = useSWR(
     symbol ? `/api/v1/prices?symbols=${encodeURIComponent(symbol)}` : null,
-    fetcher,
+    fetcherNoStore,
     { refreshInterval: 15_000, revalidateOnFocus: false }
   )
-  const livePrice: number | null = priceResp?.prices?.[symbol] ?? null
+  const p = (priceResp as any)?.prices?.[symbol]
+  const livePrice =
+    typeof p === 'number' ? p : (typeof p?.usd === 'number' ? p.usd : null)
+  const price: number | null =
+    Number.isFinite(livePrice) ? Number(livePrice)
+    : Number.isFinite(Number(coin?.price)) ? Number(coin.price)
+    : null
 
   // ── TradingView widget
   const tvRef = useRef<HTMLDivElement>(null)
@@ -172,9 +191,9 @@ export default function CoinDetail() {
           {coin.name} <span className="ticker">({coin.symbol})</span>
         </h1>
 
-        {/* Live prijs onder de titel */}
+        {/* Live prijs onder de titel (with fallback) */}
         <p className="sub mt-1">
-          Prijs: {livePrice != null ? <>${formatFiat(livePrice)}</> : '—'}
+          Prijs: {price != null ? <>${formatFiat(price)}</> : '—'}
         </p>
 
         <p className="sub mt-2">
