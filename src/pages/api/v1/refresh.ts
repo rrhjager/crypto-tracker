@@ -41,7 +41,7 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
     "https://api1.binance.com",
     "https://api2.binance.com",
     "https://api3.binance.com",
-    "https://data-api.binance.vision"
+    "https://data-api.binance.vision",
   ];
   const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
   for (const h of hosts) {
@@ -49,11 +49,13 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
       const data = await fetchWithTimeout(h + path, {}, 8000);
       if (Array.isArray(data) && data.length) {
         // Binance klines: [openTime, open, high, low, close, ...]
-        return data.map((row: any[]) => ({ close: Number(row?.[4]) })).filter(x => Number.isFinite(x.close));
+        return (data as any[]).map((row) => Number(row?.[4])).filter(Number.isFinite) as number[];
       }
-    } catch { /* probeer volgende host */ }
+    } catch {
+      /* probeer volgende host */
+    }
   }
-  return [];
+  return [] as number[];
 }
 
 // σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
@@ -131,19 +133,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!symbol) return { coin, closes1h: [] as number[], closes1d: [] as number[] };
 
         // Eerst de bestaande provider proberen
-        let ks1h = await safe(fetchSpotKlines(symbol, "1h", 180), []);
-        let ks1d = await safe(fetchSpotKlines(symbol, "1d", 60), []);
+        const ks1h = await safe(fetchSpotKlines(symbol, "1h", 180), []);
+        const ks1d = await safe(fetchSpotKlines(symbol, "1d", 60), []);
+
+        // Extract closes uit provider-resultaat
+        let closes1h = (ks1h as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
+        let closes1d = (ks1d as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
 
         // Fallback wanneer er (bijv. op Vercel) te weinig/geen data terugkomt
-        if (!Array.isArray(ks1h) || ks1h.length < 30) {
-          ks1h = await safe(fetchKlinesFallback(symbol, "1h", 180), []);
+        if (closes1h.length < 30) {
+          const fb1h = await safe(fetchKlinesFallback(symbol, "1h", 180), []);
+          if (fb1h.length) closes1h = fb1h;
         }
-        if (!Array.isArray(ks1d) || ks1d.length < 10) {
-          ks1d = await safe(fetchKlinesFallback(symbol, "1d", 60), []);
+        if (closes1d.length < 10) {
+          const fb1d = await safe(fetchKlinesFallback(symbol, "1d", 60), []);
+          if (fb1d.length) closes1d = fb1d;
         }
 
-        const closes1h = (ks1h as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
-        const closes1d = (ks1d as any[]).map(k => Number((k as any)?.close)).filter(Number.isFinite);
         return { coin, closes1h, closes1d };
       })
     );
@@ -278,11 +284,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         m: pctChangeFromCloses(p.closes1d, 30),
       };
 
-      // Laatste prijs (voor kolom "Prijs" in UI)
-      const last1h = p.closes1h.length ? p.closes1h[p.closes1h.length - 1] : null;
-      const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
-      const price = (last1h ?? last1d ?? null);
-
       // ❗ FIX: maak het object eerst en cast daarna naar ComponentScoreNullable
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
@@ -305,7 +306,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: score.status,
         score: score.total,
         breakdown: score.breakdown,
-        price, // ⇦ nieuw
         perf,
         meta: {
           fng: fngVal,
