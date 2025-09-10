@@ -56,7 +56,7 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
   return [];
 }
 
-// ── OI: Futures helpers ────────────────────────────────────────────────────────
+// ── Futures symbol helpers ─────────────────────────────────────────────────────
 
 // Map spot symbols (…USDC/BUSD/FDUSD/… ) naar USDT-perp voor USDT-M Futures
 function toUsdtPerp(symbol?: string | null): string | null {
@@ -90,6 +90,8 @@ function toCoinMarginedPerp(symbol?: string | null): string | null {
   return base + "USD_PERP";
 }
 
+// ── OPEN INTEREST fallbacks ───────────────────────────────────────────────────
+
 // OI van USDT-M (contracts)
 async function fetchFuturesOpenInterestUSDT(usdtPerp: string | null): Promise<number | null> {
   if (!usdtPerp) return null;
@@ -120,14 +122,13 @@ async function fetchFuturesOpenInterestCOIN(coinPerp: string | null): Promise<nu
   return null;
 }
 
-// Laatste redmiddel: binance.com "futures/data" (USDT-M & COIN-M) – public, geen key
-async function fetchOpenInterestHist(symbol: string, coinMargined = false): Promise<number | null> {
+// Laatste redmiddel voor OI: binance.com "futures/data" (USDT-M & COIN-M)
+async function fetchOpenInterestHist(symbol: string): Promise<number | null> {
   const base = "https://www.binance.com";
   const path = `/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=5m&limit=1`;
   try {
     const data = await fetchWithTimeout(base + path, {}, 7000);
     if (Array.isArray(data) && data.length) {
-      // response items hebben vaak sumOpenInterest (contracts) en sumOpenInterestValue (USD)
       const last = data[data.length - 1];
       const oi = Number(last?.sumOpenInterest ?? last?.openInterest ?? last?.sumOpenInterestValue);
       return Number.isFinite(oi) ? oi : null;
@@ -135,6 +136,76 @@ async function fetchOpenInterestHist(symbol: string, coinMargined = false): Prom
   } catch { /* ignore */ }
   return null;
 }
+
+// ── FUNDING RATE fallbacks ────────────────────────────────────────────────────
+
+// USDT-M: premiumIndex (heeft lastFundingRate) — snel en actueel
+async function fetchFundingRateUSDT(usdtPerp: string | null): Promise<number | null> {
+  if (!usdtPerp) return null;
+  const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
+  const path = `/fapi/v1/premiumIndex?symbol=${encodeURIComponent(usdtPerp)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 6000);
+      const fr = Number((data && data.lastFundingRate) ?? NaN);
+      if (Number.isFinite(fr)) return fr; // bv 0.0001 = 0.01%
+    } catch { /* try next host */ }
+  }
+  // als premiumIndex faalt: val terug op fundingRate history (laatste item)
+  const histPath = `/fapi/v1/fundingRate?symbol=${encodeURIComponent(usdtPerp)}&limit=1`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + histPath, {}, 6000);
+      if (Array.isArray(data) && data.length) {
+        const fr = Number(data[0]?.fundingRate ?? NaN);
+        if (Number.isFinite(fr)) return fr;
+      }
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+// COIN-M: premiumIndex (heeft lastFundingRate)
+async function fetchFundingRateCOIN(coinPerp: string | null): Promise<number | null> {
+  if (!coinPerp) return null;
+  const hosts = ["https://dapi.binance.com","https://dapi1.binance.com","https://dapi2.binance.com","https://dapi3.binance.com"];
+  const path = `/dapi/v1/premiumIndex?symbol=${encodeURIComponent(coinPerp)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 6000);
+      const fr = Number((data && data.lastFundingRate) ?? NaN);
+      if (Number.isFinite(fr)) return fr;
+    } catch { /* try next */ }
+  }
+  const histPath = `/dapi/v1/fundingRate?symbol=${encodeURIComponent(coinPerp)}&limit=1`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + histPath, {}, 6000);
+      if (Array.isArray(data) && data.length) {
+        const fr = Number(data[0]?.fundingRate ?? NaN);
+        if (Number.isFinite(fr)) return fr;
+      }
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+// Laatste redmiddel: binance.com futures/data/fundingRate (publiek)
+async function fetchFundingRateHist(symbol: string): Promise<number | null> {
+  const base = "https://www.binance.com";
+  const path = `/futures/data/fundingRate?symbol=${encodeURIComponent(symbol)}&period=8h&limit=1`;
+  try {
+    const data = await fetchWithTimeout(base + path, {}, 6000);
+    if (Array.isArray(data) && data.length) {
+      const last = data[data.length - 1];
+      const fr = Number(last?.fundingRate ?? NaN);
+      return Number.isFinite(fr) ? fr : null;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// ── statistiek helpers ────────────────────────────────────────────────────────
 
 // σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
 function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null {
@@ -228,7 +299,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 3) Lokale signalen + pools + OI (met meerdere fallbacks)
+    // 3) Lokale signalen + pools + OI + Funding (met meerdere fallbacks)
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -236,14 +307,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tv: number | null;
       momentum: number | null;
       rawVol: number | null;
-      funding: number | null;
-      oi: number | null;   // raw OI
+      funding: number | null;   // raw funding (bv 0.0001)
+      oi: number | null;        // raw OI (contracts / index)
       lsr: number | null;
       pools: any[];
       bestApyEff: number | null;
       _futSym?: string | null;
       _coinPerp?: string | null;
       _oiSource?: "provider" | "usdt-m" | "coin-m" | "hist-usdt" | "hist-coin" | null;
+      _fundingSource?: "provider" | "usdt-m" | "coin-m" | "hist-usdt" | "hist-coin" | null;
     };
 
     const prelim: Pre[] = await Promise.all(
@@ -256,51 +328,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawVol   = closes1h.length ? rawVolatilityFromCloses(closes1h, 72) : null;
         const tv       = await safe(tvSignalScore(spotSym), null);
 
+        // ── Open Interest (zoals eerder gefikst)
         let _oiSource: Pre["_oiSource"] = null;
-
-        // 1) Provider OI
         let oi = await safe(currentOpenInterest(spotSym), null);
-        if (typeof oi === "number" && Number.isFinite(oi)) {
-          _oiSource = "provider";
-        } else {
-          // 2) USDT-M direct
+        if (typeof oi !== "number" || !Number.isFinite(oi)) {
           oi = await safe(fetchFuturesOpenInterestUSDT(futSym), null);
-          if (typeof oi === "number" && Number.isFinite(oi)) {
-            _oiSource = "usdt-m";
+          _oiSource = (typeof oi === "number" && Number.isFinite(oi)) ? "usdt-m" : null;
+        } else {
+          _oiSource = "provider";
+        }
+        if (!(_oiSource)) {
+          const coinOi = await safe(fetchFuturesOpenInterestCOIN(coinPerp), null);
+          if (typeof coinOi === "number" && Number.isFinite(coinOi)) {
+            oi = coinOi; _oiSource = "coin-m";
+          }
+        }
+        if (!(_oiSource)) {
+          const histOi = await safe(fetchOpenInterestHist(futSym ?? ""), null);
+          if (typeof histOi === "number" && Number.isFinite(histOi)) {
+            oi = histOi; _oiSource = "hist-usdt";
+          }
+        }
+        if (!(_oiSource)) {
+          const histOiCoin = await safe(fetchOpenInterestHist(coinPerp ?? ""), null);
+          if (typeof histOiCoin === "number" && Number.isFinite(histOiCoin)) {
+            oi = histOiCoin; _oiSource = "hist-coin";
+          }
+        }
+
+        // ── Funding Rate (nieuw: robuuste fallbacks)
+        let _fundingSource: Pre["_fundingSource"] = null;
+        let funding = await safe(latestFundingRate(spotSym), null);
+        if (typeof funding === "number" && Number.isFinite(funding)) {
+          _fundingSource = "provider";
+        } else {
+          funding = await safe(fetchFundingRateUSDT(futSym), null);
+          if (typeof funding === "number" && Number.isFinite(funding)) {
+            _fundingSource = "usdt-m";
           } else {
-            // 3) COIN-M direct
-            oi = await safe(fetchFuturesOpenInterestCOIN(coinPerp), null);
-            if (typeof oi === "number" && Number.isFinite(oi)) {
-              _oiSource = "coin-m";
+            funding = await safe(fetchFundingRateCOIN(coinPerp), null);
+            if (typeof funding === "number" && Number.isFinite(funding)) {
+              _fundingSource = "coin-m";
             } else {
-              // 4) Binance.com futures/data (USDT-M)
-              const histUsdtSym = futSym ?? "";
-              if (histUsdtSym) {
-                const histOi = await safe(fetchOpenInterestHist(histUsdtSym, false), null);
-                if (typeof histOi === "number" && Number.isFinite(histOi)) {
-                  oi = histOi;
-                  _oiSource = "hist-usdt";
+              // publiek historisch endpoint USDT-M
+              if (futSym) {
+                const frHist = await safe(fetchFundingRateHist(futSym), null);
+                if (typeof frHist === "number" && Number.isFinite(frHist)) {
+                  funding = frHist; _fundingSource = "hist-usdt";
                 }
               }
-              // 5) Binance.com futures/data (COIN-M) als USDT-M leeg is
-              if (!oi) {
-                const histCoinSym = coinPerp ?? "";
-                if (histCoinSym) {
-                  const histOiCoin = await safe(fetchOpenInterestHist(histCoinSym, true), null);
-                  if (typeof histOiCoin === "number" && Number.isFinite(histOiCoin)) {
-                    oi = histOiCoin;
-                    _oiSource = "hist-coin";
-                  }
+              // publiek historisch endpoint COIN-M
+              if (!_fundingSource && coinPerp) {
+                const frHistCoin = await safe(fetchFundingRateHist(coinPerp), null);
+                if (typeof frHistCoin === "number" && Number.isFinite(frHistCoin)) {
+                  funding = frHistCoin; _fundingSource = "hist-coin";
                 }
               }
             }
           }
         }
 
-        const funding  = await safe(latestFundingRate(spotSym), null);
-        const lsr      = await safe(globalLongShortSkew(spotSym), null);
-
-        const pools    = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
+        const lsr   = await safe(globalLongShortSkew(spotSym), null);
+        const pools = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
 
         // Beste APY per coin (robuust)
         let bestApyEff: number | null = null;
@@ -320,7 +409,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           bestApyEff = Math.max(bestApyEff ?? 0, eff);
         }
 
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff, _futSym: futSym, _coinPerp: coinPerp, _oiSource };
+        return {
+          coin, closes1h, closes1d, tv, momentum, rawVol,
+          funding, oi, lsr, pools, bestApyEff,
+          _futSym: futSym, _coinPerp: coinPerp,
+          _oiSource, _fundingSource
+        };
       })
     );
 
@@ -351,7 +445,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     function yieldScoreFrom(apyEff: number | null): number | null {
       if (apyEff == null || !Number.isFinite(apyEff) || apyEff <= 0) return null;
-
       let z: number;
       if (p90 - p10 <= 1e-9) {
         z = Math.max(0, Math.min(1, apyEff / 12));
@@ -457,6 +550,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               oiSource: p._oiSource,
               oiRaw: p.oi,
               oiNorm: oiNorm[i],
+              fundingSource: p._fundingSource,
+              fundingRaw: p.funding,
               momentum: p.momentum,
               closes1hLen: p.closes1h.length,
               closes1dLen: p.closes1d.length,
