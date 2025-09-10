@@ -34,14 +34,14 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs =
   }
 }
 
-// Fallback rechtstreeks naar Binance hosts wanneer de provider niks/te weinig geeft
+// Fallback rechtstreeks naar Binance **spot** hosts wanneer de provider niks/te weinig geeft
 async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit: number) {
   const hosts = [
     "https://api.binance.com",
     "https://api1.binance.com",
     "https://api2.binance.com",
     "https://api3.binance.com",
-    "https://data-api.binance.vision"
+    "https://data-api.binance.vision",
   ];
   const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
   for (const h of hosts) {
@@ -49,13 +49,71 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
       const data = await fetchWithTimeout(h + path, {}, 8000);
       if (Array.isArray(data) && data.length) {
         // Binance klines: [openTime, open, high, low, close, ...]
-        return data
-          .map((row: any[]) => ({ close: Number(row?.[4]) }))
-          .filter((x) => Number.isFinite(x.close));
+        return data.map((row: any[]) => ({ close: Number(row?.[4]) })).filter(x => Number.isFinite(x.close));
       }
     } catch { /* probeer volgende host */ }
   }
   return [];
+}
+
+// Fallbacks rechtstreeks naar **Binance Futures** voor funding / OI / long-short
+async function fetchFuturesFunding(symbol: string): Promise<number | null> {
+  const hosts = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+  ];
+  const path = `/fapi/v1/fundingRate?symbol=${encodeURIComponent(symbol)}&limit=1`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 8000);
+      const item = Array.isArray(data) && data[0] ? data[0] : null;
+      const fr = item ? Number(item.fundingRate) : null; // 8h rate, bv 0.0001
+      return Number.isFinite(fr) ? fr : null;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+async function fetchFuturesOpenInterest(symbol: string): Promise<number | null> {
+  const hosts = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+  ];
+  const path = `/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol)}`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 8000);
+      const oi = data ? Number(data.openInterest) : null; // in contracten, raw
+      return Number.isFinite(oi) ? oi : null;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+async function fetchFuturesLongShortSkew(symbol: string): Promise<number | null> {
+  const hosts = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+  ];
+  // Globale long/short account ratio (5m window, laatste punt)
+  const path = `/futures/data/globalLongShortAccountRatio?symbol=${encodeURIComponent(symbol)}&period=5m&limit=1`;
+  for (const h of hosts) {
+    try {
+      const data = await fetchWithTimeout(h + path, {}, 8000);
+      const item = Array.isArray(data) && data[0] ? data[0] : null;
+      const ratio = item ? Number(item.longShortRatio) : null; // bv 2.0 → 66.7% long
+      if (!Number.isFinite(ratio) || ratio <= 0) continue;
+      const longShare = ratio / (1 + ratio); // 0..1
+      return Math.max(0, Math.min(1, longShare));
+    } catch { /* try next */ }
+  }
+  return null;
 }
 
 // σ van log-returns over de laatste N candles (ruwe volatiliteit, geen 0..1)
@@ -132,7 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const symbol = coin.pairUSD?.binance;
         if (!symbol) return { coin, closes1h: [] as number[], closes1d: [] as number[] };
 
-        // Belangrijk: typ deze arrays als 'any[]' zodat fallback (met {close}) ook toewijsbaar is
+        // Belangrijk: typ als any[] zodat fallback ({close}) toewijsbaar is
         let ks1h: any[] = await safe(fetchSpotKlines(symbol, "1h", 180) as any, []);
         let ks1d: any[] = await safe(fetchSpotKlines(symbol, "1d", 60) as any, []);
 
@@ -150,7 +208,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // 3) Lokale signalen + pools
+    // 3) Lokale signalen + pools + futures met fallbacks
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -158,31 +216,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tv: number | null;
       momentum: number | null;
       rawVol: number | null;
-      funding: number | null;
-      oi: number | null;
-      lsr: number | null;
+      funding: number | null;          // 8h rate (kan negatief)
+      oi: number | null;               // raw OI (of al genormaliseerd 0..1)
+      lsr: number | null;              // 0..1 (long share)
       pools: any[];
       bestApyEff: number | null;
     };
 
     const prelim: Pre[] = await Promise.all(
       klinesByCoin.map(async ({ coin, closes1h, closes1d }) => {
+        const symbol = coin.pairUSD?.binance;
+
         const momentum = closes1h.length ? momentumScoreFromCloses(closes1h) : null;
         const rawVol   = closes1h.length ? rawVolatilityFromCloses(closes1h, 72) : null;
-        const tv       = await safe(tvSignalScore(coin.pairUSD?.binance), null);
+        const tv       = await safe(tvSignalScore(symbol), null);
 
-        const funding  = await safe(latestFundingRate(coin.pairUSD?.binance), null);
-        const oi       = await safe(currentOpenInterest(coin.pairUSD?.binance), null);
-        const lsr      = await safe(globalLongShortSkew(coin.pairUSD?.binance), null);
+        // Providers
+        let funding  = await safe(latestFundingRate(symbol), null);
+        let oi       = await safe(currentOpenInterest(symbol), null);
+        let lsr      = await safe(globalLongShortSkew(symbol), null);
 
-        const pools    = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
+        // Fallbacks direct naar Binance Futures wanneer providers geen bruikbare waarde geven
+        if (!(typeof funding === "number" && Number.isFinite(funding))) {
+          funding = await safe(fetchFuturesFunding(symbol), null);
+        }
+        if (!(typeof oi === "number" && Number.isFinite(oi))) {
+          oi = await safe(fetchFuturesOpenInterest(symbol), null); // raw waarde
+        }
+        if (!(typeof lsr === "number" && Number.isFinite(lsr))) {
+          lsr = await safe(fetchFuturesLongShortSkew(symbol), null); // 0..1
+        }
 
+        const pools  = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }), []);
+
+        // Beste APY per coin (robuust)
         let bestApyEff: number | null = null;
         for (const p of Array.isArray(pools) ? pools : []) {
           const apy = Number.isFinite(Number(p?.apy))
             ? Number(p.apy)
             : Number(p?.apyBase || 0) + Number(p?.apyReward || 0);
-
           const tvl = Number(p?.tvlUsd || 0);
           if (!Number.isFinite(apy) || apy <= 0 || tvl < 3_000_000) continue;
 
@@ -236,6 +308,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return 0.2 + 0.6 * z;
     }
 
+    // 6b) Open Interest normaliseren (provider kan raw of 0..1 geven)
+    const oiVals = prelim.map(p => (typeof p.oi === "number" && Number.isFinite(p.oi) ? p.oi : null));
+    const oiFinite = oiVals.filter((x): x is number => x != null);
+    let oiNorm: number[] = [];
+    if (oiFinite.length) {
+      const minOi = Math.min(...oiFinite);
+      const maxOi = Math.max(...oiFinite);
+      const already01 = minOi >= 0 && maxOi <= 1.5; // ruwe heuristic
+      oiNorm = already01 ? oiVals.map(v => (typeof v === "number" ? Math.max(0, Math.min(1, v)) : 0.5))
+                         : minMaxNormalize(oiVals);
+    } else {
+      oiNorm = oiVals.map(() => 0.5);
+    }
+
     // 7) Output
     const results = prelim.map((p, i) => {
       // Funding rond 0 (cap ±0.05% = 0.0005)
@@ -252,19 +338,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55);
       }
 
-      // OI demping
-      let oiScore: number | null = (typeof p.oi === "number") ? p.oi : null;
+      // OI demping (gebruik **genormaliseerde** OI)
+      let oiScore: number | null = Number.isFinite(oiNorm[i]) ? oiNorm[i] : null;
       if (typeof oiScore === "number") {
         oiScore = 0.2 + 0.6 * Math.max(0, Math.min(1, oiScore));
         const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
         if (mom < 0.45) oiScore = Math.min(oiScore, 0.6);
       }
 
-      // LSR demping + crowding-penalty
+      // LSR demping + crowding-penalty (p.lsr is 0..1)
       let lsrScore: number | null = (typeof p.lsr === "number") ? p.lsr : null;
       if (typeof lsrScore === "number") {
         const centered = lsrScore - 0.5;
-        let s = 0.5 + centered * 0.6;
+        let s = 0.5 + centered * 0.6; // 0.2..0.8
         if (lsrScore > 0.65) s -= (lsrScore - 0.65) * 1.0;
         if (lsrScore < 0.35) s += (0.35 - lsrScore) * 1.0;
         s = Math.max(0.3, Math.min(0.7, s));
@@ -285,7 +371,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.length ? p.closes1d[p.closes1d.length - 1] : null;
       const price = (last1h ?? last1d ?? null);
 
-      // ❗ FIX: maak het object eerst en cast daarna naar ComponentScoreNullable
+      // Breakdown (let op: types)
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
         momentum: (typeof p.momentum === "number") ? p.momentum : null,
@@ -321,9 +407,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               volRegScore: volRegScores[i],
               fundingRaw: p.funding,
               oiRaw: p.oi,
-              oiScore,
+              oiNorm: oiNorm[i],
               lsrRaw: p.lsr,
-              lsrScore,
               momentum: p.momentum,
               closes1hLen: p.closes1h.length,
               closes1dLen: p.closes1d.length,
