@@ -5,6 +5,9 @@ import { fetchSafe } from '@/lib/fetchSafe' // robuuste fetch met timeout/retry
 
 type CoinsPayload = any // compatibel met je bestaande shape { updatedAt, results, ... }
 
+// Houd de serverless runtime kort (Vercel Hobby ≈ 10s)
+export const config = { maxDuration: 10 }
+
 function baseUrl(req: NextApiRequest) {
   const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || 'localhost:3000'
   const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
@@ -15,12 +18,17 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function triggerRefresh(req: NextApiRequest) {
+/**
+ * Start de refresh in de ACHTERGROND en wacht er NIET op.
+ * We gebruiken de 'lite' modus zodat de job binnen Vercel-limieten blijft.
+ */
+function triggerRefresh(req: NextApiRequest) {
   try {
-    const url = `${baseUrl(req)}/api/v1/refresh`
-    await fetchSafe(url, { cache: 'no-store' }, 7000, 1)
+    const url = `${baseUrl(req)}/api/v1/refresh?lite=1`
+    // fire-and-forget: niet awaisen, geen blokkade van deze response
+    fetchSafe(url, { cache: 'no-store' }, 7000, 1).catch(() => {})
   } catch {
-    // negeren: fallback hieronder handelt het af
+    // negeren: UI zal later opnieuw ophalen
   }
 }
 
@@ -29,10 +37,8 @@ function setCacheHeaders(res: NextApiResponse, smaxage = 10, swr = 30) {
   const value = `public, s-maxage=${smaxage}, stale-while-revalidate=${swr}`
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.setHeader('Cache-Control', value)
-  // extra hints voor diverse CDNs/deploys
   res.setHeader('CDN-Cache-Control', value)
   res.setHeader('Vercel-CDN-Cache-Control', value)
-  // optioneel: inzicht in timings in devtools
   res.setHeader('Timing-Allow-Origin', '*')
 }
 
@@ -62,14 +68,14 @@ export default async function handler(
     let cached = getCache<CoinsPayload>('SUMMARY')
     if (cached) {
       const filtered = stripKaspa(cached)
-      setCacheHeaders(res, 10, 30) // heel kort, voorkomt stuiteren
+      setCacheHeaders(res, 10, 30) // kort houden, voorkomt stuiteren
       return res.status(200).json(filtered)
     }
 
-    // 2) Geen cache? Start een refresh en poll héél even
-    await triggerRefresh(req)
+    // 2) Geen cache? Start een achtergrond-refresh (niet wachten) en poll héél even
+    triggerRefresh(req)
 
-    const deadline = Date.now() + 3000 // max ~3s wachten
+    const deadline = Date.now() + 3000 // max ~3s wachten op de eerste vulling
     while (!cached && Date.now() < deadline) {
       await sleep(150)
       cached = getCache<CoinsPayload>('SUMMARY')
@@ -86,7 +92,7 @@ export default async function handler(
     return res.status(200).json({
       updatedAt: Date.now(),
       results: [],
-      message: 'Initialisatie bezig (refresh gestart).',
+      message: 'Initialisatie bezig (lite refresh gestart).',
     })
   } catch {
     // Altijd 200 houden; UI toont “Nog geen data” en herstelt vanzelf via SWR
