@@ -1,13 +1,15 @@
 // src/pages/api/v1/coins.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getCache } from '@/lib/cache'
-import { fetchSafe } from '@/lib/fetchSafe' // robuuste fetch met timeout/retry
+import { fetchSafe } from '@/lib/fetchSafe'
+import { COINS } from '@/lib/coins'
 
-type CoinsPayload = any // compatibel met je bestaande shape { updatedAt, results, ... }
+type CoinsPayload = any // compatibel met bestaande shape
 
-// Iets ruimer zodat we desnoods op /refresh kunnen wachten
-export const config = { maxDuration: 60 }
+// we willen vooral snel antwoorden – geen zware taken hier
+export const config = { maxDuration: 10 }
 
+// ───────────────────────────────── helpers ──────────────────────────────────
 function baseUrl(req: NextApiRequest) {
   const host =
     (req.headers['x-forwarded-host'] as string) ||
@@ -18,8 +20,7 @@ function baseUrl(req: NextApiRequest) {
   return `${proto}://${host}`
 }
 
-/** Zet expliciet korte cache headers (werken in prod, bijv. op Vercel/CDN) */
-function setCacheHeaders(res: NextApiResponse, smaxage = 10, swr = 30) {
+function setCacheHeaders(res: NextApiResponse, smaxage = 15, swr = 120) {
   const value = `public, s-maxage=${smaxage}, stale-while-revalidate=${swr}`
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.setHeader('Cache-Control', value)
@@ -40,51 +41,80 @@ function stripKaspa(payload: CoinsPayload): CoinsPayload {
       : []
     return { ...payload, results }
   } catch {
-    // In geval van onverwachte shape: laat payload ongewijzigd
     return payload
   }
 }
 
+/** Supersnelle bootstrap: renderbare, minimale rows voor alle COINS. */
+function makeBootstrap(): CoinsPayload {
+  const results = COINS.map((c) => ({
+    symbol: c.symbol,
+    name: c.name,
+    slug: c.slug || c.santimentSlug || c.symbol.toLowerCase(),
+    status: 'HOLD',
+    score: 50,
+    breakdown: {
+      tvSignal: null,
+      momentum: null,
+      volatilityRegime: null,
+      funding: null,
+      openInterest: null,
+      longShortSkew: null,
+      breadth: null,
+      fearGreed: null,
+      yield: null,
+    },
+    price: null,
+    perf: { d: 0, w: 0, m: 0 },
+    meta: {
+      fng: null,
+      breadth: { green: 0, total: COINS.length, pct: 0 },
+      pools: [],
+    },
+  }))
+  return { updatedAt: Date.now(), stale: true, results }
+}
+
+// ───────────────────────────────── handler ───────────────────────────────────
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<CoinsPayload | { updatedAt: number; results: any[]; message?: string }>
+  res: NextApiResponse<
+    CoinsPayload | { updatedAt: number; results: any[]; message?: string }
+  >
 ) {
   try {
-    // 1) Probeer directe (process-local) cache — werkt lokaal / bij warme instance
+    // 1) Direct uit process-cache als beschikbaar (snelste pad)
     const cached = getCache<CoinsPayload>('SUMMARY')
     if (cached?.results?.length) {
       const filtered = stripKaspa(cached)
-      setCacheHeaders(res, 10, 30)
+      setCacheHeaders(res, 15, 120)
       return res.status(200).json(filtered)
     }
 
-    // 2) Serverless instances delen geen geheugen → haal live data op van /refresh
-    const qs = req.query.debug ? `?debug=${encodeURIComponent(String(req.query.debug))}` : ''
-    const url = `${baseUrl(req)}/api/v1/refresh${qs}`
+    // 2) Geen cache? Geef meteen bootstrap terug (instant TTFB)
+    const bootstrap = stripKaspa(makeBootstrap())
+    setCacheHeaders(res, 15, 120)
 
-    // fetchSafe(url, init, timeoutMs, retries)
-    const resp = await fetchSafe(url, { cache: 'no-store' }, 60000, 0)
-
-    if (resp && typeof (resp as any).json === 'function') {
-      const live: CoinsPayload = await (resp as any).json()
-      const filtered = stripKaspa(live)
-      setCacheHeaders(res, 5, 20)
-      return res.status(200).json(filtered)
+    // 3) Start NIET-blokkerend een refresh op de achtergrond (best effort)
+    try {
+      const qs =
+        req.query.debug != null
+          ? `?debug=${encodeURIComponent(String(req.query.debug))}`
+          : ''
+      const url = `${baseUrl(req)}/api/v1/refresh${qs}`
+      // fire-and-forget: geen await, korte timeout, 0 retries
+      void fetchSafe(url, { cache: 'no-store' }, 2500, 0).catch(() => {})
+    } catch {
+      // achtergrond-refresh is best effort; negeren bij fouten
     }
 
-    // 3) Fallback zonder 5xx: UI blijft netjes draaien en haalt later weer op
-    setCacheHeaders(res, 5, 20)
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: 'Geen data van /refresh — tijdelijke lege set.',
-    })
+    return res.status(200).json(bootstrap)
   } catch (e: any) {
-    setCacheHeaders(res, 5, 20)
+    setCacheHeaders(res, 10, 60)
     return res.status(200).json({
       updatedAt: Date.now(),
       results: [],
-      message: e?.message || 'Onbekende fout — tijdelijke lege set.',
+      message: e?.message || 'Tijdelijke lege set.',
     })
   }
 }

@@ -39,9 +39,7 @@ function formatFiat(n: number | null | undefined) {
 }
 
 // ───── Heatmap helpers ─────
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n))
-}
+function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)) }
 function colorStops(status: 'BUY'|'HOLD'|'SELL', score: number) {
   const s = clamp(score, 0, 100)
   let hue = 38, sat = 70, light = 42 // HOLD amber
@@ -62,7 +60,7 @@ function colorStops(status: 'BUY'|'HOLD'|'SELL', score: number) {
 type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
 
 // ───────────────────────────────────────────────
-// AI-marktsamenvatting (rechtsboven, boven Dagelijkse samenvatting)
+// AI-marktsamenvatting
 // ───────────────────────────────────────────────
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows || rows.length === 0) return null
@@ -82,7 +80,6 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   )
   const avgD = rows.reduce((s, r) => s + Number(r._d ?? 0), 0) / Math.max(1, total)
 
-  // Heuristische bias
   let bias: 'Bullish' | 'Bearish' | 'Neutraal' = 'Neutraal'
   if ((buyPct - sellPct) >= 10 || avgScore >= 58 || avgD >= 0.5) bias = 'Bullish'
   if ((sellPct - buyPct) >= 10 || avgScore <= 42 || avgD <= -0.5) bias = 'Bearish'
@@ -101,7 +98,6 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
         ) : null}
       </div>
 
-      {/* 1 regel advies + mini-stat chips */}
       <div className="text-sm mb-3">
         <span className={`${biasCls} mr-2`}>{bias}</span>
         <span className="text-white/80">
@@ -118,7 +114,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
 }
 
 // ───────────────────────────────────────────────
-// Dagelijkse samenvatting (rechts, onder AI-advies)
+// Dagelijkse samenvatting
 // ───────────────────────────────────────────────
 function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows || rows.length === 0) return null
@@ -165,7 +161,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
         </div>
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">SELL</div>
-            <div className="flex items-end justify-between">
+          <div className="flex items-end justify-between">
             <div className="text-lg font-bold text-red-300">{pct(sell)}%</div>
             <div className="text-xs text-white/60">{sell}/{total}</div>
           </div>
@@ -252,7 +248,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
-      {/* Legenda (klein) */}
       <div className="mb-2 flex items-center gap-3 text-[10px] text-white/70">
         <span className="inline-flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(142 65% 36%)' }} />
@@ -268,7 +263,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         </span>
       </div>
 
-      {/* Compacte tegels */}
       <div
         className="grid gap-1.5"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
@@ -281,6 +275,7 @@ function Heatmap({ rows }: { rows: any[] }) {
             <Link
               key={c.slug}
               href={`/coin/${c.slug}`}
+              prefetch={false}
               title={`${c.name} (${c.symbol}) • ${status} · ${Math.round(score)}`}
               className={[
                 'group rounded-[10px] ring-1 ring-white/10',
@@ -330,10 +325,25 @@ function SkeletonTable() {
 
 export default function Home() {
   const { mutate } = useSWRConfig()
+
+  // 🔹 Belangrijk: geen polling meer hier. We serveren cache/bootstrap instant.
   const { data, error, isLoading } = useSWR('/api/v1/coins', fetcher, {
-    refreshInterval: 55_000,
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    refreshInterval: 0,
+    dedupingInterval: 15_000,
+    keepPreviousData: true,
+    shouldRetryOnError: false,
   })
+
+  // Als de server bootstrap (stale:true) geeft, ping kortstondig tot er verse data is.
+  useEffect(() => {
+    if (!data?.stale) return
+    const id = setInterval(() => { mutate('/api/v1/coins') }, 2500)
+    const stop = setTimeout(() => clearInterval(id), 15_000) // maximaal ~15s
+    return () => { clearInterval(id); clearTimeout(stop) }
+  }, [data?.stale, mutate])
+
   const results: any[] = Array.isArray(data?.results) ? data!.results : []
 
   // ── Favorieten (localStorage)
@@ -365,13 +375,12 @@ export default function Home() {
     { refreshInterval: 15_000, revalidateOnFocus: false }
   )
 
-  // ── Sorting
+  // ── Sorting & verrijkte rijen
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
-    if (sortKey === nextKey) {
-      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
+    if (sortKey === nextKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    else {
       setSortKey(nextKey)
       if (nextKey === 'coin') setSortDir('asc')
       else if (nextKey === 'fav') setSortDir('desc')
@@ -379,7 +388,6 @@ export default function Home() {
     }
   }
 
-  // Rijen verrijken — eerst c.price, dan fallback naar /api/v1/prices
   const rows = useMemo(() => {
     const list = results.map((c, i) => {
       const sym = String(c.symbol || '').toUpperCase()
@@ -470,16 +478,10 @@ export default function Home() {
           )}
         </div>
         <nav className="flex items-center gap-4">
-          <Link
-            href="/indicators"
-            className="text-sky-400 hover:text-sky-300 text-sm font-medium"
-          >
+          <Link href="/indicators" prefetch={false} className="text-sky-400 hover:text-sky-300 text-sm font-medium">
             Uitleg indicatoren
           </Link>
-          <Link
-            href="/disclaimer"
-            className="text-sky-400 hover:text-sky-300 text-sm font-medium"
-          >
+          <Link href="/disclaimer" prefetch={false} className="text-sky-400 hover:text-sky-300 text-sm font-medium">
             Disclaimer
           </Link>
         </nav>
@@ -555,7 +557,7 @@ export default function Home() {
                           </button>
                         </td>
                         <td className="py-3">
-                          <Link href={`/coin/${c.slug}`} className="link font-semibold">
+                          <Link href={`/coin/${c.slug}`} prefetch={false} className="link font-semibold">
                             {c.name} <span className="ticker">({c.symbol})</span>
                           </Link>
                         </td>
