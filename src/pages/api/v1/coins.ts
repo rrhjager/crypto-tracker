@@ -1,89 +1,52 @@
 // src/pages/api/v1/coins.ts
-import type { NextApiRequest, NextApiResponse } from 'next'
-import { getCache } from '@/lib/cache'
-import { fetchSafe } from '@/lib/fetchSafe'
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { getCache } from '@/lib/cache';
+import fs from 'fs/promises';
+import path from 'path';
 
-type CoinsPayload = any
+type CoinsPayload = any;
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 10 };
 
-function baseUrl(req: NextApiRequest) {
-  const host =
-    (req.headers['x-forwarded-host'] as string) ||
-    req.headers.host ||
-    'localhost:3000'
-  const protoHeader = (req.headers['x-forwarded-proto'] as string) || ''
-  const proto = protoHeader || (host.startsWith('localhost') ? 'http' : 'https')
-  return `${proto}://${host}`
+function setCacheHeaders(res: NextApiResponse, smaxage = 20, swr = 60) {
+  const v = `public, s-maxage=${smaxage}, stale-while-revalidate=${swr}`;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', v);
+  res.setHeader('CDN-Cache-Control', v);
+  res.setHeader('Vercel-CDN-Cache-Control', v);
 }
 
-function setCacheHeaders(res: NextApiResponse, smaxage = 15, swr = 60) {
-  const value = `public, s-maxage=${smaxage}, stale-while-revalidate=${swr}`
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.setHeader('Cache-Control', value)
-  res.setHeader('CDN-Cache-Control', value)
-  res.setHeader('Vercel-CDN-Cache-Control', value)
-  res.setHeader('Timing-Allow-Origin', '*')
-}
-
-// Kaspa filter – zelfde als eerder
 function stripKaspa(payload: CoinsPayload): CoinsPayload {
   try {
     const results = Array.isArray(payload?.results)
       ? payload.results.filter((c: any) => {
-          const sym = String(c?.symbol ?? '').toUpperCase()
-          const slug = String(c?.slug ?? '').toLowerCase()
-          return sym !== 'KAS' && sym !== 'KASPA' && slug !== 'kaspa'
+          const sym = String(c?.symbol ?? '').toUpperCase();
+          const slug = String(c?.slug ?? '').toLowerCase();
+          return sym !== 'KAS' && sym !== 'KASPA' && slug !== 'kaspa';
         })
-      : []
-    return { ...payload, results }
-  } catch {
-    return payload
-  }
+      : [];
+    return { ...payload, results };
+  } catch { return payload; }
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<CoinsPayload | { updatedAt: number; results: any[]; message?: string }>
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // 1) Probeer warme snapshot (instant)
+  const cached = getCache<CoinsPayload>('SUMMARY');
+  if (cached?.results?.length) {
+    setCacheHeaders(res, 20, 60);
+    return res.status(200).json(stripKaspa(cached));
+  }
+
+  // 2) Cold start → fallback naar ingebakken bootstrap (ook instant)
   try {
-    // 1) Directe cache hit? Meteen teruggeven (snel + vol)
-    const cached = getCache<CoinsPayload>('SUMMARY')
-    if (cached?.results?.length) {
-      const filtered = stripKaspa(cached)
-      setCacheHeaders(res, 15, 60)
-      return res.status(200).json(filtered)
-    }
-
-    // 2) Cache koud → 1 snelle refresh draaien en *wel* wachten
-    const qs: string[] = []
-    if (req.query.debug) qs.push(`debug=${encodeURIComponent(String(req.query.debug))}`)
-    qs.push('fast=1')
-    const url = `${baseUrl(req)}/api/v1/refresh${qs.length ? `?${qs.join('&')}` : ''}`
-
-    // Korte timeouts; geen retries (we willen snel iets terug)
-    const resp = await fetchSafe(url, { cache: 'no-store' }, 12000, 0)
-
-    if (resp && typeof (resp as any).json === 'function') {
-      const live: CoinsPayload = await (resp as any).json()
-      const filtered = stripKaspa(live)
-      setCacheHeaders(res, 10, 45)
-      return res.status(200).json(filtered)
-    }
-
-    // 3) Fallback: lege set (komt zelden voor), UI blijft draaien
-    setCacheHeaders(res, 5, 20)
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: 'Geen data van /refresh — tijdelijke lege set.',
-    })
-  } catch (e: any) {
-    setCacheHeaders(res, 5, 20)
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: e?.message || 'Onbekende fout — tijdelijke lege set.',
-    })
+    const file = path.join(process.cwd(), 'public', 'bootstrap.json');
+    const raw = await fs.readFile(file, 'utf8');
+    const bootstrap = JSON.parse(raw);
+    setCacheHeaders(res, 10, 60);
+    return res.status(200).json({ ...stripKaspa(bootstrap), stale: true, source: 'bootstrap' });
+  } catch {
+    // 3) Geen bootstrap aanwezig → lege maar geldige payload (UI blijft werken)
+    setCacheHeaders(res, 5, 30);
+    return res.status(200).json({ updatedAt: Date.now(), results: [], stale: true, source: 'empty' });
   }
 }
