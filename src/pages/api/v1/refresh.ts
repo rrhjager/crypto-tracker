@@ -99,7 +99,7 @@ function toCoinMarginedPerp(symbol?: string | null): string | null {
   return base + "USD_PERP";
 }
 
-// Funding helpers (USDT-M, COIN-M + historisch)
+// ── Funding helpers (USDT-M, COIN-M + historisch)
 async function fetchFundingUSDT(usdtPerp: string | null, timeoutMs = 4000): Promise<number | null> {
   if (!usdtPerp) return null;
   const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
@@ -151,7 +151,67 @@ async function fetchFundingHistCOIN(coinPerp: string | null, timeoutMs = 5000): 
   return null;
 }
 
-// OI helpers
+// ── L/S skew helpers (normaliseer naar 0..1)
+function normalizeLsrInput(v: any): number | null {
+  // 0..1 direct?
+  if (isFiniteNum(v)) {
+    if (v > 1) return Math.max(0, Math.min(1, v / (1 + v))); // ratio → 0..1
+    if (v >= 0 && v <= 1) return v;
+  }
+  // string?
+  const asNum = Number(v);
+  if (Number.isFinite(asNum)) {
+    if (asNum > 1) return Math.max(0, Math.min(1, asNum / (1 + asNum)));
+    if (asNum >= 0 && asNum <= 1) return asNum;
+  }
+  // object shapes
+  if (v && typeof v === "object") {
+    const r = Number((v.longShortRatio ?? v.ratio ?? v.value));
+    if (Number.isFinite(r)) {
+      if (r > 1) return Math.max(0, Math.min(1, r / (1 + r)));
+      if (r >= 0 && r <= 1) return r;
+    }
+    const L = Number(v.long ?? v.longs ?? v.longAccount);
+    const S = Number(v.short ?? v.shorts ?? v.shortAccount);
+    if (Number.isFinite(L) && Number.isFinite(S) && L + S > 0) {
+      return Math.max(0, Math.min(1, L / (L + S)));
+    }
+  }
+  return null;
+}
+
+async function fetchLSR_USDT(usdtPerp: string | null, timeoutMs = 4000): Promise<number | null> {
+  if (!usdtPerp) return null;
+  const url = `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${encodeURIComponent(usdtPerp)}&period=5m&limit=1`;
+  try {
+    const arr = await fetchWithTimeout(url, {}, timeoutMs);
+    if (Array.isArray(arr) && arr.length) {
+      const last = arr[arr.length - 1];
+      const ratio = Number(last?.longShortRatio); // >1 betekent meer longs
+      if (Number.isFinite(ratio) && ratio > 0) {
+        return Math.max(0, Math.min(1, ratio / (1 + ratio)));
+      }
+    }
+  } catch {}
+  return null;
+}
+async function fetchLSR_COIN(coinPerp: string | null, timeoutMs = 4000): Promise<number | null> {
+  if (!coinPerp) return null;
+  const url = `https://dapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${encodeURIComponent(coinPerp)}&period=5m&limit=1`;
+  try {
+    const arr = await fetchWithTimeout(url, {}, timeoutMs);
+    if (Array.isArray(arr) && arr.length) {
+      const last = arr[arr.length - 1];
+      const ratio = Number(last?.longShortRatio);
+      if (Number.isFinite(ratio) && ratio > 0) {
+        return Math.max(0, Math.min(1, ratio / (1 + ratio)));
+      }
+    }
+  } catch {}
+  return null;
+}
+
+// ── OI helpers
 async function fetchFuturesOpenInterestUSDT(usdtPerp: string | null, timeoutMs = 5000): Promise<number | null> {
   if (!usdtPerp) return null;
   const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
@@ -177,7 +237,7 @@ async function fetchOpenInterestHistUSDT(usdtPerp: string, timeoutMs = 6000): Pr
   return null;
 }
 
-// Maths
+// ── Maths
 function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null {
   const n = Math.min(lookback, closes.length - 1);
   if (n <= 5) return null;
@@ -262,6 +322,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       _coinPerp?: string | null;
       _oiSource?: string | null;
       _fundSrc?: string | null;
+      _lsrSrc?: string | null;
       _livePrice?: number | null;
       _priceSrc?: string | null;
     };
@@ -279,7 +340,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Spotprijs voor OI→USD
         const approxPrice = (_livePrice ?? (closes1h.at(-1) ?? closes1d.at(-1) ?? null));
 
-        // Open Interest (snel pad, met 1 hist fallback; OI in contracts → naar USD geschat)
+        // Open Interest (met hist fallback; contracten → USD)
         let _oiSource: string | null = null;
         let oi = await safe(currentOpenInterest(spotSym), null);
         if (isFiniteNum(oi)) {
@@ -297,41 +358,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           oi = oi * (approxPrice as number);
         }
 
-        // Funding (robuust): USDT-M → COIN-M → hist USDT → hist COIN → provider
+        // Funding (USDT-M → COIN-M → hist → provider)
         let _fundSrc: string | null = null;
         let funding: number | null = null;
 
         const f1 = await safe(fetchFundingUSDT(futSym, TIMEOUT), null);
-        if (isFiniteNum(f1)) {
-          funding = f1; _fundSrc = "usdt-m";
-        } else {
+        if (isFiniteNum(f1)) { funding = f1; _fundSrc = "usdt-m"; }
+        else {
           const f2 = await safe(fetchFundingCOIN(coinPerp, TIMEOUT), null);
-          if (isFiniteNum(f2)) {
-            funding = f2; _fundSrc = "coin-m";
-          } else {
+          if (isFiniteNum(f2)) { funding = f2; _fundSrc = "coin-m"; }
+          else {
             const f3 = await safe(fetchFundingHistUSDT(futSym, TIMEOUT + 1000), null);
-            if (isFiniteNum(f3)) {
-              funding = f3; _fundSrc = "hist-usdt";
-            } else {
+            if (isFiniteNum(f3)) { funding = f3; _fundSrc = "hist-usdt"; }
+            else {
               const f4 = await safe(fetchFundingHistCOIN(coinPerp, TIMEOUT + 1000), null);
-              if (isFiniteNum(f4)) {
-                funding = f4; _fundSrc = "hist-coin";
-              } else {
-                const prov = Number(await safe(latestFundingRate(spotSym), null));
-                if (Number.isFinite(prov)) {
-                  funding = prov; _fundSrc = "provider";
-                } else {
-                  funding = null; _fundSrc = null;
-                }
+              if (isFiniteNum(f4)) { funding = f4; _fundSrc = "hist-coin"; }
+              else {
+                const prov = normalizeLsrInput(await safe(latestFundingRate(spotSym), null)); // NB: funding provider kan string teruggeven
+                const provNum = Number(await safe(latestFundingRate(spotSym), null));
+                if (Number.isFinite(provNum)) { funding = provNum; _fundSrc = "provider"; }
+                else { funding = null; _fundSrc = null; }
               }
             }
           }
         }
 
-        // Long/Short skew
-        const lsr = await safe(globalLongShortSkew(spotSym), null);
+        // Long/Short skew — robuust + genormaliseerd (0..1)
+        let _lsrSrc: string | null = null;
+        let lsr: number | null = normalizeLsrInput(await safe(globalLongShortSkew(spotSym), null));
+        if (isFiniteNum(lsr)) {
+          _lsrSrc = "provider";
+        } else {
+          const u = await safe(fetchLSR_USDT(futSym, TIMEOUT), null);
+          if (isFiniteNum(u)) { lsr = u; _lsrSrc = "usdt-m"; }
+          else {
+            const c = await safe(fetchLSR_COIN(coinPerp, TIMEOUT), null);
+            if (isFiniteNum(c)) { lsr = c; _lsrSrc = "coin-m"; }
+            else { lsr = null; _lsrSrc = null; }
+          }
+        }
 
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _livePrice, _priceSrc };
+        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _lsrSrc, _livePrice, _priceSrc };
       })
     );
 
@@ -436,6 +503,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               oiSource: p._oiSource,
               oiNorm: oiNorm[i],
               fundingSource: p._fundSrc ?? null,
+              lsrSource: p._lsrSrc ?? null,
               priceSource: p._priceSrc ?? (p._livePrice != null ? "ticker" : (last1h != null ? "kline-1h" : (last1d != null ? "kline-1d" : "none"))),
               livePrice: p._livePrice ?? null,
             }
