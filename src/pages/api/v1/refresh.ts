@@ -11,6 +11,9 @@ import { latestFundingRate, currentOpenInterest, globalLongShortSkew } from "@/l
 import { momentumScoreFromCloses } from "@/lib/indicators/momentum";
 import { combineScores, ComponentScoreNullable } from "@/lib/scoring";
 
+// DeFiLlama — terug voor yield
+import { topPoolsForSymbol } from "@/lib/providers/defillama";
+
 export const config = { maxDuration: 60 };
 
 async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p; } catch { return fb; } }
@@ -268,6 +271,21 @@ function pctChangeFromCloses(closes: number[], lookback: number): number {
   if (!Number.isFinite(last) || !Number.isFinite(prev) || prev === 0) return 0;
   return ((last - prev) / prev) * 100;
 }
+function percentile(sortedAsc: number[], q: number): number {
+  if (!sortedAsc.length) return 0;
+  const i = Math.round(q * (sortedAsc.length - 1));
+  return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, i))];
+}
+function hasIlRisk(pool: any): boolean {
+  const v =
+    pool?.ilRisk ??
+    pool?.il_risk ??
+    pool?.impermanentLossRisk ??
+    pool?.impermanent_loss_risk ??
+    "";
+  const s = String(v).toLowerCase().trim();
+  return s === "yes" || s === "true" || s === "1" || s === "high";
+}
 
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -318,6 +336,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       funding: number | null;
       oi: number | null;          // USD indien beschikbaar
       lsr: number | null;
+      pools: any[];
+      bestApyEff: number | null;
       _futSym?: string | null;
       _coinPerp?: string | null;
       _oiSource?: string | null;
@@ -374,7 +394,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               const f4 = await safe(fetchFundingHistCOIN(coinPerp, TIMEOUT + 1000), null);
               if (isFiniteNum(f4)) { funding = f4; _fundSrc = "hist-coin"; }
               else {
-                const prov = normalizeLsrInput(await safe(latestFundingRate(spotSym), null)); // NB: funding provider kan string teruggeven
                 const provNum = Number(await safe(latestFundingRate(spotSym), null));
                 if (Number.isFinite(provNum)) { funding = provNum; _fundSrc = "provider"; }
                 else { funding = null; _fundSrc = null; }
@@ -398,7 +417,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _lsrSrc, _livePrice, _priceSrc };
+        // DeFi pools (alleen buiten FAST om traagheid te vermijden)
+        let pools: any[] = [];
+        let bestApyEff: number | null = null;
+        if (!FAST) {
+          pools = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }) as any, []);
+          for (const p of Array.isArray(pools) ? pools : []) {
+            const apy = Number.isFinite(Number(p?.apy))
+              ? Number(p.apy)
+              : Number(p?.apyBase || 0) + Number(p?.apyReward || 0);
+            const tvl = Number(p?.tvlUsd || 0);
+            if (!Number.isFinite(apy) || apy <= 0 || tvl < 3_000_000) continue;
+
+            let qual = 1;
+            if (p?.stablecoin === true) qual *= 0.85;
+            if (hasIlRisk(p)) qual *= 0.70;
+
+            const eff = apy * qual;
+            bestApyEff = Math.max(bestApyEff ?? 0, eff);
+          }
+        }
+
+        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff,
+          _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _lsrSrc, _livePrice, _priceSrc };
       })
     );
 
@@ -417,7 +458,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return s;
     });
 
-    // 6) OI normaliseren (cross-sectioneel)
+    // 6) Yield percentielen (alleen als we data hebben en niet in FAST)
+    const apysAll = prelim
+      .map(p => (!FAST && typeof p.bestApyEff === "number" ? p.bestApyEff : null))
+      .filter((x): x is number => x != null && Number.isFinite(x) && x > 0)
+      .sort((a, b) => a - b);
+
+    const p10 = apysAll.length >= 5 ? percentile(apysAll, 0.10) : 1.5;
+    const p90 = apysAll.length >= 5 ? percentile(apysAll, 0.90) : 12;
+
+    function yieldScoreFrom(apyEff: number | null): number | null {
+      if (FAST) return null;
+      if (apyEff == null || !Number.isFinite(apyEff) || apyEff <= 0) return null;
+      let z: number;
+      if (p90 - p10 <= 1e-9) {
+        z = Math.max(0, Math.min(1, apyEff / 12));
+      } else {
+        z = (apyEff - p10) / (p90 - p10);
+        z = Math.max(0, Math.min(1, z));
+      }
+      return 0.2 + 0.6 * z; // 0.2..0.8
+    }
+
+    // 6b) OI normaliseren (cross-sectioneel)
     const oiRaw = prelim.map(p => (typeof p.oi === "number" && Number.isFinite(p.oi)) ? p.oi : null);
     const oiFinite = oiRaw.filter((x): x is number => x != null);
     let oiNorm: number[] = oiRaw.map(() => 0.5);
@@ -469,6 +532,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.at(-1) ?? null;
       const price = (p._livePrice ?? (last1h ?? last1d ?? null));
 
+      // Yield-score
+      let yieldScore = yieldScoreFrom(p.bestApyEff);
+      if (yieldScore != null) {
+        const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
+        if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55); // bearish-cap
+      }
+
       // Breakdown
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
@@ -479,7 +549,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         longShortSkew: lsrScore,
         breadth,
         fearGreed: fearGreed,
-        yield: null, // FAST: overslaan; kan later in aparte job
+        yield: yieldScore,
       } as unknown) as ComponentScoreNullable;
 
       const score = combineScores(breakdown);
@@ -496,6 +566,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         meta: {
           fng: fngVal,
           breadth: { green: greenCount, total: COINS.length, pct: breadth },
+          // optioneel: kleine subset pools meest relevant
+          ...( !FAST ? { pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [] } : {} ),
           ...(DEBUG ? {
             __debug: {
               futSym: p._futSym,
@@ -506,6 +578,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               lsrSource: p._lsrSrc ?? null,
               priceSource: p._priceSrc ?? (p._livePrice != null ? "ticker" : (last1h != null ? "kline-1h" : (last1d != null ? "kline-1d" : "none"))),
               livePrice: p._livePrice ?? null,
+              bestApyEff: p.bestApyEff ?? null,
+              p10, p90,
             }
           } : {})
         },
