@@ -22,6 +22,9 @@ function qbool(v: any): boolean {
   const s = String(v ?? "").toLowerCase();
   return s === "1" || s === "true" || s === "yes" || s === "y";
 }
+function isFiniteNum(x: any): x is number {
+  return typeof x === "number" && Number.isFinite(x);
+}
 
 async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 6000) {
   const ctrl = new AbortController();
@@ -96,20 +99,55 @@ function toCoinMarginedPerp(symbol?: string | null): string | null {
   return base + "USD_PERP";
 }
 
-// Funding helpers
+// Funding helpers (USDT-M, COIN-M + historisch)
 async function fetchFundingUSDT(usdtPerp: string | null, timeoutMs = 4000): Promise<number | null> {
   if (!usdtPerp) return null;
   const hosts = ["https://fapi.binance.com","https://fapi1.binance.com","https://fapi2.binance.com","https://fapi3.binance.com"];
   const path = `/fapi/v1/premiumIndex?symbol=${encodeURIComponent(usdtPerp)}`;
   for (const h of hosts) {
-    try { const d = await fetchWithTimeout(h + path, {}, timeoutMs); const r = Number(d?.lastFundingRate); if (Number.isFinite(r)) return r; } catch {}
+    try {
+      const d = await fetchWithTimeout(h + path, {}, timeoutMs);
+      const r = Number(d?.lastFundingRate);
+      if (Number.isFinite(r)) return r;
+    } catch {}
+  }
+  return null;
+}
+async function fetchFundingCOIN(coinPerp: string | null, timeoutMs = 4000): Promise<number | null> {
+  if (!coinPerp) return null;
+  const hosts = ["https://dapi.binance.com","https://dapi1.binance.com","https://dapi2.binance.com","https://dapi3.binance.com"];
+  const path = `/dapi/v1/premiumIndex?symbol=${encodeURIComponent(coinPerp)}`;
+  for (const h of hosts) {
+    try {
+      const d = await fetchWithTimeout(h + path, {}, timeoutMs);
+      const r = Number(d?.lastFundingRate);
+      if (Number.isFinite(r)) return r;
+    } catch {}
   }
   return null;
 }
 async function fetchFundingHistUSDT(usdtPerp: string | null, timeoutMs = 5000): Promise<number | null> {
   if (!usdtPerp) return null;
   const url = `https://www.binance.com/futures/data/fundingRate?symbol=${encodeURIComponent(usdtPerp)}&limit=1`;
-  try { const arr = await fetchWithTimeout(url, {}, timeoutMs); if (Array.isArray(arr) && arr.length) { const r = Number(arr[arr.length - 1]?.fundingRate); if (Number.isFinite(r)) return r; } } catch {}
+  try {
+    const arr = await fetchWithTimeout(url, {}, timeoutMs);
+    if (Array.isArray(arr) && arr.length) {
+      const r = Number(arr[arr.length - 1]?.fundingRate);
+      if (Number.isFinite(r)) return r;
+    }
+  } catch {}
+  return null;
+}
+async function fetchFundingHistCOIN(coinPerp: string | null, timeoutMs = 5000): Promise<number | null> {
+  if (!coinPerp) return null;
+  const url = `https://dapi.binance.com/dapi/v1/fundingRate?symbol=${encodeURIComponent(coinPerp)}&limit=1`;
+  try {
+    const arr = await fetchWithTimeout(url, {}, timeoutMs);
+    if (Array.isArray(arr) && arr.length) {
+      const r = Number(arr[arr.length - 1]?.fundingRate);
+      if (Number.isFinite(r)) return r;
+    }
+  } catch {}
   return null;
 }
 
@@ -175,8 +213,7 @@ function pctChangeFromCloses(closes: number[], lookback: number): number {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const qDebug = String(req.query.debug || "");
-    const DEBUG = qbool(qDebug);
+    const DEBUG = qbool(req.query.debug);
     const FAST  = qbool(req.query.fast);
 
     // Timeouts/budgets
@@ -222,6 +259,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       oi: number | null;          // USD indien beschikbaar
       lsr: number | null;
       _futSym?: string | null;
+      _coinPerp?: string | null;
       _oiSource?: string | null;
       _fundSrc?: string | null;
       _livePrice?: number | null;
@@ -232,6 +270,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       klinesByCoin.map(async ({ coin, closes1h, closes1d, _livePrice, _priceSrc }) => {
         const spotSym = coin.pairUSD?.binance;
         const futSym  = toUsdtPerp(spotSym);
+        const coinPerp = toCoinMarginedPerp(spotSym);
 
         const momentum = closes1h.length ? momentumScoreFromCloses(closes1h) : null;
         const rawVol   = closes1h.length ? rawVolatilityFromCloses(closes1h, 72) : null;
@@ -240,43 +279,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Spotprijs voor OI→USD
         const approxPrice = (_livePrice ?? (closes1h.at(-1) ?? closes1d.at(-1) ?? null));
 
-        // Open Interest (snel pad, met 1 hist fallback)
+        // Open Interest (snel pad, met 1 hist fallback; OI in contracts → naar USD geschat)
         let _oiSource: string | null = null;
         let oi = await safe(currentOpenInterest(spotSym), null);
-        if (typeof oi === "number" && Number.isFinite(oi)) {
+        if (isFiniteNum(oi)) {
           _oiSource = "provider";
         } else {
           oi = await safe(fetchFuturesOpenInterestUSDT(futSym, TIMEOUT), null);
-          if (typeof oi === "number" && Number.isFinite(oi)) {
+          if (isFiniteNum(oi)) {
             _oiSource = "usdt-m";
           } else if (futSym) {
             oi = await safe(fetchOpenInterestHistUSDT(futSym, TIMEOUT + 1000), null);
-            if (typeof oi === "number" && Number.isFinite(oi)) _oiSource = "hist-usdt";
+            if (isFiniteNum(oi)) _oiSource = "hist-usdt";
           }
         }
-        // Contracten → USD (ruwe benadering)
-        if ((_oiSource === "usdt-m" || _oiSource === "hist-usdt") && typeof oi === "number" && Number.isFinite(approxPrice as number)) {
+        if ((_oiSource === "usdt-m" || _oiSource === "hist-usdt") && isFiniteNum(oi) && isFiniteNum(approxPrice)) {
           oi = oi * (approxPrice as number);
         }
 
-        // Funding (snelle bronnen)
+        // Funding (robuust): USDT-M → COIN-M → hist USDT → hist COIN → provider
         let _fundSrc: string | null = null;
-        let funding = await safe(latestFundingRate(spotSym), null);
-        if (typeof funding === "number" && Number.isFinite(funding)) {
-          _fundSrc = "provider";
+        let funding: number | null = null;
+
+        const f1 = await safe(fetchFundingUSDT(futSym, TIMEOUT), null);
+        if (isFiniteNum(f1)) {
+          funding = f1; _fundSrc = "usdt-m";
         } else {
-          funding = await safe(fetchFundingUSDT(futSym, TIMEOUT), null);
-          if (typeof funding === "number" && Number.isFinite(funding)) _fundSrc = "usdt-m";
-          else {
-            const fHist = await safe(fetchFundingHistUSDT(futSym, TIMEOUT + 1000), null);
-            if (typeof fHist === "number" && Number.isFinite(fHist)) { funding = fHist; _fundSrc = "hist-usdt"; }
+          const f2 = await safe(fetchFundingCOIN(coinPerp, TIMEOUT), null);
+          if (isFiniteNum(f2)) {
+            funding = f2; _fundSrc = "coin-m";
+          } else {
+            const f3 = await safe(fetchFundingHistUSDT(futSym, TIMEOUT + 1000), null);
+            if (isFiniteNum(f3)) {
+              funding = f3; _fundSrc = "hist-usdt";
+            } else {
+              const f4 = await safe(fetchFundingHistCOIN(coinPerp, TIMEOUT + 1000), null);
+              if (isFiniteNum(f4)) {
+                funding = f4; _fundSrc = "hist-coin";
+              } else {
+                const prov = Number(await safe(latestFundingRate(spotSym), null));
+                if (Number.isFinite(prov)) {
+                  funding = prov; _fundSrc = "provider";
+                } else {
+                  funding = null; _fundSrc = null;
+                }
+              }
+            }
           }
         }
 
-        // Long/Short skew (snel; provider is lichtgewicht)
+        // Long/Short skew
         const lsr = await safe(globalLongShortSkew(spotSym), null);
 
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, _futSym: futSym, _oiSource, _fundSrc, _livePrice, _priceSrc };
+        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _livePrice, _priceSrc };
       })
     );
 
@@ -309,8 +364,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const results = prelim.map((p, i) => {
       // Funding naar score (cap ±0.05% per 8u)
       let fundingScore: number | null = null;
-      if (typeof p.funding === "number" && Number.isFinite(p.funding)) {
-        const capped = Math.max(-0.0005, Math.min(0.0005, p.funding));
+      if (isFiniteNum(p.funding)) {
+        const capped = Math.max(-0.0005, Math.min(0.0005, p.funding as number));
         fundingScore = 0.5 + (capped / 0.0005) * 0.5;
       }
 
@@ -347,7 +402,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.at(-1) ?? null;
       const price = (p._livePrice ?? (last1h ?? last1d ?? null));
 
-      // Breakdown (yield laten we in FAST bewust weg → null; detail kan later updaten)
+      // Breakdown
       const breakdown = ({
         tvSignal: (typeof p.tv === "number") ? p.tv : null,
         momentum: (typeof p.momentum === "number") ? p.momentum : null,
@@ -357,7 +412,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         longShortSkew: lsrScore,
         breadth,
         fearGreed: fearGreed,
-        yield: null, // in FAST overslaan; in niet-FAST kun je je DeFiLlama job laten lopen
+        yield: null, // FAST: overslaan; kan later in aparte job
       } as unknown) as ComponentScoreNullable;
 
       const score = combineScores(breakdown);
@@ -377,6 +432,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(DEBUG ? {
             __debug: {
               futSym: p._futSym,
+              coinPerp: p._coinPerp,
               oiSource: p._oiSource,
               oiNorm: oiNorm[i],
               fundingSource: p._fundSrc ?? null,
