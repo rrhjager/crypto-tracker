@@ -16,6 +16,19 @@ const fetcher = (url: string) =>
     return data
   })
 
+// Vers-prijzen fetcher (omzeilt browser/Vercel cache)
+const fetcherNoStore = (url: string) =>
+  fetch(url, { cache: 'no-store' }).then(async (r) => {
+    const data = await r.json().catch(() => null)
+    if (!r.ok) {
+      const msg = (data && (data.error || data.message)) || `HTTP ${r.status}`
+      const err = new Error(msg) as Error & { status?: number }
+      err.status = r.status
+      throw err
+    }
+    return data
+  })
+
 // Netjes prijzen weergeven (— bij onbekend)
 function formatFiat(n: number | null | undefined) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -56,6 +69,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
 
   const total = rows.length
   const buy = rows.filter((r) => (r.status || 'HOLD') === 'BUY').length
+  const hold = rows.filter((r) => (r.status || 'HOLD') === 'HOLD').length
   const sell = rows.filter((r) => (r.status || 'HOLD') === 'SELL').length
 
   const buyPct = Math.round((buy / total) * 100)
@@ -68,6 +82,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   )
   const avgD = rows.reduce((s, r) => s + Number(r._d ?? 0), 0) / Math.max(1, total)
 
+  // Heuristische bias
   let bias: 'Bullish' | 'Bearish' | 'Neutraal' = 'Neutraal'
   if ((buyPct - sellPct) >= 10 || avgScore >= 58 || avgD >= 0.5) bias = 'Bullish'
   if ((sellPct - buyPct) >= 10 || avgScore <= 42 || avgD <= -0.5) bias = 'Bearish'
@@ -86,6 +101,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
         ) : null}
       </div>
 
+      {/* 1 regel advies + mini-stat chips */}
       <div className="text-sm mb-3">
         <span className={`${biasCls} mr-2`}>{bias}</span>
         <span className="text-white/80">
@@ -102,7 +118,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
 }
 
 // ───────────────────────────────────────────────
-// Dagelijkse samenvatting
+// Dagelijkse samenvatting (rechts, onder AI-advies)
 // ───────────────────────────────────────────────
 function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows || rows.length === 0) return null
@@ -236,6 +252,7 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
+      {/* Legenda (klein) */}
       <div className="mb-2 flex items-center gap-3 text-[10px] text-white/70">
         <span className="inline-flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(142 65% 36%)' }} />
@@ -251,6 +268,7 @@ function Heatmap({ rows }: { rows: any[] }) {
         </span>
       </div>
 
+      {/* Compacte tegels */}
       <div
         className="grid gap-1.5"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
@@ -292,9 +310,11 @@ function Heatmap({ rows }: { rows: any[] }) {
   )
 }
 
+// Sorteer-typen — ⭐ met 'fav'
 type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
+// Skeleton rij voor “laden…”
 function SkeletonTable() {
   return (
     <div className="table-card mb-6">
@@ -311,11 +331,12 @@ function SkeletonTable() {
 export default function Home() {
   const { mutate } = useSWRConfig()
   const { data, error, isLoading } = useSWR('/api/v1/coins', fetcher, {
-    refreshInterval: 0,          // 🔹 geen polling nodig voor de lijst
-    revalidateOnFocus: false,    // 🔹 niet opnieuw laden bij focus
+    refreshInterval: 55_000,
+    revalidateOnFocus: true,
   })
   const results: any[] = Array.isArray(data?.results) ? data!.results : []
 
+  // ── Favorieten (localStorage)
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -335,14 +356,16 @@ export default function Home() {
     })
   }
 
-  // Prijzen ophalen (mogen licht poll’en)
-  const symbolsCsv = results.map((c: any) => String(c.symbol || '').toUpperCase()).join(',')
+  // ❗ PRIJZEN: alleen fallback op /api/v1/prices voor coins zonder c.price
+  const coinsMissingPrice = results.filter((c: any) => typeof c?.price !== 'number')
+  const symbolsCsv = coinsMissingPrice.map((c: any) => String(c.symbol || '').toUpperCase()).join(',')
   const { data: pricesData } = useSWR(
     symbolsCsv ? `/api/v1/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
-    fetcher,
+    fetcherNoStore,
     { refreshInterval: 15_000, revalidateOnFocus: false }
   )
 
+  // ── Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -356,11 +379,16 @@ export default function Home() {
     }
   }
 
+  // Rijen verrijken — eerst c.price, dan fallback naar /api/v1/prices
   const rows = useMemo(() => {
     const list = results.map((c, i) => {
       const sym = String(c.symbol || '').toUpperCase()
+
+      const priceFromCoins = (typeof c?.price === 'number' && Number.isFinite(c.price)) ? c.price : null
       const p = (pricesData as any)?.prices?.[sym]
-      const price = typeof p === 'number' ? p : (typeof p?.usd === 'number' ? p.usd : null)
+      const priceFromPrices = typeof p === 'number' ? p : (typeof p?.usd === 'number' ? p.usd : null)
+      const price = priceFromCoins ?? priceFromPrices
+
       return {
         ...c,
         _rank: i,
@@ -399,6 +427,7 @@ export default function Home() {
     })
   }, [results, pricesData, sortKey, sortDir, faves])
 
+  // Compacte ⭐-header met vaste breedte (uitlijning fix)
   function StarHeader() {
     const active = sortKey === 'fav'
     const arrow = active ? (sortDir === 'asc' ? '▲' : '▼') : ' '
@@ -432,6 +461,7 @@ export default function Home() {
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
+      {/* HEADER met link rechtsboven */}
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="hero">Crypto Tracker</h1>
@@ -440,10 +470,16 @@ export default function Home() {
           )}
         </div>
         <nav className="flex items-center gap-4">
-          <Link href="/indicators" className="text-sky-400 hover:text-sky-300 text-sm font-medium">
+          <Link
+            href="/indicators"
+            className="text-sky-400 hover:text-sky-300 text-sm font-medium"
+          >
             Uitleg indicatoren
           </Link>
-          <Link href="/disclaimer" className="text-sky-400 hover:text-sky-300 text-sm font-medium">
+          <Link
+            href="/disclaimer"
+            className="text-sky-400 hover:text-sky-300 text-sm font-medium"
+          >
             Disclaimer
           </Link>
         </nav>
@@ -462,14 +498,17 @@ export default function Home() {
 
       {!error && (isLoading || results.length === 0) && <SkeletonTable />}
 
+      {/* TWEE KOL. LAYOUT: links tabel (breder), rechts AI-advies + Samenvatting + Heatmap */}
       {rows.length > 0 && (
         <div className="grid gap-6 lg:grid-cols-12">
+          {/* LINKS: TABEL */}
           <div className="lg:col-span-8">
             <div className="table-card overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="text-white/60">
                   <tr>
                     <th className="text-left py-2">#</th>
+                    {/* ⭐ vaste breedte + gecentreerd */}
                     <th className="py-2 w-10 text-center">
                       <StarHeader />
                     </th>
@@ -496,12 +535,11 @@ export default function Home() {
                 <tbody>
                   {rows.map((c: any, i: number) => {
                     const sym = String(c.symbol || '').toUpperCase()
-                    const p = (pricesData as any)?.prices?.[sym]
-                    const price = typeof p === 'number' ? p : (typeof p?.usd === 'number' ? p.usd : null)
                     const isFav = c._fav === true
                     return (
                       <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
                         <td className="py-3 pr-3">{i + 1}</td>
+                        {/* ⭐ cel: vaste breedte + center */}
                         <td className="py-3 w-10 text-center">
                           <button
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
@@ -521,7 +559,8 @@ export default function Home() {
                             {c.name} <span className="ticker">({c.symbol})</span>
                           </Link>
                         </td>
-                        <td className="py-3 text-right">{formatFiat(price)}</td>
+                        {/* prijs uit verrijkte _price */}
+                        <td className="py-3 text-right">{formatFiat(c._price)}</td>
                         <td className="py-3 text-right">{Number(c?.perf?.d ?? 0).toFixed(2)}%</td>
                         <td className="py-3 text-right">{Number(c?.perf?.w ?? 0).toFixed(2)}%</td>
                         <td className="py-3 text-right">{Number(c?.perf?.m ?? 0).toFixed(2)}%</td>
@@ -536,6 +575,7 @@ export default function Home() {
             </div>
           </div>
 
+          {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP (samen sticky) */}
           <div className="lg:col-span-4">
             <div className="sticky top-6 space-y-6">
               <AISummary rows={rows} updatedAt={data?.updatedAt} />
