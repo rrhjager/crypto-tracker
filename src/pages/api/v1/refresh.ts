@@ -11,7 +11,7 @@ import { latestFundingRate, currentOpenInterest, globalLongShortSkew } from "@/l
 import { momentumScoreFromCloses } from "@/lib/indicators/momentum";
 import { combineScores, ComponentScoreNullable } from "@/lib/scoring";
 
-// DeFiLlama — terug voor yield
+// DeFiLlama voor yield
 import { topPoolsForSymbol } from "@/lib/providers/defillama";
 
 export const config = { maxDuration: 60 };
@@ -156,18 +156,15 @@ async function fetchFundingHistCOIN(coinPerp: string | null, timeoutMs = 5000): 
 
 // ── L/S skew helpers (normaliseer naar 0..1)
 function normalizeLsrInput(v: any): number | null {
-  // 0..1 direct?
   if (isFiniteNum(v)) {
     if (v > 1) return Math.max(0, Math.min(1, v / (1 + v))); // ratio → 0..1
     if (v >= 0 && v <= 1) return v;
   }
-  // string?
   const asNum = Number(v);
   if (Number.isFinite(asNum)) {
     if (asNum > 1) return Math.max(0, Math.min(1, asNum / (1 + asNum)));
     if (asNum >= 0 && asNum <= 1) return asNum;
   }
-  // object shapes
   if (v && typeof v === "object") {
     const r = Number((v.longShortRatio ?? v.ratio ?? v.value));
     if (Number.isFinite(r)) {
@@ -240,6 +237,59 @@ async function fetchOpenInterestHistUSDT(usdtPerp: string, timeoutMs = 6000): Pr
   return null;
 }
 
+// ── Yield helpers
+const BASELINE_APY: Record<string, number> = {
+  // conservatieve staking-achtige baselines (in %)
+  ETH: 3.5, SOL: 6.0, BNB: 3.0, ADA: 3.0, AVAX: 6.0, MATIC: 2.5,
+  NEAR: 7.0, DOT: 10.0, ATOM: 12.0, TRX: 4.0, XRP: 1.0, LTC: 0.8,
+};
+
+function hasIlRisk(pool: any): boolean {
+  const v =
+    pool?.ilRisk ??
+    pool?.il_risk ??
+    pool?.impermanentLossRisk ??
+    pool?.impermanent_loss_risk ??
+    "";
+  const s = String(v).toLowerCase().trim();
+  return s === "yes" || s === "true" || s === "1" || s === "high";
+}
+
+async function bestApyForSymbol(sym: string, fast: boolean): Promise<{ apyEff: number | null, src: "llama" | "baseline" | null, pools?: any[] }> {
+  const SYM = sym.toUpperCase();
+  // In FAST: sla externe call over, gebruik baseline als die bestaat
+  if (fast) {
+    if (BASELINE_APY[SYM] != null) return { apyEff: BASELINE_APY[SYM], src: "baseline" };
+    return { apyEff: null, src: null };
+  }
+
+  // Niet-FAST: probeer DeFiLlama met kort budget; verlaag tvl-drempel & limit
+  const pools = await safe(topPoolsForSymbol(SYM, { minTvlUsd: 1_000_000, maxPools: 4 }) as any, []);
+  let best: number | null = null;
+  for (const p of Array.isArray(pools) ? pools : []) {
+    const apy = Number.isFinite(Number(p?.apy)) ? Number(p.apy)
+      : Number(p?.apyBase || 0) + Number(p?.apyReward || 0);
+    const tvl = Number(p?.tvlUsd || 0);
+    if (!Number.isFinite(apy) || apy <= 0 || tvl < 1_000_000) continue;
+
+    let qual = 1;
+    if (p?.stablecoin === true) qual *= 0.85; // iets minder interessant
+    if (hasIlRisk(p))         qual *= 0.70; // IL-penalty
+
+    const eff = apy * qual;
+    best = Math.max(best ?? 0, eff);
+  }
+
+  if (best != null && Number.isFinite(best) && best > 0) {
+    return { apyEff: best, src: "llama", pools: pools.slice(0, 3) };
+  }
+  // fallback: baseline als beschikbaar
+  if (BASELINE_APY[SYM] != null) {
+    return { apyEff: BASELINE_APY[SYM], src: "baseline" };
+  }
+  return { apyEff: null, src: null };
+}
+
 // ── Maths
 function rawVolatilityFromCloses(closes: number[], lookback = 72): number | null {
   const n = Math.min(lookback, closes.length - 1);
@@ -275,16 +325,6 @@ function percentile(sortedAsc: number[], q: number): number {
   if (!sortedAsc.length) return 0;
   const i = Math.round(q * (sortedAsc.length - 1));
   return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, i))];
-}
-function hasIlRisk(pool: any): boolean {
-  const v =
-    pool?.ilRisk ??
-    pool?.il_risk ??
-    pool?.impermanentLossRisk ??
-    pool?.impermanent_loss_risk ??
-    "";
-  const s = String(v).toLowerCase().trim();
-  return s === "yes" || s === "true" || s === "1" || s === "high";
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -338,6 +378,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lsr: number | null;
       pools: any[];
       bestApyEff: number | null;
+      _yieldSrc?: "llama" | "baseline" | null;
       _futSym?: string | null;
       _coinPerp?: string | null;
       _oiSource?: string | null;
@@ -417,29 +458,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // DeFi pools (alleen buiten FAST om traagheid te vermijden)
-        let pools: any[] = [];
-        let bestApyEff: number | null = null;
-        if (!FAST) {
-          pools = await safe(topPoolsForSymbol(coin.symbol, { minTvlUsd: 3_000_000, maxPools: 6 }) as any, []);
-          for (const p of Array.isArray(pools) ? pools : []) {
-            const apy = Number.isFinite(Number(p?.apy))
-              ? Number(p.apy)
-              : Number(p?.apyBase || 0) + Number(p?.apyReward || 0);
-            const tvl = Number(p?.tvlUsd || 0);
-            if (!Number.isFinite(apy) || apy <= 0 || tvl < 3_000_000) continue;
+        // Yield (altijd gevuld: llama → baseline)
+        const y = await bestApyForSymbol(coin.symbol, FAST);
+        const pools = !FAST && y.src === "llama" && Array.isArray(y.pools) ? y.pools : [];
+        const bestApyEff = (y.apyEff != null && Number.isFinite(y.apyEff)) ? y.apyEff : null;
 
-            let qual = 1;
-            if (p?.stablecoin === true) qual *= 0.85;
-            if (hasIlRisk(p)) qual *= 0.70;
-
-            const eff = apy * qual;
-            bestApyEff = Math.max(bestApyEff ?? 0, eff);
-          }
-        }
-
-        return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff,
-          _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _lsrSrc, _livePrice, _priceSrc };
+        return {
+          coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr,
+          pools, bestApyEff, _yieldSrc: y.src ?? null,
+          _futSym: futSym, _coinPerp: coinPerp, _oiSource, _fundSrc, _lsrSrc,
+          _livePrice, _priceSrc
+        };
       })
     );
 
@@ -458,9 +487,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return s;
     });
 
-    // 6) Yield percentielen (alleen als we data hebben en niet in FAST)
+    // 6) Yield percentielen (nu hebben we altijd data bij majors, baseline of llama)
     const apysAll = prelim
-      .map(p => (!FAST && typeof p.bestApyEff === "number" ? p.bestApyEff : null))
+      .map(p => (typeof p.bestApyEff === "number" ? p.bestApyEff : null))
       .filter((x): x is number => x != null && Number.isFinite(x) && x > 0)
       .sort((a, b) => a - b);
 
@@ -468,7 +497,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const p90 = apysAll.length >= 5 ? percentile(apysAll, 0.90) : 12;
 
     function yieldScoreFrom(apyEff: number | null): number | null {
-      if (FAST) return null;
       if (apyEff == null || !Number.isFinite(apyEff) || apyEff <= 0) return null;
       let z: number;
       if (p90 - p10 <= 1e-9) {
@@ -492,7 +520,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 7) Output
     const results = prelim.map((p, i) => {
-      // Funding naar score (cap ±0.05% per 8u)
+      // Funding → score (cap ±0.05% per 8u)
       let fundingScore: number | null = null;
       if (isFiniteNum(p.funding)) {
         const capped = Math.max(-0.0005, Math.min(0.0005, p.funding as number));
@@ -507,7 +535,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (mom < 0.45) oiScore = Math.min(oiScore, 0.6);
       }
 
-      // L/S skew -> score met crowding-penalty
+      // L/S skew → score met crowding-penalty
       let lsrScore: number | null = (typeof p.lsr === "number") ? p.lsr : null;
       if (typeof lsrScore === "number") {
         const centered = lsrScore - 0.5;
@@ -532,11 +560,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const last1d = p.closes1d.at(-1) ?? null;
       const price = (p._livePrice ?? (last1h ?? last1d ?? null));
 
-      // Yield-score
+      // Yield-score (altijd gevuld voor majors dankzij baseline)
       let yieldScore = yieldScoreFrom(p.bestApyEff);
       if (yieldScore != null) {
         const mom = typeof p.momentum === "number" ? p.momentum : 0.5;
-        if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55); // bearish-cap
+        if (mom < 0.45) yieldScore = Math.min(yieldScore, 0.55);
       }
 
       // Breakdown
@@ -566,8 +594,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         meta: {
           fng: fngVal,
           breadth: { green: greenCount, total: COINS.length, pct: breadth },
-          // optioneel: kleine subset pools meest relevant
-          ...( !FAST ? { pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [] } : {} ),
+          ...(p._yieldSrc === "llama" ? { pools: Array.isArray(p.pools) ? p.pools.slice(0, 3) : [] } : {}),
           ...(DEBUG ? {
             __debug: {
               futSym: p._futSym,
@@ -576,10 +603,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               oiNorm: oiNorm[i],
               fundingSource: p._fundSrc ?? null,
               lsrSource: p._lsrSrc ?? null,
-              priceSource: p._priceSrc ?? (p._livePrice != null ? "ticker" : (last1h != null ? "kline-1h" : (last1d != null ? "kline-1d" : "none"))),
-              livePrice: p._livePrice ?? null,
+              yieldSource: p._yieldSrc ?? null,
               bestApyEff: p.bestApyEff ?? null,
               p10, p90,
+              priceSource: p._priceSrc ?? (p._livePrice != null ? "ticker" : (last1h != null ? "kline-1h" : (last1d != null ? "kline-1d" : "none"))),
+              livePrice: p._livePrice ?? null,
             }
           } : {})
         },
