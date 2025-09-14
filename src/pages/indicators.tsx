@@ -17,7 +17,7 @@ const ROWS: Row[] = [
   },
   {
     indicator: "Volatility Regime",
-    uitleg: "Vergelijkt hoe heftig de schommelingen zijn t.o.v. andere coins.",
+    uitleg: "Vergelijkt hoe heftig de schommelingen zijn t.o.v. de andere coins.",
     idee: "Rustiger coin → hogere score; onrustiger → lagere score.",
   },
   {
