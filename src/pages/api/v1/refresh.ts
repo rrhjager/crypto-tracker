@@ -14,6 +14,10 @@ import { combineScores, ComponentScoreNullable } from "@/lib/scoring";
 // DeFiLlama
 import { topPoolsForSymbol } from "@/lib/providers/defillama";
 
+// ➕ Concurrency limiter (NIEUW)
+import pLimit from "p-limit";
+const limit = pLimit(6); // 6 tegelijk is meestal safe
+
 export const config = { maxDuration: 60 };
 
 async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p; } catch { return fb; } }
@@ -35,7 +39,7 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs =
 }
 
 // Fallback rechtstreeks naar Binance hosts wanneer de provider niks/te weinig geeft
-async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit: number) {
+async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limitN: number) {
   const hosts = [
     "https://api.binance.com",
     "https://api1.binance.com",
@@ -43,7 +47,7 @@ async function fetchKlinesFallback(symbol: string, interval: "1h" | "1d", limit:
     "https://api3.binance.com",
     "https://data-api.binance.vision"
   ];
-  const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+  const path = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limitN}`;
   for (const h of hosts) {
     try {
       const data = await fetchWithTimeout(h + path, {}, 8000);
@@ -242,9 +246,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fngVal = Number((fng as any)?.value ?? 50);
     const fearGreed = 1 - Math.abs((fngVal / 100) - 0.5) * 2;
 
-    // 2) Klines + snelle spotprijs
+    // 2) Klines + snelle spotprijs (GEDOSEERD met p-limit)
     const klinesByCoin = await Promise.all(
-      COINS.map(async (coin) => {
+      COINS.map((coin) => limit(async () => {
         const symbol = coin.pairUSD?.binance;
         if (!symbol) return { coin, closes1h: [] as number[], closes1d: [] as number[], _livePrice: null as number | null, _priceSrc: null as string | null };
 
@@ -263,10 +267,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const live = await safe(fetchSpotPrice(symbol), { price: null, src: null });
 
         return { coin, closes1h, closes1d, _livePrice: live.price, _priceSrc: live.src };
-      })
+      }))
     );
 
-    // 3) Lokale signalen + pools + OI (met meerdere fallbacks)
+    // 3) Lokale signalen + pools + OI (met meerdere fallbacks) — OOK GEDOSEERD
     type Pre = {
       coin: (typeof COINS)[number];
       closes1h: number[];
@@ -287,7 +291,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     const prelim: Pre[] = await Promise.all(
-      klinesByCoin.map(async ({ coin, closes1h, closes1d, _livePrice, _priceSrc }) => {
+      klinesByCoin.map(({ coin, closes1h, closes1d, _livePrice, _priceSrc }) => limit(async () => {
         const spotSym = coin.pairUSD?.binance;
         const futSym  = toUsdtPerp(spotSym);
         const coinPerp = toCoinMarginedPerp(spotSym);
@@ -372,7 +376,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         return { coin, closes1h, closes1d, tv, momentum, rawVol, funding, oi, lsr, pools, bestApyEff, _futSym: futSym, _coinPerp: coinPerp, _oiSource, _livePrice, _priceSrc };
-      })
+      }))
     );
 
     // 4) Breadth
