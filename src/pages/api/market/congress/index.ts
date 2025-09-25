@@ -52,10 +52,9 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
-// --- Vercel/Chromium + Puppeteer launch (type-compatibel) ---
+// --- Chromium + Puppeteer ---
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    // Veilige any-cast zodat typings je build niet breken
     const mod: any = await import('@sparticuz/chromium')
     const chromium: any = mod?.default ?? mod
     const puppeteer = await import('puppeteer-core')
@@ -65,11 +64,11 @@ async function getBrowser() {
         ...(chromium?.args ?? []),
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--ignore-certificate-errors',
+        '--ignore-certificate-errors', // ipv ignoreHTTPSErrors
       ],
       defaultViewport: chromium?.defaultViewport ?? null,
       executablePath: await (chromium?.executablePath?.() ?? Promise.resolve('/usr/bin/chromium')),
-      headless: true, // expliciet boolean
+      headless: true,
     })
     return { browser }
   } else {
@@ -113,37 +112,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const rows = await page.evaluate(() => {
         const clean = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim()
-
         const headers = Array.from(document.querySelectorAll('table thead th')).map(th =>
           (th.textContent || '').trim().toLowerCase()
         )
 
         const idxPolitician = headers.findIndex(h => h.includes('politician'))
-        const idxIssuer     = headers.findIndex(h => h.includes('traded issuer') || h.includes('issuer') || h.includes('stock'))
+        const idxIssuer     = headers.findIndex(h => h.includes('issuer'))
         const idxPublished  = headers.findIndex(h => h.includes('published'))
         const idxTraded     = headers.findIndex(h => h.includes('traded'))
         const idxFiledAfter = headers.findIndex(h => h.includes('filed after'))
         const idxSize       = headers.findIndex(h => h.includes('size'))
         const idxPrice      = headers.findIndex(h => h.includes('price'))
-        const idxType       = headers.findIndex(h => h.includes('transaction') || h.includes('type') || h.includes('side') || h.includes('direction'))
+        const idxType       = headers.findIndex(h => h.includes('transaction') || h.includes('type') || h.includes('side'))
 
         const getCell = (tr: HTMLTableRowElement, idx: number) =>
           clean(tr.querySelectorAll('td')[idx]?.textContent || '')
 
-        const data: Array<{
-          person: string
-          issuerCell: string
-          publishedText: string
-          tradedText: string
-          filedAfterDays: number | null
-          sizeText: string
-          priceText: string
-          sideRaw: string
-        }> = []
-
+        const data: any[] = []
         document.querySelectorAll('table tbody tr').forEach(trEl => {
           const tr = trEl as HTMLTableRowElement
-
           const person =
             clean(tr.querySelector('a[href*="/politicians/"]')?.textContent) ||
             (idxPolitician >= 0 ? getCell(tr, idxPolitician) : '')
@@ -151,58 +138,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const issuerCell = idxIssuer >= 0 ? getCell(tr, idxIssuer) : ''
           const publishedText = idxPublished >= 0 ? getCell(tr, idxPublished) : ''
           const tradedText    = idxTraded    >= 0 ? getCell(tr, idxTraded)    : ''
-
-          let filedAfterDays: number | null = null
-          if (idxFiledAfter >= 0) {
-            const t = getCell(tr, idxFiledAfter) // e.g. "34 days"
-            const m = t.match(/(\d+)\s*day/i)
-            filedAfterDays = m ? parseInt(m[1], 10) : null
-          }
-
-          let sizeText = ''
-          if (idxSize >= 0) {
-            const t = getCell(tr, idxSize)
-            const badge = t.match(/\b\d+(?:\.\d+)?[Kk](?:\s*[–-]\s*\d+(?:\.\d+)?[Kk]|\+)?\b/)
-            sizeText = badge ? badge[0].toUpperCase() : t
-          }
-
-          let priceText = ''
-          if (idxPrice >= 0) {
-            const t = getCell(tr, idxPrice)
-            const m = t.match(/\$[\d,]+(?:\.\d{1,2})?/) || t.match(/N\/A/i)
-            priceText = m ? m[0] : t
-          }
-
-          // Side/Type (BUY/SELL). Probeer eerst expliciete kolom:
-          let sideRaw = ''
-          if (idxType >= 0) sideRaw = getCell(tr, idxType)
-
-          // Fallback: badge/tekst in de hele rij
-          if (!sideRaw) {
-            const whole = clean(tr.textContent || '')
-            const m = whole.match(/\b(buy|purchase|acquisition|acquire|sold|sell|sale|disposal|dispose)\b/i)
-            sideRaw = m ? m[0] : ''
-          }
+          const sizeText      = idxSize >= 0 ? getCell(tr, idxSize) : ''
+          const priceText     = idxPrice >= 0 ? getCell(tr, idxPrice) : ''
+          const sideRaw       = idxType >= 0 ? getCell(tr, idxType) : ''
 
           if (person || issuerCell) {
-            data.push({ person, issuerCell, publishedText, tradedText, filedAfterDays, sizeText, priceText, sideRaw })
+            data.push({ person, issuerCell, publishedText, tradedText, sizeText, priceText, sideRaw })
           }
         })
-
         return data
       })
 
       for (const r of rows) {
-        const pubISO = toISO(r.publishedText as any)
-
-        // reconstruct traded via "Filed After" indien nodig
-        let trdISO = toISO(r.tradedText as any)
-        if (!trdISO && pubISO && r.filedAfterDays != null && r.filedAfterDays >= 0) {
-          trdISO = subDaysISO(pubISO, r.filedAfterDays)
-        }
-
-        const ticker = r.issuerCell || '—'
-        const side = normalizeSide(r.sideRaw)
+        const pubISO = toISO(r.publishedText)
+        const trdISO = toISO(r.tradedText)
+        const side   = normalizeSide(r.sideRaw)
 
         out.push({
           publishedISO: pubISO,
@@ -210,7 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           tradedISO: trdISO,
           tradedLabel: nl(trdISO),
           person: r.person || '—',
-          ticker,
+          ticker: r.issuerCell || '—',
           amount: r.sizeText || '—',
           price: r.priceText || '—',
           side,
@@ -221,7 +171,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pageNum++
     }
 
-    // newest first
     out.sort((a, b) => {
       const tA = new Date(a.publishedISO || a.tradedISO || 0).getTime()
       const tB = new Date(b.publishedISO || b.tradedISO || 0).getTime()
@@ -229,12 +178,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
 
     res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
-    return res.status(200).json({
-      items: out.slice(0, limit),
-      hint: 'CapitolTrades scrape (Published/Traded/Size/Price + BUY/SELL; viewport-wide + filed-after fallback)',
-    })
+    return res.status(200).json({ items: out.slice(0, limit) })
   } catch (e: any) {
-    return res.status(502).json({ items: [], hint: 'Headless scrape failed', detail: String(e?.message || e) })
+    return res.status(502).json({ items: [], error: String(e?.message || e) })
   } finally {
     try { await browser?.close() } catch {}
   }
