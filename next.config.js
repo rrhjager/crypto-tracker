@@ -1,11 +1,14 @@
-// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-    reactStrictMode: true,
-    async rewrites() {
-      return [
-        { source: '/index', destination: '/app' }, // '/index' opent je crypto tracker
-      ]
-    },
-  }
-  module.exports = nextConfig
+  reactStrictMode: true,
+  swcMinify: true,
+  experimental: { typedRoutes: true },
+  output: 'standalone',
+
+  // VERWIJDERD: de rewrites die '/' en '/index' naar '/app' stuurden.
+  async rewrites() {
+    return [];
+  },
+};
+
+module.exports = nextConfig;
