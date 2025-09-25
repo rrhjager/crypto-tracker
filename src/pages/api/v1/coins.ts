@@ -1,61 +1,55 @@
 // src/pages/api/v1/coins.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getCache, setCache, setCacheHeaders } from "@/lib/cache";
+import { getCache, setCache } from "@/lib/cache";
 import { fetchSafe } from "@/lib/fetchSafe";
 
-/**
- * Bepaalt de absolute base URL voor interne calls.
- * Werkt lokaal en op Vercel (via x-forwarded-* headers).
- */
-function baseUrl(req: NextApiRequest): string {
-  const proto =
-    (req.headers["x-forwarded-proto"] as string) ||
-    (req.headers["x-forwarded-protocol"] as string) ||
-    "http";
-  const host =
-    (req.headers["x-forwarded-host"] as string) ||
-    (req.headers["host"] as string) ||
-    "localhost:3000";
-  return `${proto}://${host}`;
+type Json = Record<string, any>;
+
+const CACHE_KEY = "coins:v1:fast=1";
+const TTL_SECONDS = 30;
+
+function setSWRHeaders(res: NextApiResponse) {
+  // CDN cache for 30s, allow stale for 60s while revalidating
+  res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=60");
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Cache headers (korte TTL omdat we toch vaak verversen)
-  setCacheHeaders(res, 20, 60);
-
-  const fast = req.query.fast === "0" ? 0 : 1; // default fast=1
-  const cacheKey = `v1/coins?fast=${fast}`;
-
-  // 1) Probeer cache
-  const cached = getCache<any>(cacheKey);
-  if (cached?.data && Array.isArray(cached.data.results) && cached.data.results.length > 0) {
-    return res.status(200).json(cached.data);
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Json>) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  // 2) GEEN cache → synchronisch verversen i.p.v. "background warm-up"
-  //    Bel direct de refresh-endpoint en geef diens payload door.
   try {
-    const url = `${baseUrl(req)}/api/v1/refresh?fast=${fast}&from=coins`;
-    const r = await fetchSafe(url, { timeout: 60000 }); // geef refresh genoeg tijd
-
-    if (r.ok && r.data && Array.isArray(r.data.results)) {
-      // Optioneel: ook in-memory cache zetten voor herhaalde hits in dezelfde lambda
-      setCache(cacheKey, r.data, 55);
-      return res.status(200).json(r.data);
+    // 1) Try shared cache first
+    const cached = await getCache<Json>(CACHE_KEY);
+    if (cached) {
+      setSWRHeaders(res);
+      return res.status(200).json(cached);
     }
 
-    // Als refresh niks oplevert, val terug op "warming up"
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: r.error || "Warming up cache…",
+    // 2) No cache → build by calling refresh on the same deployment
+    const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+    const host = req.headers.host;
+    const origin = `${proto}://${host}`;
+
+    const r = await fetchSafe(`${origin}/api/v1/refresh?fast=1`, {
+      // Ensure this isn't cached by any intermediate fetch layer
+      cache: "no-store",
+      headers: { "x-internal": "coins" },
     });
-  } catch (e: any) {
-    // Veilig falen
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: e?.message || "Error during refresh",
-    });
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      return res.status(r.status).json({ error: "refresh_failed", details: text });
+    }
+
+    const data = (await r.json()) as Json;
+
+    // 3) Persist to shared cache (TTL ~ 30s) and return
+    await setCache(CACHE_KEY, data, TTL_SECONDS);
+    setSWRHeaders(res);
+    return res.status(200).json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: "internal_error", details: String(err?.message || err) });
   }
 }
