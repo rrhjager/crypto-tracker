@@ -5,10 +5,7 @@ import { fetchSafe } from '@/lib/fetchSafe'
 
 type CoinsPayload = any
 
-<<<<<<< HEAD
 // Iets ruimer zodat we desnoods op /refresh kunnen wachten (al wachten we in principe niet)
-=======
->>>>>>> b451e384412f3d17c2aa1a5d1c295221c8855695
 export const config = { maxDuration: 60 }
 
 function baseUrl(req: NextApiRequest) {
@@ -53,11 +50,7 @@ export default async function handler(
   res: NextApiResponse<CoinsPayload | { updatedAt: number; results: any[]; message?: string }>
 ) {
   try {
-<<<<<<< HEAD
     // 1) Probeer directe (process-local) cache
-=======
-    // 1) Directe cache hit? Meteen teruggeven (snel + vol)
->>>>>>> b451e384412f3d17c2aa1a5d1c295221c8855695
     const cached = getCache<CoinsPayload>('SUMMARY')
     if (cached?.results?.length) {
       const filtered = stripKaspa(cached)
@@ -65,7 +58,6 @@ export default async function handler(
       return res.status(200).json(filtered)
     }
 
-<<<<<<< HEAD
     // 2) Geen cache? Trap /refresh "fire-and-forget" af (NIET awaiten).
     const qs = req.query.debug ? `?debug=${encodeURIComponent(String(req.query.debug))}` : ''
     const url = `${baseUrl(req)}/api/v1/refresh${qs}`
@@ -86,26 +78,6 @@ export default async function handler(
 
     // 4) Nog steeds geen data? Geef niet-blokkerend antwoord terug; UI haalt later opnieuw op.
     setCacheHeaders(res, 5, 60)
-=======
-    // 2) Cache koud → 1 snelle refresh draaien en *wel* wachten
-    const qs: string[] = []
-    if (req.query.debug) qs.push(`debug=${encodeURIComponent(String(req.query.debug))}`)
-    qs.push('fast=1')
-    const url = `${baseUrl(req)}/api/v1/refresh${qs.length ? `?${qs.join('&')}` : ''}`
-
-    // Korte timeouts; geen retries (we willen snel iets terug)
-    const resp = await fetchSafe(url, { cache: 'no-store' }, 12000, 0)
-
-    if (resp && typeof (resp as any).json === 'function') {
-      const live: CoinsPayload = await (resp as any).json()
-      const filtered = stripKaspa(live)
-      setCacheHeaders(res, 10, 45)
-      return res.status(200).json(filtered)
-    }
-
-    // 3) Fallback: lege set (komt zelden voor), UI blijft draaien
-    setCacheHeaders(res, 5, 20)
->>>>>>> b451e384412f3d17c2aa1a5d1c295221c8855695
     return res.status(200).json({
       updatedAt: Date.now(),
       results: [],
