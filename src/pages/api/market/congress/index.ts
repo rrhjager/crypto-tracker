@@ -10,7 +10,7 @@ type Item = {
   ticker: string
   amount: string
   price: string
-  side: 'BUY' | 'SELL' | '—'          // <-- nieuw veld
+  side: 'BUY' | 'SELL' | '—'
 }
 
 export const config = { runtime: 'nodejs' }
@@ -52,25 +52,20 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
-// --- FIXED: chromium + puppeteer launch (TypeScript-friendly) ---
+// --- Vercel/Chromium + Puppeteer launch (type-safe) ---
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
 
-    // Loosere types; runtime heeft deze velden wel, typings niet altijd
-    const chr = chromium as unknown as {
-      args?: string[]
-      defaultViewport?: any
-      executablePath: () => Promise<string>
-      headless?: boolean | 'new'
-    }
+    // Sommige typings missen velden; gebruik 'any' voor compat
+    const chr = chromium as any
 
     const browser = await puppeteer.default.launch({
       args: chr.args ?? [],
       defaultViewport: chr.defaultViewport ?? null,
       executablePath: await chr.executablePath(),
-      headless: (chr.headless ?? true),
+      headless: true,                 // <-- forceer boolean; voorkomt "new" type mismatch
       ignoreHTTPSErrors: true,
     })
     return { browser }
@@ -84,7 +79,6 @@ async function getBrowser() {
 function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
   const t = (s || '').toLowerCase()
   if (!t) return '—'
-  // woorden die op veel sites voorkomen voor richting
   const isBuy  = /\b(buy|purchase|acquisition|acquire|bought)\b/.test(t)
   const isSell = /\b(sell|sale|disposal|dispose|sold)\b/.test(t)
   if (isBuy && !isSell) return 'BUY'
@@ -102,7 +96,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { browser: b } = await getBrowser()
     browser = b
     const page = await browser.newPage()
-    // Belangrijk: zorg dat ALLE kolommen zichtbaar zijn (Traded/Type kan verborgen zijn bij small width)
     await page.setViewport({ width: 1480, height: 1200, deviceScaleFactor: 1 })
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
@@ -184,7 +177,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Fallback: badge/tekst in de hele rij
           if (!sideRaw) {
             const whole = clean(tr.textContent || '')
-            // haal alleen de woorden rondom mogelijk label op (heuristisch)
             const m = whole.match(/\b(buy|purchase|acquisition|acquire|sold|sell|sale|disposal|dispose)\b/i)
             sideRaw = m ? m[0] : ''
           }
@@ -226,7 +218,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pageNum++
     }
 
-    // newest first (published > traded)
+    // newest first
     out.sort((a, b) => {
       const tA = new Date(a.publishedISO || a.tradedISO || 0).getTime()
       const tB = new Date(b.publishedISO || b.tradedISO || 0).getTime()
