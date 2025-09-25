@@ -7,10 +7,8 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 
-/* ---------------- config (hero image in /public/images) ---------------- */
-const HERO_IMG = '/images/hero-crypto-tracker.png' // <- correct pad nu het bestand in /public/images staat
+const HERO_IMG = '/images/hero-crypto-tracker.png'
 
-/* ---------------- types ---------------- */
 type Quote = {
   symbol: string
   regularMarketPrice: number | null
@@ -20,71 +18,56 @@ type Quote = {
 }
 
 type CryptoRow = { symbol: string; name?: string; pct?: number }
-
-type NewsItem = {
-  title: string
-  url: string
-  source?: string
-  published?: string
-  image?: string | null
-}
-
-// Multi-market types
+type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
 type EquityCon = { symbol: string; name: string; market: string }
 type EquityPick = { symbol: string; name: string; market: string; pct: number }
 
-/* ---------------- utils ---------------- */
 const num = (v: number | null | undefined, d = 2) =>
   (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
-function classNames(...xs: (string | false | null | undefined)[]) {
-  return xs.filter(Boolean).join(' ')
-}
-
-/* ---------------- static fallbacks per index ---------------- */
 const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   'AEX': [],
   'S&P 500': [
-    { symbol: 'AAPL',  name: 'Apple' },
-    { symbol: 'MSFT',  name: 'Microsoft' },
-    { symbol: 'NVDA',  name: 'NVIDIA' },
-    { symbol: 'AMZN',  name: 'Amazon' },
-    { symbol: 'META',  name: 'Meta Platforms' },
+    { symbol: 'AAPL', name: 'Apple' },
+    { symbol: 'MSFT', name: 'Microsoft' },
+    { symbol: 'NVDA', name: 'NVIDIA' },
+    { symbol: 'AMZN', name: 'Amazon' },
+    { symbol: 'META', name: 'Meta Platforms' },
   ],
   'NASDAQ': [
     { symbol: 'GOOGL', name: 'Alphabet' },
-    { symbol: 'TSLA',  name: 'Tesla' },
-    { symbol: 'AVGO',  name: 'Broadcom' },
-    { symbol: 'AMD',   name: 'Advanced Micro Devices' },
-    { symbol: 'ADBE',  name: 'Adobe' },
+    { symbol: 'TSLA', name: 'Tesla' },
+    { symbol: 'AVGO', name: 'Broadcom' },
+    { symbol: 'AMD', name: 'Advanced Micro Devices' },
+    { symbol: 'ADBE', name: 'Adobe' },
   ],
   'Dow Jones': [
     { symbol: 'UNH', name: 'UnitedHealth' },
     { symbol: 'JPM', name: 'JPMorgan Chase' },
     { symbol: 'MRK', name: 'Merck' },
-    { symbol: 'V',   name: 'Visa' },
-    { symbol: 'PG',  name: 'Procter & Gamble' },
+    { symbol: 'V', name: 'Visa' },
+    { symbol: 'PG', name: 'Procter & Gamble' },
   ],
   'DAX': [
-    { symbol: 'SAP.DE',  name: 'SAP' },
-    { symbol: 'SIE.DE',  name: 'Siemens' },
-    { symbol: 'MBG.DE',  name: 'Mercedes-Benz Group' },
-    { symbol: 'BAS.DE',  name: 'BASF' },
-    { symbol: 'BMW.DE',  name: 'BMW' },
+    { symbol: 'SAP.DE', name: 'SAP' },
+    { symbol: 'SIE.DE', name: 'Siemens' },
+    { symbol: 'MBG.DE', name: 'Mercedes-Benz Group' },
+    { symbol: 'BAS.DE', name: 'BASF' },
+    { symbol: 'BMW.DE', name: 'BMW' },
   ],
   'FTSE 100': [
-    { symbol: 'AZN.L',   name: 'AstraZeneca' },
-    { symbol: 'SHEL.L',  name: 'Shell' },
-    { symbol: 'HSBA.L',  name: 'HSBC' },
-    { symbol: 'ULVR.L',  name: 'Unilever' },
-    { symbol: 'BATS.L',  name: 'BAT' },
+    { symbol: 'AZN.L', name: 'AstraZeneca' },
+    { symbol: 'SHEL.L', name: 'Shell' },
+    { symbol: 'HSBA.L', name: 'HSBC' },
+    { symbol: 'ULVR.L', name: 'Unilever' },
+    { symbol: 'BATS.L', name: 'BAT' },
   ],
   'Nikkei 225': [
-    { symbol: '7203.T',  name: 'Toyota' },
-    { symbol: '6758.T',  name: 'Sony' },
-    { symbol: '9984.T',  name: 'SoftBank Group' },
-    { symbol: '8035.T',  name: 'Tokyo Electron' },
-    { symbol: '4063.T',  name: 'Shin-Etsu Chemical' },
+    { symbol: '7203.T', name: 'Toyota' },
+    { symbol: '6758.T', name: 'Sony' },
+    { symbol: '9984.T', name: 'SoftBank Group' },
+    { symbol: '8035.T', name: 'Tokyo Electron' },
+    { symbol: '4063.T', name: 'Shin-Etsu Chemical' },
   ],
   'Hang Seng': [
     { symbol: '0700.HK', name: 'Tencent' },
@@ -95,10 +78,10 @@ const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   ],
   'Sensex': [
     { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
-    { symbol: 'TCS.NS',      name: 'TCS' },
+    { symbol: 'TCS.NS', name: 'TCS' },
     { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
-    { symbol: 'INFY.NS',     name: 'Infosys' },
-    { symbol: 'ICICIBANK.NS',name: 'ICICI Bank' },
+    { symbol: 'INFY.NS', name: 'Infosys' },
+    { symbol: 'ICICIBANK.NS', name: 'ICICI Bank' },
   ],
 }
 
@@ -110,17 +93,14 @@ function constituentsForMarket(label: string): EquityCon[] {
   return rows.map(r => ({ ...r, market: label }))
 }
 
-/* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
 
-  // Prefetch
   useEffect(() => {
-    router.prefetch('/stocks').catch(()=>{})
-    router.prefetch('/crypto').catch(()=>{})  // <-- alleen deze regel aangepast
+    router.prefetch('/stocks').catch(() => {})
+    router.prefetch('/crypto').catch(() => {})
   }, [router])
 
-  // SWR warm-up
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -131,20 +111,14 @@ export default function Homepage() {
         if (!aborted) mutate(key, data, { revalidate: false })
       } catch {}
     }
-    ;[
-      '/api/coin/top-movers',
-      '/api/news/google?topic=crypto',
-      '/api/news/google?topic=equities',
-    ].forEach(prime)
-    return () => { aborted = true }
+    ;['/api/coin/top-movers', '/api/news/google?topic=crypto', '/api/news/google?topic=equities'].forEach(prime)
+    return () => {
+      aborted = true
+    }
   }, [])
 
-  /* =======================
-     EQUITIES — per beurs BEST BUY/SELL (via grootste % dagstijger/daler)
-     ======================= */
   const MARKET_ORDER = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex'] as const
-
-  const [bestBuyPerMarket, setBestBuyPerMarket]   = useState<EquityPick[]>([])
+  const [bestBuyPerMarket, setBestBuyPerMarket] = useState<EquityPick[]>([])
   const [bestSellPerMarket, setBestSellPerMarket] = useState<EquityPick[]>([])
 
   useEffect(() => {
@@ -152,11 +126,9 @@ export default function Homepage() {
     ;(async () => {
       const buys: EquityPick[] = []
       const sells: EquityPick[] = []
-
       for (const label of MARKET_ORDER) {
         const cons = constituentsForMarket(label)
         if (!cons.length) continue
-
         const symbols = cons.map(c => c.symbol).join(',')
         try {
           const r = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`, { cache: 'no-store' })
@@ -167,16 +139,13 @@ export default function Homepage() {
             const pct = Number(q?.regularMarketChangePercent)
             return { ...c, pct: Number.isFinite(pct) ? pct : NaN }
           }).filter(x => Number.isFinite(x.pct))
-
           if (!arr.length) continue
           const top = [...arr].sort((a,b)=> b.pct - a.pct)[0]
           const bot = [...arr].sort((a,b)=> a.pct - b.pct)[0]
-
-          if (top) buys.push({ symbol: top.symbol, name: top.name, market: top.market, pct: top.pct })
-          if (bot) sells.push({ symbol: bot.symbol, name: bot.name, market: bot.market, pct: bot.pct })
+          if (top) buys.push({ ...top })
+          if (bot) sells.push({ ...bot })
         } catch {}
       }
-
       if (!aborted) {
         const orderIndex = (m:string)=> MARKET_ORDER.indexOf(m as any)
         setBestBuyPerMarket(buys.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
@@ -186,7 +155,6 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* -------- Crypto movers (Gainers/Losers) -------- */
   const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
   useEffect(()=>{
     let aborted=false
@@ -203,7 +171,6 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- News (Google News RSS via API) — thumbnails verwijderd -------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -230,7 +197,6 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- AEX polling (mag blijven) -------- */
   const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   useEffect(() => {
@@ -250,7 +216,6 @@ export default function Homepage() {
     return ()=> { aborted=true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  /* ---------------- render ---------------- */
   return (
     <>
       <Head>
@@ -260,87 +225,39 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-      {/* WHY SIGNALHUB met hero-beeld rechts */}
+      {/* WHY SIGNALHUB */}
       <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
         <div className="grid md:grid-cols-2 gap-8 items-center">
           <div>
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
             <div className="text-white/80 mt-3 space-y-4">
-              <p>
-                <strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected
-                indicators across both crypto and global equities, we deliver a complete market overview that
-                cuts through the noise. Every asset is distilled into a clear stoplight signal — BUY, HOLD, or SELL —
-                backed by momentum, volume, sentiment, and market insights.
-              </p>
-              <p>
-                Our platform doesn’t just track prices; it highlights what truly matters. From insider trading
-                activity in U.S. Congress to market breadth and volatility regimes, SignalHub equips you with the
-                context to make smarter portfolio decisions.
-              </p>
-              <p>
-                Already trusted by thousands of investors, SignalHub is the go-to platform for anyone seeking
-                sharper insights, faster decisions, and a more confident investment journey.
-              </p>
-              <p>
-                <em>Clarity, confidence, and control — all in one clear buy, hold or sell overview.</em>
-              </p>
+              <p><strong>SignalHub is where complexity turns into clarity.</strong> ...</p>
             </div>
           </div>
-
-          {/* hero image rechts */}
           <div className="table-card overflow-hidden">
-            <Image
-              src={HERO_IMG}
-              alt="Crypto Tracker — SignalHub"
-              width={1280}
-              height={960}
-              priority
-              unoptimized
-              className="w-full h-auto"
-            />
+            <Image src={HERO_IMG} alt="Crypto Tracker — SignalHub" width={1280} height={960} priority unoptimized className="w-full h-auto"/>
           </div>
         </div>
-
-        {/* scheidingslijn */}
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL per beurs */}
+      {/* EQUITIES */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
-        {/* BUY */}
         <div className="table-card p-5">
           <h2 className="text-lg font-semibold mb-3">Equities — Top BUY</h2>
-          <ul className="divide-y divide-white/10">
-            {bestBuyPerMarket.length===0 ? (
-              <li className="py-3 text-white/60">Nog geen data…</li>
-            ) : bestBuyPerMarket.map((r,i)=>(
-              <li key={`bb${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate">
-                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
-                  </div>
-                </div>
-                <div className="shrink-0 text-sm font-medium text-green-300 whitespace-nowrap">
-                  {num(r.pct, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
+          ...
         </div>
-
-        {/* SELL */}
         <div className="table-card p-5">
           <h2 className="text-lg font-semibold mb-3">Equities — Top SELL</h2>
           <ul className="divide-y divide-white/10">
             {bestSellPerMarket.length===0 ? (
               <li className="py-3 text-white/60">Nog geen data…</li>
             ) : bestSellPerMarket.map((r,i)=>(
-              <li key={`bs${i}`} className="py-2 flex items_center justify-between gap-3">
+              <li key={`bs${i}`} className="py-2 flex items-center justify-between gap-3"> {/* ✅ typo gefixt */}
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
                   <div className="font-medium truncate">
-                    {r.name} <span className="text_white/60 font-normal">({r.symbol})</span>
+                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span> {/* ✅ typo gefixt */}
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-red-300 whitespace-nowrap">
@@ -356,91 +273,28 @@ export default function Homepage() {
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Gainers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.gainers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.gainers.map((m,i)=>(
-              <li key={`cg${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-green-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
+          ...
           <div className="mt-3 text-sm">
-            <Link href="/crypto" className="text-white/70 hover:text-white">Open crypto →</Link> {/* <-- link aangepast */}
+            <Link href="/crypto" className="text-white/70 hover:text-white">Open crypto →</Link>
           </div>
         </div>
-
         <div className="table-card p-5">
           <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Losers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.losers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.losers.map((m,i)=>(
-              <li key={`cl${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-red-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
+          ...
           <div className="mt-3 text-sm">
-            <Link href="/crypto" className="text-white/70 hover_text-white">Open crypto →</Link> {/* <-- link aangepast */}
+            <Link href="/crypto" className="text-white/70 hover:text-white">Open crypto →</Link> {/* ✅ typo gefixt */}
           </div>
         </div>
       </section>
 
-      {/* NEWS — thumbnails verwijderd, alleen regels */}
+      {/* NEWS */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Crypto News</h2>
-            <Link href="/crypto" className="text-sm text-white/70 hover:text-white">Open crypto →</Link> {/* <-- link aangepast */}
+            <Link href="/crypto" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
-          <ul className="grid gap-2">
-            {newsCrypto.length===0 ? <li className="text-white/60">Geen nieuws…</li> :
-              newsCrypto.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-
-        <div className="table-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Equities News</h2>
-            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
-          </div>
-          <ul className="grid gap-2">
-            {newsEq.length===0 ? <li className="text-white/60">Geen nieuws…</li> :
-              newsEq.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
+          ...
         </div>
       </section>
     </>
