@@ -35,7 +35,7 @@ export default function SiteHeader() {
 
         {/* Desktop menu */}
         <nav className="hidden md:flex items-center gap-6">
-          <Link href="/index" className="group text-white/80 hover:text-white transition">
+          <Link href="/crypto" className="group text-white/80 hover:text-white transition">
             <span className={`transition-colors ${rainbow}`}>Crypto tracker</span>
           </Link>
 
@@ -65,7 +65,6 @@ export default function SiteHeader() {
                   { href: '/sensex',     label: 'Sensex' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    {/* Nieuw: vet op hover in submenu */}
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                   </Link>
                 ))}
@@ -94,7 +93,6 @@ export default function SiteHeader() {
                   { href: '/intel/sectors',    label: 'Sector performance' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    {/* Nieuw: vet op hover in submenu */}
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                   </Link>
                 ))}
@@ -123,7 +121,7 @@ export default function SiteHeader() {
       {open && (
         <div className="md:hidden border-t border-white/10">
           <nav className="max-w-6xl mx-auto px-4 py-3 flex flex-col gap-2">
-            <Link href="/index" className="group rounded-xl px-3 py-2 hover:bg-white/10">
+            <Link href="/crypto" className="group rounded-xl px-3 py-2 hover:bg-white/10">
               <span className={rainbow}>Crypto tracker</span>
             </Link>
 
@@ -141,7 +139,6 @@ export default function SiteHeader() {
                 { href: '/sensex',     label: 'Sensex' },
               ].map(it => (
                 <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
-                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
                   <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                 </Link>
               ))}
@@ -156,7 +153,6 @@ export default function SiteHeader() {
                 { href: '/intel/sectors',    label: 'Sector performance' },
               ].map(it => (
                 <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
-                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
                   <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                 </Link>
               ))}
