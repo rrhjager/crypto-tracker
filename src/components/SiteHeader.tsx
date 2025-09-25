@@ -1,0 +1,173 @@
+// src/components/SiteHeader.tsx
+import Link from 'next/link'
+import { useEffect, useRef, useState } from 'react'
+
+export default function SiteHeader() {
+  const [open, setOpen] = useState(false)
+  const [stockOpen, setStockOpen] = useState(false)
+  const [intelOpen, setIntelOpen] = useState(false)
+
+  const stockRef = useRef<HTMLDivElement>(null)
+  const intelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      const t = e.target as Node
+      if (stockRef.current && !stockRef.current.contains(t)) setStockOpen(false)
+      if (intelRef.current && !intelRef.current.contains(t)) setIntelOpen(false)
+    }
+    document.addEventListener('click', onDoc)
+    return () => document.removeEventListener('click', onDoc)
+  }, [])
+
+  const rainbow =
+    'group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-[linear-gradient(90deg,#ff004c,#ff8a00,#ffd300,#00e472,#00c3ff,#7a00ff,#ff004c)]'
+
+  return (
+    <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-40">
+      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+        {/* Home / Logo link met rainbow hover */}
+        <Link href="/" className="group font-semibold tracking-tight">
+          <span className={`text-black transition-all duration-300 ${rainbow}`}>
+            SignalHub
+          </span>
+        </Link>
+
+        {/* Desktop menu */}
+        <nav className="hidden md:flex items-center gap-6">
+          <Link href="/index" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>Crypto tracker</span>
+          </Link>
+
+          {/* Stock tracker */}
+          <div className="relative" ref={stockRef}>
+            <button
+              className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
+              onClick={() => { setStockOpen(v => !v); setIntelOpen(false) }}
+              onMouseEnter={() => { setStockOpen(true); setIntelOpen(false) }}
+              aria-haspopup="true"
+              aria-expanded={stockOpen}
+            >
+              <span className={rainbow}>Stock tracker</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </button>
+            {stockOpen && (
+              <div onMouseLeave={() => setStockOpen(false)} className="absolute right-0 mt-2 w-48 rounded-2xl border border-white/10 bg-ink shadow-lg p-1">
+                {[
+                  { href: '/stocks',     label: 'AEX' },
+                  { href: '/sp500',      label: 'S&P 500' },
+                  { href: '/nasdaq',     label: 'NASDAQ' },
+                  { href: '/dowjones',   label: 'Dow Jones' },
+                  { href: '/dax',        label: 'DAX' },
+                  { href: '/ftse100',    label: 'FTSE 100' },
+                  { href: '/nikkei225',  label: 'Nikkei 225' },
+                  { href: '/hangseng',   label: 'Hang Seng' },
+                  { href: '/sensex',     label: 'Sensex' },
+                ].map(it => (
+                  <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
+                    {/* Nieuw: vet op hover in submenu */}
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Market intel */}
+          <div className="relative" ref={intelRef}>
+            <button
+              className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
+              onClick={() => { setIntelOpen(v => !v); setStockOpen(false) }}
+              onMouseEnter={() => { setIntelOpen(true); setStockOpen(false) }}
+              aria-haspopup="true"
+              aria-expanded={intelOpen}
+            >
+              <span className={rainbow}>Market intel</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </button>
+            {intelOpen && (
+              <div onMouseLeave={() => setIntelOpen(false)} className="absolute right-0 mt-2 w-56 rounded-2xl border border-white/10 bg-ink shadow-lg p-1">
+                {[
+                  { href: '/intel',            label: 'Congress Trading' },
+                  { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
+                  { href: '/intel/macro',      label: 'Macro calendar' },
+                  { href: '/intel/sectors',    label: 'Sector performance' },
+                ].map(it => (
+                  <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
+                    {/* Nieuw: vet op hover in submenu */}
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* About */}
+          <Link href="/about" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>About us</span>
+          </Link>
+        </nav>
+
+        {/* Mobile hamburger */}
+        <button
+          className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-xl border border-white/15"
+          onClick={() => setOpen(v => !v)}
+          aria-label="Menu"
+          aria-expanded={open}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+        </button>
+      </div>
+
+      {/* Mobile drawer */}
+      {open && (
+        <div className="md:hidden border-t border-white/10">
+          <nav className="max-w-6xl mx-auto px-4 py-3 flex flex-col gap-2">
+            <Link href="/index" className="group rounded-xl px-3 py-2 hover:bg-white/10">
+              <span className={rainbow}>Crypto tracker</span>
+            </Link>
+
+            <div className="rounded-xl px-3 py-2 hover:bg-white/10">
+              <div className="text-white/70 mb-2">Stock tracker</div>
+              {[
+                { href: '/stocks',     label: 'AEX' },
+                { href: '/sp500',      label: 'S&P 500' },
+                { href: '/nasdaq',     label: 'NASDAQ' },
+                { href: '/dowjones',   label: 'Dow Jones' },
+                { href: '/dax',        label: 'DAX' },
+                { href: '/ftse100',    label: 'FTSE 100' },
+                { href: '/nikkei225',  label: 'Nikkei 225' },
+                { href: '/hangseng',   label: 'Hang Seng' },
+                { href: '/sensex',     label: 'Sensex' },
+              ].map(it => (
+                <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
+                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
+                  <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                </Link>
+              ))}
+            </div>
+
+            <div className="rounded-xl px-3 py-2 hover:bg-white/10">
+              <div className="text-white/70 mb-2">Market intel</div>
+              {[
+                { href: '/intel',            label: 'Congress Trading' },
+                { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
+                { href: '/intel/macro',      label: 'Macro calendar' },
+                { href: '/intel/sectors',    label: 'Sector performance' },
+              ].map(it => (
+                <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
+                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
+                  <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                </Link>
+              ))}
+            </div>
+
+            <Link href="/about" className="group rounded-xl px-3 py-2 hover:bg-white/10">
+              <span className={rainbow}>About us</span>
+            </Link>
+          </nav>
+        </div>
+      )}
+    </header>
+  )
+}
