@@ -52,20 +52,19 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
-// --- Vercel/Chromium + Puppeteer launch (type-safe) ---
+// --- Vercel/Chromium + Puppeteer launch (type-safe + compat) ---
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    const { default: chromium } = await import('@sparticuz/chromium')
+    // Forceer een veilige 'any' zodat typings je build niet breken
+    const mod: any = await import('@sparticuz/chromium')
+    const chromium: any = mod?.default ?? mod
     const puppeteer = await import('puppeteer-core')
 
-    // Sommige typings missen velden; gebruik 'any' voor compat
-    const chr = chromium as any
-
     const browser = await puppeteer.default.launch({
-      args: chr.args ?? [],
-      defaultViewport: chr.defaultViewport ?? null,
-      executablePath: await chr.executablePath(),
-      headless: true,                 // <-- forceer boolean; voorkomt "new" type mismatch
+      args: chromium?.args ?? [],
+      defaultViewport: chromium?.defaultViewport ?? null,
+      executablePath: await (chromium?.executablePath?.() ?? Promise.resolve('/usr/bin/chromium')),
+      headless: true, // expliciet boolean; voorkomt "new" type mismatch
       ignoreHTTPSErrors: true,
     })
     return { browser }
