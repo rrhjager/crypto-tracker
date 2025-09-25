@@ -52,15 +52,26 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
+// --- FIXED: chromium + puppeteer launch (TypeScript-friendly) ---
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    const chromium = await import('@sparticuz/chromium')
+    const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
+
+    // Loosere types; runtime heeft deze velden wel, typings niet altijd
+    const chr = chromium as unknown as {
+      args?: string[]
+      defaultViewport?: any
+      executablePath: () => Promise<string>
+      headless?: boolean | 'new'
+    }
+
     const browser = await puppeteer.default.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
+      args: chr.args ?? [],
+      defaultViewport: chr.defaultViewport ?? null,
+      executablePath: await chr.executablePath(),
+      headless: (chr.headless ?? true),
+      ignoreHTTPSErrors: true,
     })
     return { browser }
   } else {
