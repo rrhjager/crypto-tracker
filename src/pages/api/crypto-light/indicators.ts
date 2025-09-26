@@ -4,6 +4,7 @@ export const config = { runtime: 'nodejs' }
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
+// Breid dit eenvoudig uit als er iets mist.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -26,21 +27,37 @@ const CG_ALIASES: Record<string, string[]> = {
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
 
-  // extra's uit je lijst
+  // Extra's die je in je lijst gebruikt
+  ARBUSDT:  ['arbitrum'],
+  OPUSDT:   ['optimism'],
+  INJUSDT:  ['injective-protocol'],
+  APTUSDT:  ['aptos'],
+  SUIUSDT:  ['sui'],
+  SHIBUSDT: ['shiba-inu'],
+  VETUSDT:  ['vechain'],
+  EGLDUSDT: ['multiversx'],
+  IMXUSDT:  ['immutable-x'],
+  GRTUSDT:  ['the-graph'],
+  STXUSDT:  ['stacks', 'blockstack'],
+  RUNEUSDT: ['thorchain'],
+  RNDRUSDT: ['render-token'],
+  AAVEUSDT: ['aave'],
+  MKRUSDT:  ['maker'],
+  UNIUSDT:  ['uniswap'],
   FLOWUSDT: ['flow'],
-  CHZUSDT: ['chiliz'],
+  CHZUSDT:  ['chiliz'],
   MANAUSDT: ['decentraland'],
   SANDUSDT: ['the-sandbox'],
   AXSUSDT:  ['axie-infinity'],
   DYDXUSDT: ['dydx-chain', 'dydx'],
-  STXUSDT:  ['stacks', 'blockstack'],
   KASUSDT:  ['kaspa'],
   SEIUSDT:  ['sei-network', 'sei'],
   BONKUSDT: ['bonk'],
   JASMYUSDT:['jasmycoin'],
   FTMUSDT:  ['fantom'],
+  PEPEUSDT: ['pepe'],
 
-  // ---- nieuw toegevoegd zoals gevraagd ----
+  // Gevraagde aanvullingen
   ICPUSDT:  ['internet-computer'],
   FILUSDT:  ['filecoin'],
   ALGOUSDT: ['algorand'],
@@ -48,6 +65,7 @@ const CG_ALIASES: Record<string, string[]> = {
   THETAUSDT:['theta-token'],
 }
 
+// ---- kleine TA helpers (geen externe libs) ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
@@ -99,11 +117,19 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
+// ---- CoinGecko fetch (met optionele API key header) ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
+
+function cgHeaders() {
+  const apiKey = process.env.COINGECKO_API_KEY || ''
+  const h: Record<string,string> = { 'cache-control': 'no-cache' }
+  if (apiKey) h['x-cg-demo-api-key'] = apiKey
+  return h
+}
 
 async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
   const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}&interval=daily`
-  const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
+  const r = await fetch(url, { headers: cgHeaders() })
   if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
   const j = (await r.json()) as MarketChart
   const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
@@ -122,6 +148,29 @@ async function fetchMarketChartWithAliases(aliases: string[]) {
   return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
 }
 
+// Heuristische fallback voor veel voorkomende bases, als mapping ontbreekt
+function guessIdFromBase(base: string): string | null {
+  const b = base.toLowerCase()
+  const m: Record<string,string> = {
+    icp: 'internet-computer',
+    xlm: 'stellar',
+    fil: 'filecoin',
+    algo: 'algorand',
+    qnt: 'quant',
+    theta: 'theta-token',
+    stx: 'stacks',
+    ton: 'toncoin',
+    arb: 'arbitrum',
+    op:  'optimism',
+    inj: 'injective-protocol',
+    apt: 'aptos',
+    sui: 'sui',
+    pepe:'pepe',
+  }
+  return m[b] ?? null
+}
+
+// ---- indicatoren berekenen ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -135,6 +184,7 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
+  // Volatility (stdev(20) van dagrendementen)
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
@@ -144,13 +194,15 @@ function computeIndicators(closes: number[], volumes: number[]) {
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
+  // Performance (24h/7d/30d/90d) afgeleid uit closes
   const last = closes.at(-1) ?? null
-  const p = (idxFromEnd: number) => {
-    const ref = closes.at(-idxFromEnd) ?? null
-    if (!last || !ref) return null
-    return ((last - ref) / ref) * 100
+  const pct = (from?: number, to?: number) => (from && to) ? ((to - from) / from) * 100 : null
+  const perf = {
+    d: pct(closes.at(-2), last),
+    w: pct(closes.at(-8), last),
+    m: pct(closes.at(-31), last),
+    q: pct(closes.at(-91), last),
   }
-  const perf = { d: p(1), w: p(7 + 1), m: p(30 + 1), q: p(90 + 1) }
 
   return {
     ma: { ma50, ma200, cross },
@@ -162,26 +214,60 @@ function computeIndicators(closes: number[], volumes: number[]) {
   }
 }
 
+// Klein batching-hulpje (minder kans op 429)
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
-    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const debug = String(req.query.debug || '') === '1'
 
-    const results = await Promise.all(symbols.map(async (sym) => {
-      const aliases = CG_ALIASES[sym]
-      if (!aliases?.length) return { symbol: sym, error: 'No CG mapping' }
-      const got = await fetchMarketChartWithAliases(aliases)
-      if (!got.ok) return { symbol: sym, error: got.error }
-      try {
-        const ind = computeIndicators(got.closes, got.volumes)
-        return { symbol: sym, ...ind }
-      } catch (e: any) {
-        return { symbol: sym, error: e?.message || 'Compute failed' }
-      }
-    }))
+    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
+
+    // Verdeel in batches van 5 om rate-limits te ontzien
+    const batches = chunk(symbols, 5)
+    const results: any[] = []
+
+    for (const group of batches) {
+      const groupResults = await Promise.all(group.map(async (sym) => {
+        // 1) aliaslijst
+        let aliases = CG_ALIASES[sym]
+
+        // 2) heuristische fallback als niets bekend
+        if (!aliases || aliases.length === 0) {
+          const base = sym.replace(/USDT$/,'')
+          const guess = guessIdFromBase(base)
+          if (guess) aliases = [guess]
+        }
+
+        if (!aliases?.length) {
+          dbg?.missing.push(sym)
+          return { symbol: sym, error: 'No CG mapping' }
+        }
+
+        const got = await fetchMarketChartWithAliases(aliases)
+        dbg?.used.push({ symbol: sym, ok: got.ok, tried: aliases, chosen: (got as any).id ?? null })
+
+        if (!got.ok) return { symbol: sym, error: (got as any).error || 'Fetch failed' }
+
+        try {
+          const ind = computeIndicators(got.closes, got.volumes)
+          return { symbol: sym, ...ind }
+        } catch (e: any) {
+          return { symbol: sym, error: e?.message || 'Compute failed' }
+        }
+      }))
+      results.push(...groupResults)
+    }
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
+    if (debug) return res.status(200).json({ debug: dbg, results })
     return res.status(200).json({ results })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
