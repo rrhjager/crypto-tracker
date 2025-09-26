@@ -488,6 +488,12 @@ function PageInner() {
                 {rows.map((c: any, i: number) => {
                   const sym = String(c.symbol || '').toUpperCase()
                   const isFav = c._fav === true
+                  const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
+                  const status = (c.status as Status) || 'HOLD'
+                  const badgeCls =
+                    status === 'BUY'  ? 'badge-buy'  :
+                    status === 'SELL' ? 'badge-sell' : 'badge-hold'
+
                   return (
                     <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
                       <td className="py-3 pr-3">{i + 1}</td>
@@ -515,24 +521,16 @@ function PageInner() {
                       <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
                       <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
 
-                      {/* Alleen de BUY/HOLD/SELL-badge tonen i.p.v. ScoreBadge */}
+                      {/* Status-badge met score */}
                       <td className="py-3 text-right">
-                        {(() => {
-                          const s = (c.status as Status) || 'HOLD'
-                          const cls =
-                            s === 'BUY'  ? 'badge-buy'  :
-                            s === 'SELL' ? 'badge-sell' : 'badge-hold'
-                          return (
-                            <button
-                              type="button"
-                              className={`${cls} text-xs px-2 py-1 rounded`}
-                              title={`Status: ${s}`}
-                              aria-label={`Status ${s}`}
-                            >
-                              {s}
-                            </button>
-                          )
-                        })()}
+                        <button
+                          type="button"
+                          className={`${badgeCls} text-xs px-2 py-1 rounded`}
+                          title={`Status: ${status} · Score: ${scoreNum}`}
+                          aria-label={`Status ${status} met score ${scoreNum}`}
+                        >
+                          {status} · {scoreNum}
+                        </button>
                       </td>
                     </tr>
                   )
