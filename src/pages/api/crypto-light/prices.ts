@@ -1,115 +1,153 @@
-// bovenaan
+// src/pages/api/crypto-light/prices.ts
 export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-// Zelfde alias-set als indicators (inkorten kan, maar sync houden is handig)
-const CG_ALIASES: Record<string, string[]> = {
-  BTCUSDT: ['bitcoin'], ETHUSDT: ['ethereum'], BNBUSDT: ['binancecoin'],
-  SOLUSDT: ['solana'], XRPUSDT: ['ripple'], ADAUSDT: ['cardano'],
-  DOGEUSDT: ['dogecoin'], TRXUSDT: ['tron'],
-  TONUSDT: ['toncoin', 'the-open-network'],
-  AVAXUSDT: ['avalanche-2'], MATICUSDT: ['matic-network'], DOTUSDT: ['polkadot'],
-  LTCUSDT: ['litecoin'], BCHUSDT: ['bitcoin-cash'], LINKUSDT: ['chainlink'],
-  XLMUSDT: ['stellar'], NEARUSDT: ['near'], ATOMUSDT: ['cosmos'],
-  ETCUSDT: ['ethereum-classic'], XMRUSDT: ['monero'], UNIUSDT: ['uniswap'],
-  ICPUSDT: ['internet-computer'], APTUSDT: ['aptos'], ARBUSDT: ['arbitrum'],
-  OPUSDT: ['optimism'], FILUSDT: ['filecoin'], VETUSDT: ['vechain'],
-  AAVEUSDT: ['aave'], MKRUSDT: ['maker'], SUIUSDT: ['sui'],
-  RNDRUSDT: ['render-token'], IMXUSDT: ['immutable-x'], INJUSDT: ['injective-protocol'],
-  ALGOUSDT: ['algorand'], QNTUSDT: ['quant-network'], THETAUSDT: ['theta-token'],
-  GRTUSDT: ['the-graph'], FLOWUSDT: ['flow'], CHZUSDT: ['chiliz'],
-  MANAUSDT: ['decentraland'], SANDUSDT: ['the-sandbox'], AXSUSDT: ['axie-infinity'],
-  DYDXUSDT: ['dydx'], STXUSDT: ['stacks'], KASUSDT: ['kaspa'],
-  SEIUSDT: ['sei-network'], PEPEUSDT: ['pepe'], BONKUSDT: ['bonk'],
-  JASMYUSDT: ['jasmycoin'], FTMUSDT: ['fantom'], SHIBUSDT: ['shiba-inu'],
+/**
+ * Binance SYMBOLUSDT -> CoinGecko ID
+ * Vul aan met de symbols die je in COINS gebruikt.
+ */
+const CG_ID: Record<string, string> = {
+  BTCUSDT: 'bitcoin',
+  ETHUSDT: 'ethereum',
+  BNBUSDT: 'binancecoin',
+  SOLUSDT: 'solana',
+  XRPUSDT: 'ripple',
+  ADAUSDT: 'cardano',
+  DOGEUSDT: 'dogecoin',
+  AVAXUSDT: 'avalanche-2',
+  MATICUSDT: 'matic-network',
+  DOTUSDT: 'polkadot',
+  LINKUSDT: 'chainlink',
+  LTCUSDT: 'litecoin',
+  BCHUSDT: 'bitcoin-cash',
+  TRXUSDT: 'tron',
+  NEARUSDT: 'near',
+  ATOMUSDT: 'cosmos',
+  ARBUSDT: 'arbitrum',
+  OPUSDT: 'optimism',
+  INJUSDT: 'injective-protocol',
+  APTUSDT: 'aptos',
+  SUIUSDT: 'sui',
+  PEPEUSDT: 'pepe',
+  SHIBUSDT: 'shiba-inu',
+  ETCUSDT: 'ethereum-classic',
+  VETUSDT: 'vechain',
+  EGLDUSDT: 'multiversx',
+  IMXUSDT: 'immutable-x',
+  GRTUSDT: 'the-graph',
+  STXUSDT: 'stacks',
+  RUNEUSDT: 'thorchain',
+  RNDRUSDT: 'render-token',
+  AAVEUSDT: 'aave',
+  MKRUSDT: 'maker',
+  UNIUSDT: 'uniswap',
+  // ...meer indien nodig
 }
 
-type SimplePriceResp = Record<string, {
-  usd?: number
-  usd_24h_change?: number
-  usd_7d_change?: number
-  usd_30d_change?: number
-}>
-
-async function fetchSimplePrice(ids: string[]) {
-  if (ids.length === 0) return {}
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true&include_7d_change=true&include_30d_change=true`
-  const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
-  if (!r.ok) return {}
-  return (await r.json()) as SimplePriceResp
+type MarketsRow = {
+  id: string
+  current_price: number | null
+  price_change_percentage_24h_in_currency?: number | null
+  price_change_percentage_7d_in_currency?: number | null
+  price_change_percentage_30d_in_currency?: number | null
 }
 
-// Fallback: bereken price + d/w/m uit market_chart (laatste close)
-type MarketChart = { prices: [number, number][] }
-async function fetchMarketChartPrice(id: string) {
-  const r = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=200&interval=daily`,
-    { headers: { 'cache-control': 'no-cache' } })
-  if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
-  const j = (await r.json()) as MarketChart
-  const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
-  const last = closes.at(-1) ?? null
-  const pct = (nAgo: number) => {
-    const ref = closes.at(-(nAgo + 1))
-    if (!last || !ref) return null
-    return ((last - ref) / ref) * 100
-  }
-  return { price: last, d: pct(1), w: pct(7), m: pct(30) }
+/** Split array in chunks */
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
 }
-
-async function searchCG(query: string): Promise<string[]> {
-  const r = await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`, { headers: { 'cache-control': 'no-cache' } })
-  if (!r.ok) return []
-  const j = await r.json()
-  const coins: any[] = j?.coins || []
-  return coins.slice(0, 5).map(c => String(c.id))
-}
-const baseSymbolFromBinance = (s: string) => s.replace(/(USDT|USDC|BUSD|TUSD|DAI)$/i, '')
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
-    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    const debug = String(req.query.debug || '') === '1'
 
-    // 1) probeer simple/price in 1 batch
-    const uniqueIds = Array.from(new Set(symbols.flatMap(s => CG_ALIASES[s] || [])))
-    const simple = await fetchSimplePrice(uniqueIds)
+    const symbols = symbolsParam
+      .split(',')
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean)
 
-    const results = await Promise.all(symbols.map(async (sym) => {
-      // pak eerste alias die in simple/price zat
-      const aliases = CG_ALIASES[sym] || []
-      let data: any = null
-      for (const id of aliases) {
-        if (simple[id]) { data = simple[id]; break }
-      }
+    // Map naar CoinGecko IDs, bewaar index voor terug mapping
+    const idBySymbol = new Map<string, string>()
+    const wantedIds: string[] = []
+    for (const sym of symbols) {
+      const id = CG_ID[sym]
+      if (id) { idBySymbol.set(sym, id); wantedIds.push(id) }
+    }
+    if (wantedIds.length === 0) {
+      return res.status(200).json({ results: symbols.map(sym => ({ symbol: sym, price: null, d: null, w: null, m: null })) })
+    }
 
-      if (data) {
-        return {
-          symbol: sym,
-          price: data.usd ?? null,
-          d: data.usd_24h_change ?? null,
-          w: data.usd_7d_change ?? null,
-          m: data.usd_30d_change ?? null,
+    // CoinGecko /coins/markets limit is 250 ids per request.
+    const apiKey = process.env.COINGECKO_API_KEY || ''
+    const headers: Record<string,string> = { 'cache-control': 'no-cache' }
+    if (apiKey) headers['x-cg-demo-api-key'] = apiKey
+
+    const chunks = chunk(Array.from(new Set(wantedIds)), 250)
+    const urls: string[] = []
+    const allRows: MarketsRow[] = []
+
+    for (const ids of chunks) {
+      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(
+        ids.join(',')
+      )}&price_change_percentage=24h,7d,30d`
+      urls.push(url)
+      const r = await fetch(url, { headers })
+      if (!r.ok) {
+        // Geef iets terug i.p.v. hard failen
+        if (debug) {
+          return res.status(200).json({
+            debug: { urls, status: r.status, text: await r.text() },
+            results: symbols.map(sym => ({ symbol: sym, price: null, d: null, w: null, m: null })),
+          })
         }
+        continue
       }
-
-      // 2) fallback: zoek id(s) + market_chart berekening
-      const searchIds = aliases.length ? aliases : await searchCG(baseSymbolFromBinance(sym))
-      for (const id of searchIds) {
-        try {
-          const r = await fetchMarketChartPrice(id)
-          return { symbol: sym, ...r }
-        } catch {/* try next id */}
+      const j = (await r.json()) as any[]
+      for (const it of j || []) {
+        allRows.push({
+          id: String(it.id),
+          current_price: (it.current_price == null ? null : Number(it.current_price)),
+          price_change_percentage_24h_in_currency: numberOrNull(it.price_change_percentage_24h_in_currency),
+          price_change_percentage_7d_in_currency: numberOrNull(it.price_change_percentage_7d_in_currency),
+          price_change_percentage_30d_in_currency: numberOrNull(it.price_change_percentage_30d_in_currency),
+        })
       }
+    }
 
-      // 3) niets gevonden
-      return { symbol: sym, price: null, d: null, w: null, m: null }
-    }))
+    // Index rows by id
+    const rowById = new Map<string, MarketsRow>()
+    for (const r of allRows) rowById.set(r.id, r)
 
-    res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=60')
+    const results = symbols.map(sym => {
+      const id = idBySymbol.get(sym)
+      const row = id ? rowById.get(id) : undefined
+      return {
+        symbol: sym,
+        price: row?.current_price ?? null,
+        d: row?.price_change_percentage_24h_in_currency ?? null,
+        w: row?.price_change_percentage_7d_in_currency ?? null,
+        m: row?.price_change_percentage_30d_in_currency ?? null,
+      }
+    })
+
+    if (debug) {
+      return res.status(200).json({ debug: { urls, count: allRows.length }, results })
+    }
+
+    // 15s edge cache; SWR client heeft daarnaast refreshInterval
+    res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=30')
     return res.status(200).json({ results })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
   }
+}
+
+function numberOrNull(x: any): number | null {
+  const n = Number(x)
+  return Number.isFinite(n) ? n : null
 }

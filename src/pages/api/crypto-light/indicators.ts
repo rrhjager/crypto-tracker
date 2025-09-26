@@ -1,10 +1,10 @@
-// bovenaan
+// bovenaan het bestand
 export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
-// Vul gerust verder aan; dit dekt jouw lijst uit de screenshot.
+// Zet hier je coins in; je kunt later eenvoudig extra alias-id's toevoegen.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -14,7 +14,7 @@ const CG_ALIASES: Record<string, string[]> = {
   ADAUSDT: ['cardano'],
   DOGEUSDT: ['dogecoin'],
   TRXUSDT: ['tron'],
-  TONUSDT: ['toncoin', 'the-open-network'],
+  TONUSDT: ['toncoin', 'the-open-network'], // <-- belangrijk: fallback alias
   AVAXUSDT: ['avalanche-2'],
   MATICUSDT: ['matic-network'],
   DOTUSDT: ['polkadot'],
@@ -26,39 +26,7 @@ const CG_ALIASES: Record<string, string[]> = {
   ATOMUSDT: ['cosmos'],
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
-  UNIUSDT: ['uniswap'],
-  ICPUSDT: ['internet-computer'],
-  APTUSDT: ['aptos'],
-  ARBUSDT: ['arbitrum'],
-  OPUSDT: ['optimism'],
-  FILUSDT: ['filecoin'],
-  VETUSDT: ['vechain'],
-  ATOMUSDC: ['cosmos'],
-  AAVEUSDT: ['aave'],
-  MKRUSDT: ['maker'],
-  SUIUSDT: ['sui'],
-  RNDRUSDT: ['render-token'],
-  IMXUSDT: ['immutable-x'],
-  INJUSDT: ['injective-protocol'],
-  ALGOUSDT: ['algorand'],
-  QNTUSDT: ['quant-network'],
-  THETAUSDT: ['theta-token'],
-  GRTUSDT: ['the-graph'],
-  FLOWUSDT: ['flow'],
-  CHZUSDT: ['chiliz'],
-  MANAUSDT: ['decentraland'],
-  SANDUSDT: ['the-sandbox'],
-  AXSUSDT: ['axie-infinity'],
-  DYDXUSDT: ['dydx'],
-  STXUSDT: ['stacks'],
-  KASUSDT: ['kaspa'],
-  SEIUSDT: ['sei-network'],
-  PEPEUSDT: ['pepe'],
-  BONKUSDT: ['bonk'],
-  JASMYUSDT: ['jasmycoin'],
-  FTMUSDT: ['fantom'],
-  SHIBUSDT: ['shiba-inu'],
-};
+}
 
 // ---- mini math helpers ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -90,10 +58,14 @@ const rsi14 = (closes: number[]): number | null => {
 }
 const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   if (closes.length < slow) return { macd: null as number | null, signal: null as number | null, hist: null as number | null }
-  const kF = 2 / (fast + 1), kS = 2 / (slow + 1)
+
+  const kF = 2 / (fast + 1)
+  const kS = 2 / (slow + 1)
+
   let emaF = closes.slice(0, fast).reduce((a, b) => a + b, 0) / fast
   let emaS = closes.slice(0, slow).reduce((a, b) => a + b, 0) / slow
   for (let i = fast; i < slow; i++) emaF = closes[i] * kF + emaF * (1 - kF)
+
   const macdSeries: number[] = []
   for (let i = slow; i < closes.length; i++) {
     emaF = closes[i] * kF + emaF * (1 - kF)
@@ -101,6 +73,7 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
     macdSeries.push(emaF - emaS)
   }
   const macd = macdSeries.at(-1) ?? null
+
   if (macdSeries.length < sig) return { macd, signal: null, hist: null }
   const kSig = 2 / (sig + 1)
   let signal = macdSeries.slice(0, sig).reduce((a, b) => a + b, 0) / sig
@@ -109,10 +82,10 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ---- CoinGecko fetch + search fallback ----
+// ---- CoinGecko fetch (met alias-fallback) ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
 
-async function fetchMarketChartOne(id: string, days = 200) {
+async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
   const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}&interval=daily`
   const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
   if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
@@ -122,35 +95,17 @@ async function fetchMarketChartOne(id: string, days = 200) {
   return { closes, volumes }
 }
 
-async function searchCG(query: string): Promise<string[]> {
-  const r = await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`, { headers: { 'cache-control': 'no-cache' } })
-  if (!r.ok) return []
-  const j = await r.json()
-  const coins: any[] = j?.coins || []
-  return coins.slice(0, 5).map(c => String(c.id))
-}
-
-function baseSymbolFromBinance(sym: string) {
-  // strip eindquote (USDT/USDC/BUSD/TUSD/DAI)
-  return sym.replace(/(USDT|USDC|BUSD|TUSD|DAI)$/i, '')
-}
-
-async function fetchMarketChartWithFallback(binanceSym: string) {
-  const aliases = CG_ALIASES[binanceSym] || []
-  const trials = [...aliases]
-  if (trials.length === 0) {
-    const guess = baseSymbolFromBinance(binanceSym)
-    const found = await searchCG(guess)
-    trials.push(...found)
-  }
+async function fetchMarketChartWithAliases(sym: string, aliases: string[]) {
   let lastErr: any = null
-  for (const id of trials) {
+  for (const id of aliases) {
     try {
       const d = await fetchMarketChartOne(id, 200)
       return { ok: true as const, id, ...d }
-    } catch (e) { lastErr = e }
+    } catch (e) {
+      lastErr = e
+    }
   }
-  return { ok: false as const, error: lastErr?.message || 'No data' }
+  return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
 }
 
 // ---- compute indicators ----
@@ -167,36 +122,52 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // volatiliteit: stdev(20) van dagrendementen
+  // Volatility proxy: stdev(20) van dagrendementen
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
     if (a > 0 && Number.isFinite(a) && Number.isFinite(b)) rets.push((b - a) / a)
   }
-  const st = stdev(rets.slice(-20))
+  const st = stdev(rets.slice(-20)) // laatste 20
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
+  // Performance
   const last = closes.at(-1) ?? null
-  const pct = (nAgo: number) => {
-    const ref = closes.at(-(nAgo + 1))
+  const p = (idxFromEnd: number) => {
+    const ref = closes.at(-idxFromEnd) ?? null
     if (!last || !ref) return null
     return ((last - ref) / ref) * 100
   }
-  const perf = { d: pct(1), w: pct(7), m: pct(30), q: pct(90) }
+  const perf = {
+    d: p(1),   // 24h (t.o.v. vorige close)
+    w: p(7+1), // 7 volle dagen terug
+    m: p(30+1),
+    q: p(90+1),
+  }
 
-  return { ma: { ma50, ma200, cross }, rsi, macd, volume: { volume, avg20d, ratio }, volatility: { stdev20: st ?? null, regime }, perf }
+  return {
+    ma: { ma50, ma200, cross },
+    rsi,
+    macd,
+    volume: { volume, avg20d, ratio },
+    volatility: { stdev20: st ?? null, regime },
+    perf,
+  }
 }
 
-// ---- handler ----
+// ---- API handler ----
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
+
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 
     const results = await Promise.all(symbols.map(async (sym) => {
-      const got = await fetchMarketChartWithFallback(sym)
+      const aliases = CG_ALIASES[sym]
+      if (!aliases?.length) return { symbol: sym, error: 'No CG mapping' }
+      const got = await fetchMarketChartWithAliases(sym, aliases)
       if (!got.ok) return { symbol: sym, error: got.error }
       try {
         const ind = computeIndicators(got.closes, got.volumes)
