@@ -1,11 +1,26 @@
 // src/pages/_app.tsx
 import type { AppProps } from 'next/app'
+import type { NextPage } from 'next'
 import '@/styles/globals.css'
 import { SWRConfig } from 'swr'
+import Layout from '@/components/Layout'
+import React from 'react'
+
+/**
+ * Optioneel getLayout-patroon:
+ * - Als een pagina Component.getLayout heeft, gebruiken we die.
+ * - Anders wrappen we met de standaard <Layout>.
+ */
+type NextPageWithLayout = NextPage & {
+  getLayout?: (page: React.ReactElement) => React.ReactNode
+}
+type AppPropsWithLayout = AppProps & {
+  Component: NextPageWithLayout
+}
 
 /**
  * Globale SWR-defaults:
- * - Fetcher met nette foutobjecten (status + optionele retryAfter uit header)
+ * - Fetcher met nette foutobjecten (status + optionele retryAfter)
  * - Revalidate bij focus/reconnect
  * - Exponential backoff met jitter (en respecteer Retry-After bij 429)
  * - Stop met retrypogingen bij 400/404 en na 5 pogingen
@@ -29,7 +44,11 @@ const defaultFetcher = async (url: string) => {
   return data
 }
 
-export default function App({ Component, pageProps }: AppProps) {
+export default function App({ Component, pageProps }: AppPropsWithLayout) {
+  const getLayout =
+    Component.getLayout ??
+    ((page: React.ReactElement) => <Layout>{page}</Layout>)
+
   return (
     <SWRConfig value={{
       fetcher: defaultFetcher,
@@ -61,7 +80,7 @@ export default function App({ Component, pageProps }: AppProps) {
         setTimeout(() => revalidate({ retryCount }), timeout + jitter)
       },
     }}>
-      <Component {...pageProps} />
+      {getLayout(<Component {...pageProps} />)}
     </SWRConfig>
   )
 }

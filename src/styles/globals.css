@@ -1,14 +1,119 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-:root { color-scheme: dark; }
-body { @apply bg-ink text-white; }
-.table-card { @apply bg-steel/60 backdrop-blur rounded-2xl p-4 shadow-xl border border-white/5; }
+
+/* Licht thema */
+:root { color-scheme: light; }
+
+/* Pagina basis: wit + donkere tekst */
+body { @apply bg-white text-slate-900; }
+
+/* Helpers die eerder donker waren */
+.bg-ink   { @apply bg-white text-slate-900 !important; }
+.bg-steel { @apply bg-slate-50; } /* zachte sectie-tint i.p.v. donker */
+
+/* Kaarten/panels — zelfde alignment (rounded-2xl p-4), maar licht */
+.table-card {
+  @apply bg-white rounded-2xl p-4 border border-gray-200 shadow-md;
+  /* iets zachtere, moderne schaduw */
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .06), 0 12px 24px rgba(15, 23, 42, .08);
+}
+
+/* Kleine infopillen */
 .badge { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold; }
-.badge-buy { @apply badge bg-green-500/20 text-green-300 ring-1 ring-green-400/30; }
-.badge-hold { @apply badge bg-yellow-500/20 text-yellow-200 ring-1 ring-yellow-400/30; }
-.badge-sell { @apply badge bg-red-500/20 text-red-300 ring-1 ring-red-400/30; }
-.ticker { @apply text-sm text-white/70; }
-.hero { @apply text-3xl md:text-4xl font-extrabold tracking-tight; }
-.sub { @apply text-white/60; }
-.btn { @apply rounded-2xl px-4 py-2 font-semibold bg-white/10 hover:bg-white/20; }
+
+/* BUY/HOLD/SELL — op wit met duidelijke tekstkleur */
+.badge-buy  { @apply badge bg-green-50  text-green-700  ring-1 ring-green-200;  }
+.badge-hold { @apply badge bg-amber-50 text-amber-700 ring-1 ring-amber-200; }
+.badge-sell { @apply badge bg-red-50   text-red-700   ring-1 ring-red-200;   }
+
+/* Ticker/subtle tekst */
+.ticker { @apply text-sm text-slate-600; }
+
+/* Typografie */
+.hero { @apply text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900; }
+.sub  { @apply text-slate-600; }
+
+/* Primaire knop — zelfde alignment, betere contrast op wit */
+.btn {
+  @apply rounded-2xl px-4 py-2 font-semibold
+         bg-blue-600 text-white
+         hover:bg-blue-700
+         border border-transparent
+         transition;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, .15), 0 6px 14px rgba(37, 99, 235, .25);
+}
+.btn:disabled { @apply opacity-60 cursor-not-allowed; }
+
+/* Eventuele “ghost” knoppen die je had met bg-white/10 → subtiel op wit: */
+.btn-ghost {
+  @apply rounded-2xl px-4 py-2 font-semibold
+         bg-slate-100 hover:bg-slate-200 text-slate-800 border border-gray-200;
+}
+
+/* Statuskleuren (percentages e.d.) blijven consistent en leesbaar op wit */
+.text-green-300 { @apply text-green-600 !important; }
+.text-red-300   { @apply text-red-600   !important; }
+.text-amber-300 { @apply text-amber-600 !important; }
+
+/* Scheidingslijnen in lijsten */
+.divide-y > * + * { @apply border-t border-gray-200; }
+
+/* Lichte card/drawer schaduw (ter vervanging van je oude .shadow-lg) */
+.shadow-lg { box-shadow: 0 10px 30px rgba(15, 23, 42, .12) !important; }
+
+/* Header (als je SiteHeader gebruikt) – wit met subtiele border */
+header.sticky { @apply bg-white/95 backdrop-blur border-b border-gray-200; }
+/* --- Light override van "dark" utilities uit je markup --- */
+/* Tekst die eerder wit was → mooi donker op wit */
+.text-white          { @apply text-slate-900 !important; }
+.text-white\/90      { color: color-mix(in oklab, #0f172a 90%, white) !important; }
+.text-white\/80      { color: color-mix(in oklab, #0f172a 80%, white) !important; }
+.text-white\/70      { @apply text-slate-600 !important; }
+.text-white\/60      { @apply text-slate-700 !important; }
+.text-white\/50      { @apply text-slate-500 !important; }
+.text-white\/40      { @apply text-slate-400 !important; }
+
+/* Borders die naar wit wijzen → grijze, lichte randen */
+.border-white\/5     { @apply border-gray-100 !important; }
+.border-white\/10    { @apply border-gray-200 !important; }
+.border-white\/15    { @apply border-gray-200 !important; }
+.border-white\/20    { @apply border-gray-300 !important; }
+
+/* Eventuele “transparante witte” achtergronden → subtiele grijstint */
+.bg-white\/5         { background-color: rgba(15,23,42,.02) !important; }
+.bg-white\/10        { background-color: rgba(15,23,42,.04) !important; }
+.bg-white\/15        { background-color: rgba(15,23,42,.06) !important; }
+
+/* Voor de zekerheid: standaard paragrafen en headings donker */
+main, section, article, .table-card, .hero, .sub {
+  color: inherit;
+}
+/* ---- Stats blocks in de rechterkolom (dagelijkse samenvatting) ---- */
+
+/* 3 blokken naast elkaar (BUY / HOLD / SELL) */
+.stats-3 {
+    @apply grid grid-cols-3 gap-3;
+  }
+  .stats-3 > * {
+    @apply rounded-xl border border-gray-200 bg-white px-3 py-2 text-center;
+  }
+  
+  /* 2 blokken naast elkaar (Breadth / Gem. score) */
+  .stats-grid {
+    @apply grid grid-cols-2 gap-3;
+  }
+  .stats-grid > * {
+    @apply rounded-xl border border-gray-200 bg-white p-3;
+  }
+  
+  /* kleine typografie helpers voor in de blokken (optioneel) */
+  .stat-title { @apply text-xs font-medium text-slate-600; }
+  .stat-value { @apply text-xl font-extrabold text-slate-900; }
+  .stat-sub   { @apply text-xs text-slate-500; }
+  /* globals.css (of waar je Tailwind globals staan) */
+.badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 h-7
+           leading-none text-[11px] font-semibold rounded-full
+           whitespace-nowrap;
+  }
