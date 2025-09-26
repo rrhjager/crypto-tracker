@@ -1,36 +1,34 @@
 // bovenaan het bestand
 export const config = { runtime: 'nodejs' }
 
-// src/pages/api/crypto-light/indicators.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-// ---- Binance-style symbol -> CoinGecko ID mapping ----
-// Vul aan met alle symbolen die je gebruikt (zelfde lijst als bij prices).
-const CG: Record<string, string> = {
-  BTCUSDT: 'bitcoin',
-  ETHUSDT: 'ethereum',
-  BNBUSDT: 'binancecoin',
-  SOLUSDT: 'solana',
-  XRPUSDT: 'ripple',
-  ADAUSDT: 'cardano',
-  DOGEUSDT: 'dogecoin',
-  TRXUSDT: 'tron',
-  TONUSDT: 'toncoin',
-  AVAXUSDT: 'avalanche-2',
-  MATICUSDT: 'matic-network',
-  DOTUSDT: 'polkadot',
-  LTCUSDT: 'litecoin',
-  BCHUSDT: 'bitcoin-cash',
-  LINKUSDT: 'chainlink',
-  XLMUSDT: 'stellar',
-  NEARUSDT: 'near',
-  ATOMUSDT: 'cosmos',
-  ETCUSDT: 'ethereum-classic',
-  XMRUSDT: 'monero',
-  // ... voeg je overige coins toe
+// ---- Binance-style symbol -> CoinGecko ID ALIASES ----
+// Zet hier je coins in; je kunt later eenvoudig extra alias-id's toevoegen.
+const CG_ALIASES: Record<string, string[]> = {
+  BTCUSDT: ['bitcoin'],
+  ETHUSDT: ['ethereum'],
+  BNBUSDT: ['binancecoin'],
+  SOLUSDT: ['solana'],
+  XRPUSDT: ['ripple'],
+  ADAUSDT: ['cardano'],
+  DOGEUSDT: ['dogecoin'],
+  TRXUSDT: ['tron'],
+  TONUSDT: ['toncoin', 'the-open-network'], // <-- belangrijk: fallback alias
+  AVAXUSDT: ['avalanche-2'],
+  MATICUSDT: ['matic-network'],
+  DOTUSDT: ['polkadot'],
+  LTCUSDT: ['litecoin'],
+  BCHUSDT: ['bitcoin-cash'],
+  LINKUSDT: ['chainlink'],
+  XLMUSDT: ['stellar'],
+  NEARUSDT: ['near'],
+  ATOMUSDT: ['cosmos'],
+  ETCUSDT: ['ethereum-classic'],
+  XMRUSDT: ['monero'],
 }
 
-// ---- kleine math helpers (geen externe lib nodig) ----
+// ---- mini math helpers ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
@@ -43,10 +41,6 @@ const stdev = (arr: number[]): number | null => {
   const m = arr.reduce((a, b) => a + b, 0) / arr.length
   const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length
   return Math.sqrt(v)
-}
-const pct = (from?: number | null, to?: number | null): number | null => {
-  if (from == null || to == null || !isFinite(from) || from === 0) return null
-  return ((to - from) / from) * 100
 }
 const rsi14 = (closes: number[]): number | null => {
   if (closes.length < 15) return null
@@ -88,19 +82,33 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ---- CoinGecko fetch ----
+// ---- CoinGecko fetch (met alias-fallback) ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
-async function fetchMarketChart(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
+
+async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
   const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}&interval=daily`
   const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
   if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
   const j = (await r.json()) as MarketChart
-  const closes = (j.prices || []).map(p => Number(p[1])).filter(v => Number.isFinite(v))
-  const volumes = (j.total_volumes || []).map(v => Number(v[1])).filter(v => Number.isFinite(v))
+  const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
+  const volumes = (j.total_volumes || []).map(v => Number(v[1])).filter(Number.isFinite)
   return { closes, volumes }
 }
 
-// ---- compute set of indicators ----
+async function fetchMarketChartWithAliases(sym: string, aliases: string[]) {
+  let lastErr: any = null
+  for (const id of aliases) {
+    try {
+      const d = await fetchMarketChartOne(id, 200)
+      return { ok: true as const, id, ...d }
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
+}
+
+// ---- compute indicators ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -114,79 +122,61 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // Volatility regime (proxy): stdev over 20 dagrendementen
+  // Volatility proxy: stdev(20) van dagrendementen
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
-    const prev = closes[i - 1]
-    const cur = closes[i]
-    if (prev > 0 && isFinite(prev) && isFinite(cur)) rets.push((cur / prev) - 1)
+    const a = closes[i - 1], b = closes[i]
+    if (a > 0 && Number.isFinite(a) && Number.isFinite(b)) rets.push((b - a) / a)
   }
-  const stdev20 = rets.length >= 20 ? stdev(rets.slice(-20)) : null
-  let regime: 'low' | 'med' | 'high' | '—' = '—'
-  if (stdev20 != null) {
-    const p = stdev20 * 100 // in %
-    regime = p < 1 ? 'low' : p < 3 ? 'med' : 'high'
-  }
+  const st = stdev(rets.slice(-20)) // laatste 20
+  let regime: 'low'|'med'|'high'|'—' = '—'
+  if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // Performance (in %): 24h / 7d / 30d / 90d
+  // Performance
   const last = closes.at(-1) ?? null
-  const prev = closes.at(-2) ?? null
-  const c7   = closes.at(-8) ?? null
-  const c30  = closes.at(-31) ?? null
-  const c90  = closes.at(-91) ?? null
+  const p = (idxFromEnd: number) => {
+    const ref = closes.at(-idxFromEnd) ?? null
+    if (!last || !ref) return null
+    return ((last - ref) / ref) * 100
+  }
+  const perf = {
+    d: p(1),   // 24h (t.o.v. vorige close)
+    w: p(7+1), // 7 volle dagen terug
+    m: p(30+1),
+    q: p(90+1),
+  }
 
   return {
-    // bestaand: front-end gebruikt deze velden
     ma: { ma50, ma200, cross },
     rsi,
     macd,
     volume: { volume, avg20d, ratio },
-
-    // nieuw: optioneel te tonen
-    volatility: { stdev20, regime },
-    perf: {
-      d: pct(prev, last),
-      w: pct(c7, last),
-      m: pct(c30, last),
-      q: pct(c90, last),
-    },
+    volatility: { stdev20: st ?? null, regime },
+    perf,
   }
 }
 
-// ---- batched helper om rate limit te vriend te houden ----
-async function mapBatched<T, R>(items: T[], size: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = []
-  for (let i = 0; i < items.length; i += size) {
-    const chunk = items.slice(i, i + size)
-    const res = await Promise.all(chunk.map(fn))
-    out.push(...res)
-  }
-  return out
-}
-
-// ---- API handler (zelfde shape als jouw huidige endpoint) ----
+// ---- API handler ----
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
 
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    const pairs = symbols
-      .map(sym => ({ sym, id: CG[sym] }))
-      .filter(p => !!p.id) as { sym: string; id: string }[]
 
-    const results = await mapBatched(pairs, 5, async ({ sym, id }) => {
+    const results = await Promise.all(symbols.map(async (sym) => {
+      const aliases = CG_ALIASES[sym]
+      if (!aliases?.length) return { symbol: sym, error: 'No CG mapping' }
+      const got = await fetchMarketChartWithAliases(sym, aliases)
+      if (!got.ok) return { symbol: sym, error: got.error }
       try {
-        const { closes, volumes } = await fetchMarketChart(id, 200)
-        if (closes.length === 0) throw new Error('No data')
-        const ind = computeIndicators(closes, volumes)
+        const ind = computeIndicators(got.closes, got.volumes)
         return { symbol: sym, ...ind }
       } catch (e: any) {
-        return { symbol: sym, error: e?.message || 'Failed' }
+        return { symbol: sym, error: e?.message || 'Compute failed' }
       }
-    })
+    }))
 
-    // nette cache voor Vercel (5 min) + SWR backfill
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
     return res.status(200).json({ results })
   } catch (e: any) {
