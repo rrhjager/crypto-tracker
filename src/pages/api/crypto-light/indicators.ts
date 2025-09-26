@@ -3,7 +3,8 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-/* ----------------------- CG ALIASES (uitbreidbaar) ----------------------- */
+// ---- Binance-style symbol -> CoinGecko ID ALIASES ----
+// Breid dit eenvoudig uit als er iets mist.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -26,7 +27,7 @@ const CG_ALIASES: Record<string, string[]> = {
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
 
-  // extra's (zoals in je lijst)
+  // Extra's die je in je lijst gebruikt
   ARBUSDT:  ['arbitrum'],
   OPUSDT:   ['optimism'],
   INJUSDT:  ['injective-protocol'],
@@ -56,7 +57,7 @@ const CG_ALIASES: Record<string, string[]> = {
   FTMUSDT:  ['fantom'],
   PEPEUSDT: ['pepe'],
 
-  // expliciet gevraagd
+  // Gevraagde aanvullingen
   ICPUSDT:  ['internet-computer'],
   FILUSDT:  ['filecoin'],
   ALGOUSDT: ['algorand'],
@@ -64,7 +65,7 @@ const CG_ALIASES: Record<string, string[]> = {
   THETAUSDT:['theta-token'],
 }
 
-/* ---------------------------- TA mini helpers ---------------------------- */
+// ---- kleine TA helpers (geen externe libs) ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
@@ -116,7 +117,9 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-/* ---------------------- Fetch helpers + Retry/backoff -------------------- */
+// ---- CoinGecko fetch (met optionele API key header) ----
+type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
+
 function cgHeaders() {
   const apiKey = process.env.COINGECKO_API_KEY || ''
   const h: Record<string,string> = { 'cache-control': 'no-cache' }
@@ -124,68 +127,37 @@ function cgHeaders() {
   return h
 }
 
-async function sleep(ms: number) {
-  return new Promise(res => setTimeout(res, ms))
-}
-
-async function fetchJSONWithRetry(url: string, tries = 5) {
-  let lastErr: any
-  for (let i = 0; i < tries; i++) {
-    const r = await fetch(url, { headers: cgHeaders() })
-    if (r.ok) return r.json()
-    const body = await r.text().catch(() => '')
-    lastErr = new Error(`HTTP ${r.status} ${body}`)
-
-    // backoff bij 429 / 5xx
-    if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
-      const base = 400 * Math.pow(2, i) // 400, 800, 1600, 3200, 6400
-      const jitter = Math.floor(Math.random() * 250)
-      await sleep(base + jitter)
-      continue
-    }
-    break
-  }
-  throw lastErr
-}
-
-/* ---------------------- Market chart (flexible days) --------------------- */
-type MarketChart = { prices: [number, number][], total_volumes: [number, number][] }
-
-async function fetchMarketChartOne(id: string, days: number) {
+async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
   const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}&interval=daily`
-  const j = await fetchJSONWithRetry(url, 5) as MarketChart
-  const closes  = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
+  const r = await fetch(url, { headers: cgHeaders() })
+  if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
+  const j = (await r.json()) as MarketChart
+  const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
   const volumes = (j.total_volumes || []).map(v => Number(v[1])).filter(Number.isFinite)
   return { closes, volumes }
-}
-
-async function fetchChartFlexible(id: string) {
-  let lastErr: any
-  for (const d of [365, 200, 90]) {
-    try { return await fetchMarketChartOne(id, d) } catch (e) { lastErr = e }
-  }
-  throw lastErr
 }
 
 async function fetchMarketChartWithAliases(aliases: string[]) {
   let lastErr: any = null
   for (const id of aliases) {
-    try { const d = await fetchChartFlexible(id); return { ok: true as const, id, ...d } }
-    catch (e) { lastErr = e }
+    try {
+      const d = await fetchMarketChartOne(id, 200)
+      return { ok: true as const, id, ...d }
+    } catch (e) { lastErr = e }
   }
   return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
 }
 
-/* ---------------------- Heuristische id-guess (backup) ------------------- */
+// Heuristische fallback voor veel voorkomende bases, als mapping ontbreekt
 function guessIdFromBase(base: string): string | null {
   const b = base.toLowerCase()
   const m: Record<string,string> = {
     icp: 'internet-computer',
     xlm: 'stellar',
     fil: 'filecoin',
-    algo:'algorand',
+    algo: 'algorand',
     qnt: 'quant',
-    theta:'theta-token',
+    theta: 'theta-token',
     stx: 'stacks',
     ton: 'toncoin',
     arb: 'arbitrum',
@@ -198,7 +170,7 @@ function guessIdFromBase(base: string): string | null {
   return m[b] ?? null
 }
 
-/* -------------------------- Indicatoren (compute) ------------------------ */
+// ---- indicatoren berekenen ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -212,7 +184,7 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // stdev(20) van dagrendementen → regime
+  // Volatility (stdev(20) van dagrendementen)
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
@@ -222,12 +194,12 @@ function computeIndicators(closes: number[], volumes: number[]) {
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // performance uit closes (24h/7d/30d/90d)
+  // Performance (24h/7d/30d/90d) afgeleid uit closes
   const last = closes.at(-1) ?? null
   const pct = (from?: number, to?: number) => (from && to) ? ((to - from) / from) * 100 : null
   const perf = {
-    d: pct(closes.at(-2),  last),
-    w: pct(closes.at(-8),  last),
+    d: pct(closes.at(-2), last),
+    w: pct(closes.at(-8), last),
     m: pct(closes.at(-31), last),
     q: pct(closes.at(-91), last),
   }
@@ -242,14 +214,13 @@ function computeIndicators(closes: number[], volumes: number[]) {
   }
 }
 
-/* -------------------------------- Batching ------------------------------- */
+// Klein batching-hulpje (minder kans op 429)
 function chunk<T>(arr: T[], size: number) {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
 }
 
-/* -------------------------------- Handler -------------------------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
@@ -259,16 +230,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
 
+    // Verdeel in batches van 5 om rate-limits te ontzien
+    const batches = chunk(symbols, 5)
     const results: any[] = []
-    // kleinere batches + korte pauze → minder 429
-    for (const group of chunk(symbols, 3)) {
-      const part = await Promise.all(group.map(async (sym) => {
+
+    for (const group of batches) {
+      const groupResults = await Promise.all(group.map(async (sym) => {
+        // 1) aliaslijst
         let aliases = CG_ALIASES[sym]
+
+        // 2) heuristische fallback als niets bekend
         if (!aliases || aliases.length === 0) {
           const base = sym.replace(/USDT$/,'')
           const guess = guessIdFromBase(base)
           if (guess) aliases = [guess]
         }
+
         if (!aliases?.length) {
           dbg?.missing.push(sym)
           return { symbol: sym, error: 'No CG mapping' }
@@ -286,8 +263,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return { symbol: sym, error: e?.message || 'Compute failed' }
         }
       }))
-      results.push(...part)
-      await sleep(350) // kleine pauze tussen batches
+      results.push(...groupResults)
     }
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
