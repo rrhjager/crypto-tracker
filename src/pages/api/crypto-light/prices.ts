@@ -3,7 +3,7 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-// Zelfde alias-bron als indicators (kopie of import).
+// Zelfde alias-bron als indicators
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -33,13 +33,12 @@ const CG_ALIASES: Record<string, string[]> = {
   EGLDUSDT:['multiversx'],
   IMXUSDT: ['immutable-x'],
   GRTUSDT: ['the-graph'],
-  STXUSDT: ['stacks'],
+  STXUSDT: ['stacks', 'blockstack'],
   RUNEUSDT:['thorchain'],
   RNDRUSDT:['render-token'],
   AAVEUSDT:['aave'],
   MKRUSDT: ['maker'],
   UNIUSDT: ['uniswap'],
-  // extra's uit je screenshot:
   FLOWUSDT: ['flow'],
   CHZUSDT:  ['chiliz'],
   MANAUSDT: ['decentraland'],
@@ -52,6 +51,14 @@ const CG_ALIASES: Record<string, string[]> = {
   JASMYUSDT:['jasmycoin'],
   FTMUSDT:  ['fantom'],
   PEPEUSDT: ['pepe'],
+
+  // ---- nieuw zoals gevraagd ----
+  ICPUSDT:  ['internet-computer'],
+  XLMUSDT:  ['stellar'],        // was al aanwezig in indicators; hier ook
+  FILUSDT:  ['filecoin'],
+  ALGOUSDT: ['algorand'],
+  QNTUSDT:  ['quant', 'quant-network'],
+  THETAUSDT:['theta-token'],
 }
 
 type MarketsRow = {
@@ -72,7 +79,6 @@ function chunk<T>(arr: T[], size: number) {
   return out
 }
 
-// Fallback helpers
 async function fetchSimplePrice(ids: string[]) {
   if (ids.length === 0) return {}
   const apiKey = process.env.COINGECKO_API_KEY || ''
@@ -87,7 +93,6 @@ async function fetchSimplePrice(ids: string[]) {
 
 type MarketChart = { prices: [number, number][] }
 async function fetchPerfFromChart(id: string) {
-  // voor 7d/30d uit closes
   const apiKey = process.env.COINGECKO_API_KEY || ''
   const headers: Record<string,string> = { 'cache-control': 'no-cache' }
   if (apiKey) headers['x-cg-demo-api-key'] = apiKey
@@ -112,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 
-    // 1) Eerste poging: /coins/markets batch op de EERSTE alias van elk symbool
+    // 1) Eerste poging via eerste alias
     const firstIdBySymbol = new Map<string, string>()
     for (const sym of symbols) {
       const aliases = CG_ALIASES[sym]
@@ -147,20 +152,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rowById = new Map<string, MarketsRow>()
     for (const r of marketsRows) rowById.set(r.id, r)
 
-    // 2) Voor symbolen zonder row: fallback via andere alias + simple/price + market_chart
+    // 2) Missing → fallback alias + simple/price + market_chart
     const missingSymbols: string[] = []
     for (const sym of symbols) {
       const firstId = firstIdBySymbol.get(sym)
       if (!firstId || !rowById.get(firstId)) missingSymbols.push(sym)
     }
 
-    // Bouw lijst van fallback-ids (alle aliassen die nog niet gebruikt zijn)
     const fallbackIds: string[] = []
     const chooseFallbackIdForSym = new Map<string, string>()
     for (const sym of missingSymbols) {
-      const aliases = (CG_ALIASES[sym] || []).slice(1) // skip first
+      const aliases = (CG_ALIASES[sym] || []).slice(1)
       for (const id of aliases) {
-        // kies de eerste alias die we nog niet geprobeerd hebben
         if (!fallbackIds.includes(id)) {
           fallbackIds.push(id)
           chooseFallbackIdForSym.set(sym, id)
@@ -169,18 +172,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Simple price voor fallback ids (alleen price + 24h)
     const sp = await fetchSimplePrice(fallbackIds)
 
-    // 7d/30d via market_chart, on-demand per missende coin
     const perfCache = new Map<string, { w: number|null, m: number|null }>()
     for (const id of fallbackIds) {
-      if (!sp[id]) continue // als zelfs simple price niks gaf, probeer alsnog perf (kan ook null terugkomen)
+      // zelfs als simple price niets gaf, probeer perf alsnog (kan null zijn)
       perfCache.set(id, await fetchPerfFromChart(id))
     }
 
-    // 3) Result samenstellen per symbool
-    const results = await Promise.all(symbols.map(async (sym) => {
+    const results = symbols.map((sym) => {
       const firstId = firstIdBySymbol.get(sym)
       const primary = firstId ? rowById.get(firstId) : undefined
       if (primary) {
@@ -192,10 +192,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           m: primary.price_change_percentage_30d_in_currency ?? null,
         }
       }
-      // fallback
       const fbId = chooseFallbackIdForSym.get(sym)
       if (fbId) {
-        const spRow = sp[fbId]
+        const spRow = (sp as any)[fbId]
         const perf = perfCache.get(fbId) || { w: null, m: null }
         return {
           symbol: sym,
@@ -205,9 +204,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           m: perf.m,
         }
       }
-      // geen mapping
       return { symbol: sym, price: null, d: null, w: null, m: null }
-    }))
+    })
 
     if (debug) {
       return res.status(200).json({ debug: { urls, markets_count: marketsRows.length, missing: missingSymbols }, results })

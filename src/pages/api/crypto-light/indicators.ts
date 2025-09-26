@@ -1,11 +1,9 @@
-// bovenaan het bestand
+// src/pages/api/crypto-light/indicators.ts
 export const config = { runtime: 'nodejs' }
 
-// src/pages/api/crypto-light/indicators.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
-// Eén plek om te mappen; vul/uitbreiden naar je COINS.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -27,22 +25,29 @@ const CG_ALIASES: Record<string, string[]> = {
   ATOMUSDT: ['cosmos'],
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
-  // extra's die je ook in de lijst gebruikt:
+
+  // extra's uit je lijst
   FLOWUSDT: ['flow'],
   CHZUSDT: ['chiliz'],
   MANAUSDT: ['decentraland'],
   SANDUSDT: ['the-sandbox'],
   AXSUSDT:  ['axie-infinity'],
   DYDXUSDT: ['dydx-chain', 'dydx'],
-  STXUSDT:  ['stacks'],
+  STXUSDT:  ['stacks', 'blockstack'],
   KASUSDT:  ['kaspa'],
   SEIUSDT:  ['sei-network', 'sei'],
   BONKUSDT: ['bonk'],
   JASMYUSDT:['jasmycoin'],
   FTMUSDT:  ['fantom'],
+
+  // ---- nieuw toegevoegd zoals gevraagd ----
+  ICPUSDT:  ['internet-computer'],
+  FILUSDT:  ['filecoin'],
+  ALGOUSDT: ['algorand'],
+  QNTUSDT:  ['quant', 'quant-network'],
+  THETAUSDT:['theta-token'],
 }
 
-// ---- mini math helpers ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
@@ -72,9 +77,7 @@ const rsi14 = (closes: number[]): number | null => {
 }
 const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   if (closes.length < slow) return { macd: null as number | null, signal: null as number | null, hist: null as number | null }
-
-  const kF = 2 / (fast + 1)
-  const kS = 2 / (slow + 1)
+  const kF = 2 / (fast + 1), kS = 2 / (slow + 1)
 
   let emaF = closes.slice(0, fast).reduce((a, b) => a + b, 0) / fast
   let emaS = closes.slice(0, slow).reduce((a, b) => a + b, 0) / slow
@@ -87,8 +90,8 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
     macdSeries.push(emaF - emaS)
   }
   const macd = macdSeries.at(-1) ?? null
-
   if (macdSeries.length < sig) return { macd, signal: null, hist: null }
+
   const kSig = 2 / (sig + 1)
   let signal = macdSeries.slice(0, sig).reduce((a, b) => a + b, 0) / sig
   for (let i = sig; i < macdSeries.length; i++) signal = macdSeries[i] * kSig + signal * (1 - kSig)
@@ -96,7 +99,6 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ---- CoinGecko fetch met alias-fallback ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
 
 async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
@@ -115,14 +117,11 @@ async function fetchMarketChartWithAliases(aliases: string[]) {
     try {
       const d = await fetchMarketChartOne(id, 200)
       return { ok: true as const, id, ...d }
-    } catch (e) {
-      lastErr = e
-    }
+    } catch (e) { lastErr = e }
   }
   return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
 }
 
-// ---- indicators berekenen ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -136,7 +135,6 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // Volatility: stdev(20) van dagrendementen
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
@@ -146,7 +144,6 @@ function computeIndicators(closes: number[], volumes: number[]) {
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // Performance (24h/7d/30d/90d)
   const last = closes.at(-1) ?? null
   const p = (idxFromEnd: number) => {
     const ref = closes.at(-idxFromEnd) ?? null
@@ -165,12 +162,10 @@ function computeIndicators(closes: number[], volumes: number[]) {
   }
 }
 
-// ---- API handler ----
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
-
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 
     const results = await Promise.all(symbols.map(async (sym) => {
