@@ -3,46 +3,55 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-/**
- * Binance SYMBOLUSDT -> CoinGecko ID
- * Vul aan met de symbols die je in COINS gebruikt.
- */
-const CG_ID: Record<string, string> = {
-  BTCUSDT: 'bitcoin',
-  ETHUSDT: 'ethereum',
-  BNBUSDT: 'binancecoin',
-  SOLUSDT: 'solana',
-  XRPUSDT: 'ripple',
-  ADAUSDT: 'cardano',
-  DOGEUSDT: 'dogecoin',
-  AVAXUSDT: 'avalanche-2',
-  MATICUSDT: 'matic-network',
-  DOTUSDT: 'polkadot',
-  LINKUSDT: 'chainlink',
-  LTCUSDT: 'litecoin',
-  BCHUSDT: 'bitcoin-cash',
-  TRXUSDT: 'tron',
-  NEARUSDT: 'near',
-  ATOMUSDT: 'cosmos',
-  ARBUSDT: 'arbitrum',
-  OPUSDT: 'optimism',
-  INJUSDT: 'injective-protocol',
-  APTUSDT: 'aptos',
-  SUIUSDT: 'sui',
-  PEPEUSDT: 'pepe',
-  SHIBUSDT: 'shiba-inu',
-  ETCUSDT: 'ethereum-classic',
-  VETUSDT: 'vechain',
-  EGLDUSDT: 'multiversx',
-  IMXUSDT: 'immutable-x',
-  GRTUSDT: 'the-graph',
-  STXUSDT: 'stacks',
-  RUNEUSDT: 'thorchain',
-  RNDRUSDT: 'render-token',
-  AAVEUSDT: 'aave',
-  MKRUSDT: 'maker',
-  UNIUSDT: 'uniswap',
-  // ...meer indien nodig
+// Zelfde alias-bron als indicators (kopie of import).
+const CG_ALIASES: Record<string, string[]> = {
+  BTCUSDT: ['bitcoin'],
+  ETHUSDT: ['ethereum'],
+  BNBUSDT: ['binancecoin'],
+  SOLUSDT: ['solana'],
+  XRPUSDT: ['ripple'],
+  ADAUSDT: ['cardano'],
+  DOGEUSDT: ['dogecoin'],
+  TRXUSDT: ['tron'],
+  TONUSDT: ['toncoin', 'the-open-network'],
+  AVAXUSDT: ['avalanche-2'],
+  MATICUSDT: ['matic-network'],
+  DOTUSDT: ['polkadot'],
+  LINKUSDT: ['chainlink'],
+  LTCUSDT: ['litecoin'],
+  BCHUSDT: ['bitcoin-cash'],
+  NEARUSDT: ['near'],
+  ATOMUSDT: ['cosmos'],
+  ARBUSDT: ['arbitrum'],
+  OPUSDT:  ['optimism'],
+  INJUSDT: ['injective-protocol'],
+  APTUSDT: ['aptos'],
+  SUIUSDT: ['sui'],
+  SHIBUSDT:['shiba-inu'],
+  ETCUSDT: ['ethereum-classic'],
+  VETUSDT: ['vechain'],
+  EGLDUSDT:['multiversx'],
+  IMXUSDT: ['immutable-x'],
+  GRTUSDT: ['the-graph'],
+  STXUSDT: ['stacks'],
+  RUNEUSDT:['thorchain'],
+  RNDRUSDT:['render-token'],
+  AAVEUSDT:['aave'],
+  MKRUSDT: ['maker'],
+  UNIUSDT: ['uniswap'],
+  // extra's uit je screenshot:
+  FLOWUSDT: ['flow'],
+  CHZUSDT:  ['chiliz'],
+  MANAUSDT: ['decentraland'],
+  SANDUSDT: ['the-sandbox'],
+  AXSUSDT:  ['axie-infinity'],
+  DYDXUSDT: ['dydx-chain', 'dydx'],
+  KASUSDT:  ['kaspa'],
+  SEIUSDT:  ['sei-network', 'sei'],
+  BONKUSDT: ['bonk'],
+  JASMYUSDT:['jasmycoin'],
+  FTMUSDT:  ['fantom'],
+  PEPEUSDT: ['pepe'],
 }
 
 type MarketsRow = {
@@ -53,11 +62,46 @@ type MarketsRow = {
   price_change_percentage_30d_in_currency?: number | null
 }
 
-/** Split array in chunks */
+function numberOrNull(x: any): number | null {
+  const n = Number(x)
+  return Number.isFinite(n) ? n : null
+}
 function chunk<T>(arr: T[], size: number) {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
+}
+
+// Fallback helpers
+async function fetchSimplePrice(ids: string[]) {
+  if (ids.length === 0) return {}
+  const apiKey = process.env.COINGECKO_API_KEY || ''
+  const headers: Record<string,string> = { 'cache-control': 'no-cache' }
+  if (apiKey) headers['x-cg-demo-api-key'] = apiKey
+
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
+  const r = await fetch(url, { headers })
+  if (!r.ok) return {}
+  return r.json() as Promise<Record<string, { usd: number, usd_24h_change?: number }>>
+}
+
+type MarketChart = { prices: [number, number][] }
+async function fetchPerfFromChart(id: string) {
+  // voor 7d/30d uit closes
+  const apiKey = process.env.COINGECKO_API_KEY || ''
+  const headers: Record<string,string> = { 'cache-control': 'no-cache' }
+  if (apiKey) headers['x-cg-demo-api-key'] = apiKey
+
+  const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=200&interval=daily`
+  const r = await fetch(url, { headers })
+  if (!r.ok) return { w: null, m: null }
+  const j = (await r.json()) as MarketChart
+  const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
+  const last = closes.at(-1)
+  const c7   = closes.at(-8)
+  const c30  = closes.at(-31)
+  const pct = (a?: number, b?: number) => (a && b) ? ((b - a) / a) * 100 : null
+  return { w: pct(c7, last), m: pct(c30, last) }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -66,50 +110,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
 
-    const symbols = symbolsParam
-      .split(',')
-      .map(s => s.trim().toUpperCase())
-      .filter(Boolean)
+    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 
-    // Map naar CoinGecko IDs, bewaar index voor terug mapping
-    const idBySymbol = new Map<string, string>()
-    const wantedIds: string[] = []
+    // 1) Eerste poging: /coins/markets batch op de EERSTE alias van elk symbool
+    const firstIdBySymbol = new Map<string, string>()
     for (const sym of symbols) {
-      const id = CG_ID[sym]
-      if (id) { idBySymbol.set(sym, id); wantedIds.push(id) }
+      const aliases = CG_ALIASES[sym]
+      if (aliases?.length) firstIdBySymbol.set(sym, aliases[0])
     }
-    if (wantedIds.length === 0) {
-      return res.status(200).json({ results: symbols.map(sym => ({ symbol: sym, price: null, d: null, w: null, m: null })) })
-    }
+    const wantedFirstIds = Array.from(new Set(Array.from(firstIdBySymbol.values())))
 
-    // CoinGecko /coins/markets limit is 250 ids per request.
     const apiKey = process.env.COINGECKO_API_KEY || ''
     const headers: Record<string,string> = { 'cache-control': 'no-cache' }
     if (apiKey) headers['x-cg-demo-api-key'] = apiKey
 
-    const chunks = chunk(Array.from(new Set(wantedIds)), 250)
+    const chunks = chunk(wantedFirstIds, 250)
+    const marketsRows: MarketsRow[] = []
     const urls: string[] = []
-    const allRows: MarketsRow[] = []
 
     for (const ids of chunks) {
-      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(
-        ids.join(',')
-      )}&price_change_percentage=24h,7d,30d`
+      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(','))}&price_change_percentage=24h,7d,30d`
       urls.push(url)
       const r = await fetch(url, { headers })
-      if (!r.ok) {
-        // Geef iets terug i.p.v. hard failen
-        if (debug) {
-          return res.status(200).json({
-            debug: { urls, status: r.status, text: await r.text() },
-            results: symbols.map(sym => ({ symbol: sym, price: null, d: null, w: null, m: null })),
-          })
-        }
-        continue
-      }
+      if (!r.ok) continue
       const j = (await r.json()) as any[]
       for (const it of j || []) {
-        allRows.push({
+        marketsRows.push({
           id: String(it.id),
           current_price: (it.current_price == null ? null : Number(it.current_price)),
           price_change_percentage_24h_in_currency: numberOrNull(it.price_change_percentage_24h_in_currency),
@@ -118,36 +144,78 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       }
     }
-
-    // Index rows by id
     const rowById = new Map<string, MarketsRow>()
-    for (const r of allRows) rowById.set(r.id, r)
+    for (const r of marketsRows) rowById.set(r.id, r)
 
-    const results = symbols.map(sym => {
-      const id = idBySymbol.get(sym)
-      const row = id ? rowById.get(id) : undefined
-      return {
-        symbol: sym,
-        price: row?.current_price ?? null,
-        d: row?.price_change_percentage_24h_in_currency ?? null,
-        w: row?.price_change_percentage_7d_in_currency ?? null,
-        m: row?.price_change_percentage_30d_in_currency ?? null,
-      }
-    })
-
-    if (debug) {
-      return res.status(200).json({ debug: { urls, count: allRows.length }, results })
+    // 2) Voor symbolen zonder row: fallback via andere alias + simple/price + market_chart
+    const missingSymbols: string[] = []
+    for (const sym of symbols) {
+      const firstId = firstIdBySymbol.get(sym)
+      if (!firstId || !rowById.get(firstId)) missingSymbols.push(sym)
     }
 
-    // 15s edge cache; SWR client heeft daarnaast refreshInterval
+    // Bouw lijst van fallback-ids (alle aliassen die nog niet gebruikt zijn)
+    const fallbackIds: string[] = []
+    const chooseFallbackIdForSym = new Map<string, string>()
+    for (const sym of missingSymbols) {
+      const aliases = (CG_ALIASES[sym] || []).slice(1) // skip first
+      for (const id of aliases) {
+        // kies de eerste alias die we nog niet geprobeerd hebben
+        if (!fallbackIds.includes(id)) {
+          fallbackIds.push(id)
+          chooseFallbackIdForSym.set(sym, id)
+          break
+        }
+      }
+    }
+
+    // Simple price voor fallback ids (alleen price + 24h)
+    const sp = await fetchSimplePrice(fallbackIds)
+
+    // 7d/30d via market_chart, on-demand per missende coin
+    const perfCache = new Map<string, { w: number|null, m: number|null }>()
+    for (const id of fallbackIds) {
+      if (!sp[id]) continue // als zelfs simple price niks gaf, probeer alsnog perf (kan ook null terugkomen)
+      perfCache.set(id, await fetchPerfFromChart(id))
+    }
+
+    // 3) Result samenstellen per symbool
+    const results = await Promise.all(symbols.map(async (sym) => {
+      const firstId = firstIdBySymbol.get(sym)
+      const primary = firstId ? rowById.get(firstId) : undefined
+      if (primary) {
+        return {
+          symbol: sym,
+          price: primary.current_price ?? null,
+          d: primary.price_change_percentage_24h_in_currency ?? null,
+          w: primary.price_change_percentage_7d_in_currency ?? null,
+          m: primary.price_change_percentage_30d_in_currency ?? null,
+        }
+      }
+      // fallback
+      const fbId = chooseFallbackIdForSym.get(sym)
+      if (fbId) {
+        const spRow = sp[fbId]
+        const perf = perfCache.get(fbId) || { w: null, m: null }
+        return {
+          symbol: sym,
+          price: spRow?.usd ?? null,
+          d: spRow?.usd_24h_change ?? null,
+          w: perf.w,
+          m: perf.m,
+        }
+      }
+      // geen mapping
+      return { symbol: sym, price: null, d: null, w: null, m: null }
+    }))
+
+    if (debug) {
+      return res.status(200).json({ debug: { urls, markets_count: marketsRows.length, missing: missingSymbols }, results })
+    }
+
     res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=30')
     return res.status(200).json({ results })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
   }
-}
-
-function numberOrNull(x: any): number | null {
-  const n = Number(x)
-  return Number.isFinite(n) ? n : null
 }

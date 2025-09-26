@@ -1,10 +1,11 @@
 // bovenaan het bestand
 export const config = { runtime: 'nodejs' }
 
+// src/pages/api/crypto-light/indicators.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
-// Zet hier je coins in; je kunt later eenvoudig extra alias-id's toevoegen.
+// Eén plek om te mappen; vul/uitbreiden naar je COINS.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -14,7 +15,7 @@ const CG_ALIASES: Record<string, string[]> = {
   ADAUSDT: ['cardano'],
   DOGEUSDT: ['dogecoin'],
   TRXUSDT: ['tron'],
-  TONUSDT: ['toncoin', 'the-open-network'], // <-- belangrijk: fallback alias
+  TONUSDT: ['toncoin', 'the-open-network'],
   AVAXUSDT: ['avalanche-2'],
   MATICUSDT: ['matic-network'],
   DOTUSDT: ['polkadot'],
@@ -26,6 +27,19 @@ const CG_ALIASES: Record<string, string[]> = {
   ATOMUSDT: ['cosmos'],
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
+  // extra's die je ook in de lijst gebruikt:
+  FLOWUSDT: ['flow'],
+  CHZUSDT: ['chiliz'],
+  MANAUSDT: ['decentraland'],
+  SANDUSDT: ['the-sandbox'],
+  AXSUSDT:  ['axie-infinity'],
+  DYDXUSDT: ['dydx-chain', 'dydx'],
+  STXUSDT:  ['stacks'],
+  KASUSDT:  ['kaspa'],
+  SEIUSDT:  ['sei-network', 'sei'],
+  BONKUSDT: ['bonk'],
+  JASMYUSDT:['jasmycoin'],
+  FTMUSDT:  ['fantom'],
 }
 
 // ---- mini math helpers ----
@@ -82,7 +96,7 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ---- CoinGecko fetch (met alias-fallback) ----
+// ---- CoinGecko fetch met alias-fallback ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
 
 async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
@@ -95,7 +109,7 @@ async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: nu
   return { closes, volumes }
 }
 
-async function fetchMarketChartWithAliases(sym: string, aliases: string[]) {
+async function fetchMarketChartWithAliases(aliases: string[]) {
   let lastErr: any = null
   for (const id of aliases) {
     try {
@@ -108,7 +122,7 @@ async function fetchMarketChartWithAliases(sym: string, aliases: string[]) {
   return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
 }
 
-// ---- compute indicators ----
+// ---- indicators berekenen ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -122,29 +136,24 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // Volatility proxy: stdev(20) van dagrendementen
+  // Volatility: stdev(20) van dagrendementen
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
     if (a > 0 && Number.isFinite(a) && Number.isFinite(b)) rets.push((b - a) / a)
   }
-  const st = stdev(rets.slice(-20)) // laatste 20
+  const st = stdev(rets.slice(-20))
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // Performance
+  // Performance (24h/7d/30d/90d)
   const last = closes.at(-1) ?? null
   const p = (idxFromEnd: number) => {
     const ref = closes.at(-idxFromEnd) ?? null
     if (!last || !ref) return null
     return ((last - ref) / ref) * 100
   }
-  const perf = {
-    d: p(1),   // 24h (t.o.v. vorige close)
-    w: p(7+1), // 7 volle dagen terug
-    m: p(30+1),
-    q: p(90+1),
-  }
+  const perf = { d: p(1), w: p(7 + 1), m: p(30 + 1), q: p(90 + 1) }
 
   return {
     ma: { ma50, ma200, cross },
@@ -167,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const results = await Promise.all(symbols.map(async (sym) => {
       const aliases = CG_ALIASES[sym]
       if (!aliases?.length) return { symbol: sym, error: 'No CG mapping' }
-      const got = await fetchMarketChartWithAliases(sym, aliases)
+      const got = await fetchMarketChartWithAliases(aliases)
       if (!got.ok) return { symbol: sym, error: got.error }
       try {
         const ind = computeIndicators(got.closes, got.volumes)
