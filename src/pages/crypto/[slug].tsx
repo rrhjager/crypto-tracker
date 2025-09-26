@@ -12,6 +12,8 @@ type IndResp = {
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  volatility?: { stdev20: number|null; regime: 'low'|'med'|'high'|'—' }
+  perf?: { d: number|null; w: number|null; m: number|null; q: number|null }
   error?: string
 }
 
@@ -31,8 +33,6 @@ function statusFromOverall(score: number): Status {
 // Zelfde scoring als lijstpagina
 function overallScore(ind?: IndResp): { score: number, status: Status } {
   if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-
-  const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
 
   // MA
   let maScore = 50
@@ -96,7 +96,7 @@ function statusVolume(ratio?: number|null): Status {
 // Weergave helpers
 function fmtNum(n: number | null | undefined, d = 2) {
   if (n == null || !Number.isFinite(n)) return '—'
-  return n.toFixed(d)
+  return Number(n).toFixed(d)
 }
 function formatFiat(n: number | null | undefined) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -107,8 +107,10 @@ function formatFiat(n: number | null | undefined) {
 }
 function fmtInt(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return '—'
-  return Math.round(n).toLocaleString('nl-NL')
+  return Math.round(Number(n)).toLocaleString('nl-NL')
 }
+const fmtPct = (v: number | null | undefined) =>
+  (v == null || !Number.isFinite(Number(v))) ? '—' : `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
 function PageInner() {
   const { query } = useRouter()
@@ -121,7 +123,7 @@ function PageInner() {
 
   const binance = (coin as any)?.pairUSD?.binance || null
 
-  // Indicators
+  // Indicators (CG-based endpoint)
   const { data } = useSWR<{ results: IndResp[] }>(
     binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}` : null,
     fetcher,
@@ -130,8 +132,8 @@ function PageInner() {
   const ind: IndResp | undefined = (data?.results || [])[0]
   const overall = overallScore(ind)
 
-  // Prijs (nieuw): uit Light prices-endpoint
-  const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
+  // Prijs (uit Light prices-endpoint; werkt al)
+  const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null, d?:number|null }[] }>(
     binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
@@ -169,7 +171,7 @@ function PageInner() {
         </div>
       </section>
 
-      {/* 2 x 2 grid met kaarten */}
+      {/* 3 x 2 grid met kaarten (4 bestaande + 2 nieuwe) */}
       <section className="grid md:grid-cols-2 gap-4">
         {/* MA */}
         <div className="table-card p-4">
@@ -182,6 +184,7 @@ function PageInner() {
           <div className="text-white/80 text-sm">
             MA50: {fmtNum(ind?.ma?.ma50, 2)} — MA200: {fmtNum(ind?.ma?.ma200, 2)}
           </div>
+          <div className="text-xs text-white/60 mt-1">Cross: {ind?.ma?.cross ?? '—'}</div>
         </div>
 
         {/* RSI */}
@@ -193,7 +196,7 @@ function PageInner() {
             </span>
           </div>
           <div className="text-white/80 text-sm">
-            RSI: {fmtNum(ind?.rsi ?? null, 2)}
+            RSI: {fmtNum(ind?.rsi ?? null, 2)} <span className="text-white/50">(70 overbought · 30 oversold)</span>
           </div>
         </div>
 
@@ -220,6 +223,36 @@ function PageInner() {
           </div>
           <div className="text-white/80 text-sm">
             Volume: {fmtInt(ind?.volume?.volume ?? null)} — Gem.20d: {fmtInt(ind?.volume?.avg20d ?? null)} — Ratio: {fmtNum(ind?.volume?.ratio ?? null, 2)}
+          </div>
+        </div>
+
+        {/* Volatility (NIEUW) */}
+        <div className="table-card p-4">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">Volatility regime</h3>
+            <span className={
+              ind?.volatility?.regime === 'high' ? 'badge-sell' :
+              ind?.volatility?.regime === 'med'  ? 'badge-buy'  :
+              'badge-hold'
+            }>
+              {ind?.volatility?.regime ?? '—'}
+            </span>
+          </div>
+          <div className="text-white/80 text-sm">
+            Stdev(20) van dagrendementen: {ind?.volatility?.stdev20 != null ? (ind.volatility.stdev20 * 100).toFixed(2) + '%' : '—'}
+          </div>
+        </div>
+
+        {/* Performance (NIEUW) */}
+        <div className="table-card p-4">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">Performance</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            <div>24h</div><div className={Number(ind?.perf?.d ?? 0) >= 0 ? 'text-green-300 text-right' : 'text-red-300 text-right'}>{fmtPct(ind?.perf?.d)}</div>
+            <div>7d</div><div className={Number(ind?.perf?.w ?? 0) >= 0 ? 'text-green-300 text-right' : 'text-red-300 text-right'}>{fmtPct(ind?.perf?.w)}</div>
+            <div>30d</div><div className={Number(ind?.perf?.m ?? 0) >= 0 ? 'text-green-300 text-right' : 'text-red-300 text-right'}>{fmtPct(ind?.perf?.m)}</div>
+            <div>90d</div><div className={Number(ind?.perf?.q ?? 0) >= 0 ? 'text-green-300 text-right' : 'text-red-300 text-right'}>{fmtPct(ind?.perf?.q)}</div>
           </div>
         </div>
       </section>
