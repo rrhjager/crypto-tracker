@@ -1,3 +1,6 @@
+// bovenaan het bestand
+export const config = { runtime: 'nodejs' }
+
 // src/pages/api/crypto-light/indicators.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import pLimit from 'p-limit'

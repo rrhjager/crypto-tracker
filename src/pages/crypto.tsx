@@ -17,7 +17,7 @@ function formatFiat(n: number | null | undefined) {
   return v.toLocaleString('nl-NL', { maximumFractionDigits: 6 })
 }
 const fmtPct = (v: number | null | undefined) =>
-  (v == null || !isFinite(Number(v))) ? '—' : `${Number(v) >= 0 ? '' : ''}${Number(v).toFixed(2)}%`
+  (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
 type Status = 'BUY'|'HOLD'|'SELL'
 type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
@@ -54,12 +54,14 @@ function scoreFromIndicators(ind?: IndResp): { score: number, status: Status } {
   let maScore = 50
   if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
     if (ind.ma.ma50 > ind.ma.ma200) {
-      const spread = clamp((ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200)) - 1, 0, 0.2)
+      const spread = clamp(ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1, 0, 0.2)
       maScore = 60 + (spread / 0.2) * 40
     } else if (ind.ma.ma50 < ind.ma.ma200) {
-      const spread = clamp((ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50)) - 1, 0, 0.2)
+      const spread = clamp(ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1, 0, 0.2)
       maScore = 40 - (spread / 0.2) * 40
-    } else maScore = 50
+    } else {
+      maScore = 50
+    }
   }
 
   // RSI (25%) — 30..70 → 0..100
@@ -91,7 +93,7 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   const sell = rows.filter(r => r.status === 'SELL').length
   const buyPct = Math.round((buy / total) * 100)
   const sellPct = Math.round((sell / total) * 100)
-  const greenPct = Math.round((rows.filter(r => r._d >= 0).length / total) * 100)
+  const greenPct = Math.round((rows.filter(r => (r._d ?? 0) >= 0).length / total) * 100)
   const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
   const avgD = rows.reduce((s, r) => s + (r._d ?? 0), 0) / Math.max(1, total)
 
@@ -128,7 +130,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
   const pct = (n: number) => Math.round((n / Math.max(1, total)) * 100)
 
   const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
-  const greenPct = pct(rows.filter(r => r._d >= 0).length)
+  const greenPct = pct(rows.filter(r => (r._d ?? 0) >= 0).length)
 
   const byScore = [...rows].sort((a,b)=> (b._score ?? 0) - (a._score ?? 0))
   const topUp = byScore.slice(0, Math.min(3, byScore.length))
@@ -258,7 +260,7 @@ function Heatmap({ rows }: { rows: any[] }) {
           return (
             <Link
               key={c.slug}
-              href={`/crypto/${c.slug}`}   // detailroute (Light)
+              href={`/crypto/${c.slug}`}
               title={`${c.name} (${c.symbol}) • ${status} · ${Math.round(score)}`}
               className={[
                 'group rounded-[10px] ring-1 ring-white/10',
@@ -302,7 +304,9 @@ function PageInner() {
       binance: (c as any)?.pairUSD?.binance || null,
       _rank: i,
       _price: null as number | null,
-      _d: 0, _w: 0, _m: 0,
+      _d: 0 as number | null,
+      _w: 0 as number | null,
+      _m: 0 as number | null,
       _score: 0,
       status: 'HOLD' as Status,
       _fav: false,
@@ -349,7 +353,7 @@ function PageInner() {
   const { data: pxData } = useSWR<{ results: { symbol: string, price: number|null, d: number|null, w: number|null, m: number|null }[] }>(
     symbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
     fetcher,
-    { revalidateOnFocus: false, refreshInterval: 15_000 } // wat vaker verversen
+    { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
   const pxBySym = useMemo(() => {
     const map = new Map<string, { price: number|null, d: number|null, w: number|null, m: number|null }>()
@@ -402,12 +406,10 @@ function PageInner() {
     })
   }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym])
 
-  // "updatedAt" zodra één van de API's data heeft
   const updatedAt = (indData || pxData) ? Date.now() : undefined
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
-      {/* header */}
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="hero">Crypto Tracker (light)</h1>
@@ -466,10 +468,7 @@ function PageInner() {
                       <td className="py-3 pr-3">{i + 1}</td>
                       <td className="py-3 w-10 text-center">
                         <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); 
-                            const s = String(c.symbol || '').toUpperCase()
-                            ;(function toggle(){})()
-                          }}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
                           aria-pressed={isFav}
                           title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
                           className={[
