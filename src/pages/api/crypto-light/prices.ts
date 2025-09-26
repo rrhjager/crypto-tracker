@@ -1,52 +1,135 @@
-// bovenaan: runtime laten staan
+// src/pages/api/crypto-light/prices.ts
 export const config = { runtime: 'nodejs' }
 
-// src/pages/api/crypto-light/prices.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-// Mapping Binance-style symbols -> CoinGecko IDs
-const map: Record<string, string> = {
+// -------- Binance SYMBOLUSDT -> CoinGecko ID mapping --------
+// Vul aan als je meer pairs gebruikt; dit dekt de meeste top coins.
+const CG_ID: Record<string, string> = {
   BTCUSDT: 'bitcoin',
   ETHUSDT: 'ethereum',
-  ADAUSDT: 'cardano',
   SOLUSDT: 'solana',
   BNBUSDT: 'binancecoin',
   XRPUSDT: 'ripple',
+  ADAUSDT: 'cardano',
   DOGEUSDT: 'dogecoin',
-  DOTUSDT: 'polkadot',
-  MATICUSDT: 'matic-network',
   AVAXUSDT: 'avalanche-2',
-  // ... voeg hier jouw andere coins uit COINS toe
-}
+  TRXUSDT: 'tron',
+  LINKUSDT: 'chainlink',
+  MATICUSDT: 'matic-network',
+  DOTUSDT: 'polkadot',
+  LTCUSDT: 'litecoin',
+  BCHUSDT: 'bitcoin-cash',
+  XLMUSDT: 'stellar',
+  ATOMUSDT: 'cosmos',
+  XMRUSDT: 'monero',
+  FILUSDT: 'filecoin',
+  APTUSDT: 'aptos',
+  OPUSDT: 'optimism',
+  ARBUSDT: 'arbitrum',
+  NEARUSDT: 'near',
+  HBARUSDT: 'hedera-hashgraph',
+  INJUSDT: 'injective-protocol',
+  SUIUSDT: 'sui',
+  PEPEUSDT: 'pepe',
+  SHIBUSDT: 'shiba-inu',
+  ETCUSDT: 'ethereum-classic',
+  ALGOUSDT: 'algorand',
+  VETUSDT: 'vechain',
+  EGLDUSDT: 'multiversx',
+  IMXUSDT: 'immutable-x',
+  GRTUSDT: 'the-graph',
+  STXUSDT: 'stacks',
+  RUNEUSDT: 'thorchain',
+  RNDRUSDT: 'render-token',
+  AAVEUSDT: 'aave',
+  MKRUSDT: 'maker',
+  UNIUSDT: 'uniswap',
+  SANDUSDT: 'the-sandbox',
+  MANAUSDT: 'decentraland',
+  PYTHUSDT: 'pyth-network',
+  JUPUSDT: 'jupiter-exchange-solana',
+  SEIUSDT: 'sei-network',
+  BONKUSDT: 'bonk',
+};
+
+type Row =
+  | { symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }
+  | { symbol: string; error: string };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const symbolsParam = String(req.query.symbols || '').trim()
-    if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
+    const symbolsParam = String(req.query.symbols || '').trim();
+    if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' });
 
-    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    const ids = symbols.map(sym => map[sym]).filter(Boolean)
+    const symbols = symbolsParam
+      .split(',')
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
 
-    if (ids.length === 0) return res.json({ results: [] })
+    // Map naar CoinGecko IDs; bewaar volgorde en noteer ongedekte symbols
+    const ids: string[] = [];
+    const missing = new Set<string>();
+    for (const sym of symbols) {
+      const id = CG_ID[sym];
+      if (id) ids.push(id);
+      else missing.add(sym);
+    }
 
-    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true&include_7d_change=true&include_30d_change=true`
-    const cg = await fetch(url, { headers: { 'cache-control': 'no-cache' } }).then(r => r.json())
+    let cg: any = {};
+    if (ids.length > 0) {
+      const url =
+        'https://api.coingecko.com/api/v3/simple/price'
+        + `?ids=${encodeURIComponent(ids.join(','))}`
+        + `&vs_currencies=usd`
+        + `&include_24hr_change=true`
+        + `&price_change_percentage=${encodeURIComponent('7d,30d')}`;
 
-    const results = symbols.map(sym => {
-      const id = map[sym]
-      const data = id ? cg[id] : null
+      const r = await fetch(url, {
+        headers: {
+          // voorkom caching upstream die onhandig lang blijft hangen
+          'cache-control': 'no-cache',
+          // kleine UA kan soms helpen bij strikte CDNs
+          'user-agent': 'SignalHub/1.0; (+https://example.com)',
+        },
+      });
+      if (!r.ok) {
+        // CoinGecko rate-limit of outage → val netjes terug met lege map
+        cg = {};
+      } else {
+        cg = await r.json();
+      }
+    }
+
+    const results: Row[] = symbols.map(sym => {
+      const id = CG_ID[sym];
+      const data = id ? cg?.[id] : null;
+
+      if (!id) {
+        return { symbol: sym, error: 'No CoinGecko mapping' };
+      }
+      if (!data) {
+        return { symbol: sym, error: 'No data from CoinGecko' };
+      }
+
+      // Coingecko keys bij simple/price:
+      // - price: data.usd
+      // - 24h: data.usd_24h_change (door include_24hr_change=true)
+      // - 7d:  data.usd_7d_change   (door price_change_percentage=7d,30d)
+      // - 30d: data.usd_30d_change
       return {
         symbol: sym,
-        price: data?.usd ?? null,
-        d: data?.usd_24h_change ?? null,
-        w: data?.usd_7d_change ?? null,
-        m: data?.usd_30d_change ?? null,
-      }
-    })
+        price: isFinite(Number(data.usd)) ? Number(data.usd) : null,
+        d: isFinite(Number(data.usd_24h_change)) ? Number(data.usd_24h_change) : null,
+        w: isFinite(Number(data.usd_7d_change)) ? Number(data.usd_7d_change) : null,
+        m: isFinite(Number(data.usd_30d_change)) ? Number(data.usd_30d_change) : null,
+      };
+    });
 
-    res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=30')
-    return res.status(200).json({ results })
+    // cache kort, met SWR
+    res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=30');
+    return res.status(200).json({ results });
   } catch (e: any) {
-    return res.status(500).json({ error: e?.message || 'Internal error' })
+    return res.status(500).json({ error: e?.message || 'Internal error' });
   }
 }
