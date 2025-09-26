@@ -5,7 +5,7 @@ export const config = { runtime: 'nodejs' }
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 // ---- Binance-style symbol -> CoinGecko ID mapping ----
-// Vul aan met alle symbolen die je gebruikt.
+// Vul aan met alle symbolen die je gebruikt (zelfde lijst als bij prices).
 const CG: Record<string, string> = {
   BTCUSDT: 'bitcoin',
   ETHUSDT: 'ethereum',
@@ -43,6 +43,10 @@ const stdev = (arr: number[]): number | null => {
   const m = arr.reduce((a, b) => a + b, 0) / arr.length
   const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length
   return Math.sqrt(v)
+}
+const pct = (from?: number | null, to?: number | null): number | null => {
+  if (from == null || to == null || !isFinite(from) || from === 0) return null
+  return ((to - from) / from) * 100
 }
 const rsi14 = (closes: number[]): number | null => {
   if (closes.length < 15) return null
@@ -110,11 +114,42 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
+  // Volatility regime (proxy): stdev over 20 dagrendementen
+  const rets: number[] = []
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1]
+    const cur = closes[i]
+    if (prev > 0 && isFinite(prev) && isFinite(cur)) rets.push((cur / prev) - 1)
+  }
+  const stdev20 = rets.length >= 20 ? stdev(rets.slice(-20)) : null
+  let regime: 'low' | 'med' | 'high' | '—' = '—'
+  if (stdev20 != null) {
+    const p = stdev20 * 100 // in %
+    regime = p < 1 ? 'low' : p < 3 ? 'med' : 'high'
+  }
+
+  // Performance (in %): 24h / 7d / 30d / 90d
+  const last = closes.at(-1) ?? null
+  const prev = closes.at(-2) ?? null
+  const c7   = closes.at(-8) ?? null
+  const c30  = closes.at(-31) ?? null
+  const c90  = closes.at(-91) ?? null
+
   return {
+    // bestaand: front-end gebruikt deze velden
     ma: { ma50, ma200, cross },
     rsi,
     macd,
     volume: { volume, avg20d, ratio },
+
+    // nieuw: optioneel te tonen
+    volatility: { stdev20, regime },
+    perf: {
+      d: pct(prev, last),
+      w: pct(c7, last),
+      m: pct(c30, last),
+      q: pct(c90, last),
+    },
   }
 }
 
