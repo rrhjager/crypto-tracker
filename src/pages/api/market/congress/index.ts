@@ -10,7 +10,7 @@ type Item = {
   ticker: string
   amount: string
   price: string
-  side: 'BUY' | 'SELL' | '—'          // <-- nieuw veld
+  side: 'BUY' | 'SELL' | '—'
 }
 
 export const config = { runtime: 'nodejs' }
@@ -52,15 +52,26 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
+// ----- chromium/puppeteer bootstrap (Vercel & lokaal) -----
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    const chromium = await import('@sparticuz/chromium')
+    // Pak de DEFAULT export van @sparticuz/chromium en typ/cast expliciet
+    const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
+
+    // Sterke, lokale typing om TS te sussen (ESM typings variëren per versie)
+    const chr = chromium as unknown as {
+      args: string[]
+      defaultViewport?: any
+      executablePath: () => Promise<string>
+      headless?: boolean | 'new'
+    }
+
     const browser = await puppeteer.default.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
+      args: chr.args ?? [],
+      defaultViewport: chr.defaultViewport ?? null,
+      executablePath: await chr.executablePath(),
+      headless: chr.headless ?? 'new',
     })
     return { browser }
   } else {
@@ -73,7 +84,6 @@ async function getBrowser() {
 function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
   const t = (s || '').toLowerCase()
   if (!t) return '—'
-  // woorden die op veel sites voorkomen voor richting
   const isBuy  = /\b(buy|purchase|acquisition|acquire|bought)\b/.test(t)
   const isSell = /\b(sell|sale|disposal|dispose|sold)\b/.test(t)
   if (isBuy && !isSell) return 'BUY'
@@ -173,7 +183,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Fallback: badge/tekst in de hele rij
           if (!sideRaw) {
             const whole = clean(tr.textContent || '')
-            // haal alleen de woorden rondom mogelijk label op (heuristisch)
             const m = whole.match(/\b(buy|purchase|acquisition|acquire|sold|sell|sale|disposal|dispose)\b/i)
             sideRaw = m ? m[0] : ''
           }
