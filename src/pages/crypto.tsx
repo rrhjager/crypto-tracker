@@ -37,6 +37,14 @@ function statusFromScore(score: number): Status {
   return 'HOLD'
 }
 
+// Binance-pair fallback (voor Vercel): maak SYMBOLUSDT behalve voor stablecoins
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
+}
+
 // ---------- scoring op 4 indicatoren ----------
 type IndResp = {
   symbol: string
@@ -295,22 +303,26 @@ type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
-  // build rows vanuit COINS + Binance symbolen
+  // build rows vanuit COINS + Binance symbolen (met fallback)
   const baseRows = useMemo(() => {
-    return COINS.slice(0, 50).map((c, i) => ({
-      slug: (c.slug || c.symbol.toLowerCase()),
-      symbol: c.symbol,
-      name: c.name,
-      binance: (c as any)?.pairUSD?.binance || null,
-      _rank: i,
-      _price: null as number | null,
-      _d: 0 as number | null,
-      _w: 0 as number | null,
-      _m: 0 as number | null,
-      _score: 0,
-      status: 'HOLD' as Status,
-      _fav: false,
-    }))
+    return COINS.slice(0, 50).map((c, i) => {
+      const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
+      const fallback = toBinancePair(c.symbol)
+      return {
+        slug: (c.slug || c.symbol.toLowerCase()),
+        symbol: c.symbol,
+        name: c.name,
+        binance: fromList || fallback, // <-- belangrijk voor Vercel
+        _rank: i,
+        _price: null as number | null,
+        _d: 0 as number | null,
+        _w: 0 as number | null,
+        _m: 0 as number | null,
+        _score: 0,
+        status: 'HOLD' as Status,
+        _fav: false,
+      }
+    })
   }, [])
 
   // Favorieten
