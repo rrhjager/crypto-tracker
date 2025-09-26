@@ -4,7 +4,7 @@ import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
-import ScoreBadge from '@/components/ScoreBadge'
+import ScoreBadge from '@/components/ScoreBadge' // blijft staan, maar we tonen nu status-badge
 
 // ---------- helpers ----------
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -52,6 +52,9 @@ type IndResp = {
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  // NIEUW: door backend meegeleverd (optioneel)
+  score?: number
+  status?: Status
   error?: string
 }
 
@@ -72,16 +75,16 @@ function scoreFromIndicators(ind?: IndResp): { score: number, status: Status } {
     }
   }
 
-  // RSI (25%) — 30..70 → 0..100
+  // RSI (25%)
   let rsiScore = 50
   if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
 
-  // MACD (25%) — hist>0 bullish
+  // MACD (25%)
   let macdScore = 50
   const hist = ind.macd?.hist
   if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
 
-  // Volume (15%) — ratio>1 bullish
+  // Volume (15%)
   let volScore = 50
   const ratio = ind.volume?.ratio
   if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
@@ -357,7 +360,7 @@ function PageInner() {
   )
   const indBySym = useMemo(() => {
     const map = new Map<string, IndResp>()
-    for (const it of indData?.results || []) map.set(it.symbol, it)
+    for (const it of (indData?.results || [])) map.set(it.symbol, it)
     return map
   }, [indData])
 
@@ -369,7 +372,7 @@ function PageInner() {
   )
   const pxBySym = useMemo(() => {
     const map = new Map<string, { price: number|null, d: number|null, w: number|null, m: number|null }>()
-    for (const it of pxData?.results || []) map.set(it.symbol, { price: it.price, d: it.d, w: it.w, m: it.m })
+    for (const it of (pxData?.results || [])) map.set(it.symbol, { price: it.price, d: it.d, w: it.w, m: it.m })
     return map
   }, [pxData])
 
@@ -386,13 +389,23 @@ function PageInner() {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
       const ind  = c.binance ? indBySym.get(c.binance) : undefined
+
+      // 1) Probeer serverwaarden (status/score)
+      const serverScore = (ind?.score != null && Number.isFinite(Number(ind.score))) ? Number(ind.score) : null
+      const serverStatus = ind?.status as Status | undefined
+
+      // 2) Fallback naar bestaande clientberekening
       const calc = scoreFromIndicators(ind)
+
+      const finalScore = serverScore ?? calc.score
+      const finalStatus = serverStatus ?? calc.status
+
       const px   = c.binance ? pxBySym.get(c.binance) : undefined
       return {
         ...c,
         _fav: faves.includes(symU),
-        _score: calc.score,
-        status: calc.status,
+        _score: finalScore,
+        status: finalStatus,
         _price: px?.price ?? null,
         _d: px?.d ?? null,
         _w: px?.w ?? null,
@@ -501,8 +514,25 @@ function PageInner() {
                       <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
                       <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
                       <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
+
+                      {/* Alleen de BUY/HOLD/SELL-badge tonen i.p.v. ScoreBadge */}
                       <td className="py-3 text-right">
-                        <ScoreBadge score={Number(c._score ?? 0)} />
+                        {(() => {
+                          const s = (c.status as Status) || 'HOLD'
+                          const cls =
+                            s === 'BUY'  ? 'badge-buy'  :
+                            s === 'SELL' ? 'badge-sell' : 'badge-hold'
+                          return (
+                            <button
+                              type="button"
+                              className={`${cls} text-xs px-2 py-1 rounded`}
+                              title={`Status: ${s}`}
+                              aria-label={`Status ${s}`}
+                            >
+                              {s}
+                            </button>
+                          )
+                        })()}
                       </td>
                     </tr>
                   )

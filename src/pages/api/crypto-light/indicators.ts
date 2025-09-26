@@ -214,6 +214,46 @@ function computeIndicators(closes: number[], volumes: number[]) {
   }
 }
 
+// ==== score + status (zelfde weging als UI) ====
+type UiStatus = 'BUY' | 'HOLD' | 'SELL'
+function statusFromScore(score: number): UiStatus {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
+}
+function taScoreFrom(ind: {
+  ma?: { ma50: number|null; ma200: number|null }
+  rsi?: number|null
+  macd?: { hist: number|null }
+  volume?: { ratio: number|null }
+}) {
+  const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
+  let maScore = 50
+  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
+    if (ind.ma.ma50 > ind.ma.ma200) {
+      const spread = clamp(ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1, 0, 0.2)
+      maScore = 60 + (spread / 0.2) * 40
+    } else if (ind.ma.ma50 < ind.ma.ma200) {
+      const spread = clamp(ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1, 0, 0.2)
+      maScore = 40 - (spread / 0.2) * 40
+    }
+  }
+  let rsiScore = 50
+  if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
+  let macdScore = 50
+  const hist = ind.macd?.hist
+  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
+  let volScore = 50
+  const ratio = ind.volume?.ratio
+  if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
+
+  const score = Math.round(clamp(
+    0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore,
+    0, 100
+  ))
+  return { score, status: statusFromScore(score) as UiStatus }
+}
+
 // Klein batching-hulpje (minder kans op 429)
 function chunk<T>(arr: T[], size: number) {
   const out: T[][] = []
@@ -236,16 +276,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const group of batches) {
       const groupResults = await Promise.all(group.map(async (sym) => {
-        // 1) aliaslijst
+        // aliaslijst
         let aliases = CG_ALIASES[sym]
-
-        // 2) heuristische fallback als niets bekend
+        // heuristische fallback als niets bekend
         if (!aliases || aliases.length === 0) {
           const base = sym.replace(/USDT$/,'')
           const guess = guessIdFromBase(base)
           if (guess) aliases = [guess]
         }
-
         if (!aliases?.length) {
           dbg?.missing.push(sym)
           return { symbol: sym, error: 'No CG mapping' }
@@ -258,7 +296,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           const ind = computeIndicators(got.closes, got.volumes)
-          return { symbol: sym, ...ind }
+          const { score, status } = taScoreFrom({
+            ma: ind.ma,
+            rsi: ind.rsi,
+            macd: ind.macd,
+            volume: ind.volume,
+          })
+          return { symbol: sym, ...ind, score, status }
         } catch (e: any) {
           return { symbol: sym, error: e?.message || 'Compute failed' }
         }
