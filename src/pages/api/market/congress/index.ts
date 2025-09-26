@@ -55,23 +55,25 @@ function subDaysISO(iso: string, days: number): string {
 // ----- chromium/puppeteer bootstrap (Vercel & lokaal) -----
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    // Pak de DEFAULT export van @sparticuz/chromium en typ/cast expliciet
+    // Pak de DEFAULT export van @sparticuz/chromium (belangrijk voor ESM)
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
 
-    // Sterke, lokale typing om TS te sussen (ESM typings variëren per versie)
+    // Typings van puppeteer-core (in jouw versie) staan alleen boolean | "shell" toe.
+    // Gebruik daarom een boolean (true) voor headless op Vercel.
     const chr = chromium as unknown as {
-      args: string[]
+      args?: string[]
       defaultViewport?: any
       executablePath: () => Promise<string>
-      headless?: boolean | 'new'
+      headless?: unknown
     }
+    const headlessOpt: boolean = typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
 
     const browser = await puppeteer.default.launch({
       args: chr.args ?? [],
       defaultViewport: chr.defaultViewport ?? null,
       executablePath: await chr.executablePath(),
-      headless: chr.headless ?? 'new',
+      headless: headlessOpt,
     })
     return { browser }
   } else {
