@@ -26,7 +26,7 @@ export default function SiteHeader() {
   return (
     <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-40">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        {/* Home / Logo link met rainbow hover */}
+        {/* Home / Logo */}
         <Link href="/" className="group font-semibold tracking-tight">
           <span className={`text-black transition-all duration-300 ${rainbow}`}>
             SignalHub
@@ -35,13 +35,9 @@ export default function SiteHeader() {
 
         {/* Desktop menu */}
         <nav className="hidden md:flex items-center gap-6">
-          <Link href="/index" className="group text-white/80 hover:text-white transition">
-            <span className={`transition-colors ${rainbow}`}>Crypto tracker</span>
-          </Link>
-
-          {/* NIEUW: link naar lichte crypto pagina */}
+          {/* Enige crypto-link: naar de lichte pagina, getiteld “Crypto tracker” */}
           <Link href="/crypto" className="group text-white/80 hover:text-white transition">
-            <span className={`transition-colors ${rainbow}`}>Crypto (licht)</span>
+            <span className={`transition-colors ${rainbow}`}>Crypto tracker</span>
           </Link>
 
           {/* Stock tracker */}
@@ -57,7 +53,10 @@ export default function SiteHeader() {
               <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             </button>
             {stockOpen && (
-              <div onMouseLeave={() => setStockOpen(false)} className="absolute right-0 mt-2 w-48 rounded-2xl border border-white/10 bg-ink shadow-lg p-1">
+              <div
+                onMouseLeave={() => setStockOpen(false)}
+                className="absolute right-0 mt-2 w-48 rounded-2xl border border-white/10 bg-ink shadow-lg p-1"
+              >
                 {[
                   { href: '/stocks',     label: 'AEX' },
                   { href: '/sp500',      label: 'S&P 500' },
@@ -70,7 +69,6 @@ export default function SiteHeader() {
                   { href: '/sensex',     label: 'Sensex' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    {/* Nieuw: vet op hover in submenu */}
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                   </Link>
                 ))}
@@ -91,7 +89,10 @@ export default function SiteHeader() {
               <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             </button>
             {intelOpen && (
-              <div onMouseLeave={() => setIntelOpen(false)} className="absolute right-0 mt-2 w-56 rounded-2xl border border-white/10 bg-ink shadow-lg p-1">
+              <div
+                onMouseLeave={() => setIntelOpen(false)}
+                className="absolute right-0 mt-2 w-56 rounded-2xl border border-white/10 bg-ink shadow-lg p-1"
+              >
                 {[
                   { href: '/intel',            label: 'Congress Trading' },
                   { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
@@ -99,7 +100,6 @@ export default function SiteHeader() {
                   { href: '/intel/sectors',    label: 'Sector performance' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    {/* Nieuw: vet op hover in submenu */}
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                   </Link>
                 ))}
@@ -128,13 +128,9 @@ export default function SiteHeader() {
       {open && (
         <div className="md:hidden border-t border-white/10">
           <nav className="max-w-6xl mx-auto px-4 py-3 flex flex-col gap-2">
-            <Link href="/index" className="group rounded-xl px-3 py-2 hover:bg-white/10">
-              <span className={rainbow}>Crypto tracker</span>
-            </Link>
-
-            {/* NIEUW: link naar lichte crypto pagina (mobile) */}
+            {/* Alleen de lichte crypto, getiteld “Crypto tracker” */}
             <Link href="/crypto" className="group rounded-xl px-3 py-2 hover:bg-white/10">
-              <span className={rainbow}>Crypto (licht)</span>
+              <span className={rainbow}>Crypto tracker</span>
             </Link>
 
             <div className="rounded-xl px-3 py-2 hover:bg-white/10">
@@ -151,7 +147,6 @@ export default function SiteHeader() {
                 { href: '/sensex',     label: 'Sensex' },
               ].map(it => (
                 <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
-                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
                   <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                 </Link>
               ))}
@@ -166,7 +161,6 @@ export default function SiteHeader() {
                 { href: '/intel/sectors',    label: 'Sector performance' },
               ].map(it => (
                 <Link key={it.href} href={it.href} className="group block rounded-lg px-3 py-2 hover:bg-white/10">
-                  {/* Nieuw: vet op hover in submenu (ook mobiel hover) */}
                   <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
                 </Link>
               ))}

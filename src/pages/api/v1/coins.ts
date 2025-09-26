@@ -1,90 +1,55 @@
 // src/pages/api/v1/coins.ts
-import type { NextApiRequest, NextApiResponse } from 'next'
-import { getCache } from '@/lib/cache'
-import { fetchSafe } from '@/lib/fetchSafe' // robuuste fetch met timeout/retry
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getCache, setCache } from "@/lib/cache";
+import { fetchSafe } from "@/lib/fetchSafe";
 
-type CoinsPayload = any // compatibel met je bestaande shape { updatedAt, results, ... }
+type Json = Record<string, any>;
 
-// Iets ruimer zodat we desnoods op /refresh kunnen wachten
-export const config = { maxDuration: 60 }
+const CACHE_KEY = "coins:v1:fast=1";
+const TTL_SECONDS = 30;
 
-function baseUrl(req: NextApiRequest) {
-  const host =
-    (req.headers['x-forwarded-host'] as string) ||
-    req.headers.host ||
-    'localhost:3000'
-  const protoHeader = (req.headers['x-forwarded-proto'] as string) || ''
-  const proto = protoHeader || (host.startsWith('localhost') ? 'http' : 'https')
-  return `${proto}://${host}`
+function setSWRHeaders(res: NextApiResponse) {
+  // CDN cache for 30s, allow stale for 60s while revalidating
+  res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=60");
 }
 
-/** Zet expliciet korte cache headers (werken in prod, bijv. op Vercel/CDN) */
-function setCacheHeaders(res: NextApiResponse, smaxage = 10, swr = 30) {
-  const value = `public, s-maxage=${smaxage}, stale-while-revalidate=${swr}`
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.setHeader('Cache-Control', value)
-  res.setHeader('CDN-Cache-Control', value)
-  res.setHeader('Vercel-CDN-Cache-Control', value)
-  res.setHeader('Timing-Allow-Origin', '*')
-}
-
-/** Verwijder Kaspa zonder de rest te beïnvloeden. */
-function stripKaspa(payload: CoinsPayload): CoinsPayload {
-  try {
-    const results = Array.isArray(payload?.results)
-      ? payload.results.filter((c: any) => {
-          const sym = String(c?.symbol ?? '').toUpperCase()
-          const slug = String(c?.slug ?? '').toLowerCase()
-          return sym !== 'KAS' && sym !== 'KASPA' && slug !== 'kaspa'
-        })
-      : []
-    return { ...payload, results }
-  } catch {
-    // In geval van onverwachte shape: laat payload ongewijzigd
-    return payload
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Json>) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
-}
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<CoinsPayload | { updatedAt: number; results: any[]; message?: string }>
-) {
   try {
-    // 1) Probeer directe (process-local) cache — werkt lokaal / bij warme instance
-    const cached = getCache<CoinsPayload>('SUMMARY')
-    if (cached?.results?.length) {
-      const filtered = stripKaspa(cached)
-      setCacheHeaders(res, 10, 30)
-      return res.status(200).json(filtered)
+    // 1) Try shared cache first
+    const cached = await getCache<Json>(CACHE_KEY);
+    if (cached) {
+      setSWRHeaders(res);
+      return res.status(200).json(cached);
     }
 
-    // 2) Serverless instances delen geen geheugen → haal live data op van /refresh
-    const qs = req.query.debug ? `?debug=${encodeURIComponent(String(req.query.debug))}` : ''
-    const url = `${baseUrl(req)}/api/v1/refresh${qs}`
+    // 2) No cache → build by calling refresh on the same deployment
+    const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+    const host = req.headers.host;
+    const origin = `${proto}://${host}`;
 
-    // fetchSafe(url, init, timeoutMs, retries)
-    const resp = await fetchSafe(url, { cache: 'no-store' }, 60000, 0)
+    const r = await fetchSafe(`${origin}/api/v1/refresh?fast=1`, {
+      // Ensure this isn't cached by any intermediate fetch layer
+      cache: "no-store",
+      headers: { "x-internal": "coins" },
+    });
 
-    if (resp && typeof (resp as any).json === 'function') {
-      const live: CoinsPayload = await (resp as any).json()
-      const filtered = stripKaspa(live)
-      setCacheHeaders(res, 5, 20)
-      return res.status(200).json(filtered)
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      return res.status(r.status).json({ error: "refresh_failed", details: text });
     }
 
-    // 3) Fallback zonder 5xx: UI blijft netjes draaien en haalt later weer op
-    setCacheHeaders(res, 5, 20)
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: 'Geen data van /refresh — tijdelijke lege set.',
-    })
-  } catch (e: any) {
-    setCacheHeaders(res, 5, 20)
-    return res.status(200).json({
-      updatedAt: Date.now(),
-      results: [],
-      message: e?.message || 'Onbekende fout — tijdelijke lege set.',
-    })
+    const data = (await r.json()) as Json;
+
+    // 3) Persist to shared cache (TTL ~ 30s) and return
+    await setCache(CACHE_KEY, data, TTL_SECONDS);
+    setSWRHeaders(res);
+    return res.status(200).json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: "internal_error", details: String(err?.message || err) });
   }
 }
