@@ -5,7 +5,7 @@ import { useRouter } from 'next/router'
 import useSWR from 'swr'
 import { useMemo, useEffect } from 'react'
 import { COINS } from '@/lib/coins'
-import TradingViewChart from '@/components/TradingViewChart' // ⬅️ NIEUW
+import TradingViewChart from '@/components/TradingViewChart' // TV widget
 
 type IndResp = {
   symbol: string
@@ -32,7 +32,6 @@ function statusFromOverall(score: number): Status {
 // Zelfde scoring als lijstpagina
 function overallScore(ind?: IndResp): { score: number, status: Status } {
   if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-
   const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
 
   // MA
@@ -167,6 +166,19 @@ function PageInner() {
   )
   const price = pxData?.results?.[0]?.price ?? null
 
+  // === Nieuws (Google News RSS via eigen API) ===
+  const newsQuery = useMemo(() => {
+    if (!coin) return null
+    // Eenvoudige query die vaak goed werkt
+    return `${coin.name} ${coin.symbol} crypto`
+  }, [coin])
+
+  const { data: newsData } = useSWR<{ items: { title: string; link: string; source?: string; pubDate?: string }[] }>(
+    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}` : null,
+    fetcher,
+    { revalidateOnFocus: false, refreshInterval: 300_000 } // 5 min
+  )
+
   // Schrijf score/status naar localStorage (voor de overzichtspagina)
   useEffect(() => {
     if (!binance) return
@@ -259,15 +271,55 @@ function PageInner() {
         </div>
       </section>
 
-      {/* 🔥 TradingView Chart onder de indicatoren */}
+      {/* TradingView Chart */}
       <section className="mt-6">
         <TradingViewChart
           tvSymbol={tvSymbol}
-          height={480}     // pas aan naar wens
-          theme="dark"     // of 'light'
-          interval="D"     // Daily
-          locale="nl_NL"   // NL UI
+          height={480}
+          theme="dark"
+          interval="D"
+          locale="nl_NL"
         />
+      </section>
+
+      {/* Google News blok */}
+      <section className="mt-6">
+        <div className="table-card p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="font-semibold">Laatste nieuws</h3>
+            {newsQuery ? (
+              <a
+                className="link text-sm"
+                href={`https://news.google.com/search?q=${encodeURIComponent(newsQuery)}&hl=nl&gl=NL&ceid=NL:nl`}
+                target="_blank" rel="noopener noreferrer"
+              >
+                Meer op Google News →
+              </a>
+            ) : null}
+          </div>
+
+          {!newsData && (
+            <div className="text-white/60 text-sm">Nieuws laden…</div>
+          )}
+
+          {newsData?.items?.length ? (
+            <ul className="space-y-3">
+              {newsData.items.map((it, idx) => (
+                <li key={idx} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-t border-white/5 pt-3 first:border-0 first:pt-0">
+                  <a href={it.link} target="_blank" rel="noopener noreferrer" className="link font-medium">
+                    {it.title}
+                  </a>
+                  <div className="text-xs text-white/60 sm:text-right">
+                    {it.source ? <span>{it.source}</span> : null}
+                    {it.pubDate ? <span className="ml-2">{new Date(it.pubDate).toLocaleString('nl-NL')}</span> : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : newsData && !newsData.items?.length ? (
+            <div className="text-white/60 text-sm">Geen nieuws gevonden.</div>
+          ) : null}
+        </div>
       </section>
 
       {/* knoppen */}
