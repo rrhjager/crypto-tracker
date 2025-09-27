@@ -3,7 +3,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import useSWR from 'swr'
-import { useMemo } from 'react'
+import { useMemo, useEffect } from 'react'
 import { COINS } from '@/lib/coins'
 
 type IndResp = {
@@ -110,6 +110,24 @@ function fmtInt(n: number | null | undefined) {
   return Math.round(n).toLocaleString('nl-NL')
 }
 
+/* === NIEUW: dezelfde helpers als lijstpagina === */
+// Binance-pair fallback: SYMBOL → SYMBOLUSDT (behalve stablecoins)
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
+}
+
+// Save TA naar localStorage zodat /crypto (overzicht) het kan oppakken
+function saveLocalTA(symUSDT: string, score: number, status: Status) {
+  try {
+    localStorage.setItem(`ta:${symUSDT}`, JSON.stringify({ score, status, ts: Date.now() }))
+    // event sturen zodat open tabbladen meteen refreshen
+    window.dispatchEvent(new StorageEvent('storage', { key: `ta:${symUSDT}`, newValue: localStorage.getItem(`ta:${symUSDT}`) }))
+  } catch {}
+}
+
 function PageInner() {
   const { query } = useRouter()
   const slug = String(query.slug || '')
@@ -119,7 +137,9 @@ function PageInner() {
     return COINS.find(c => c.symbol.toLowerCase() === slug.toLowerCase())
   }, [slug])
 
-  const binance = (coin as any)?.pairUSD?.binance || null
+  // Binance symbool (identiek aan overzicht) voor storage-sleutel
+  const binanceFromList = (coin as any)?.pairUSD?.binance || null
+  const binance = binanceFromList || (coin ? toBinancePair(coin.symbol) : null)
 
   // Indicators
   const { data } = useSWR<{ results: IndResp[] }>(
@@ -130,13 +150,20 @@ function PageInner() {
   const ind: IndResp | undefined = (data?.results || [])[0]
   const overall = overallScore(ind)
 
-  // Prijs (nieuw): uit Light prices-endpoint
+  // Prijs (uit Light prices-endpoint)
   const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
     binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
   const price = pxData?.results?.[0]?.price ?? null
+
+  // === NIEUW: schrijf score/status naar localStorage ===
+  useEffect(() => {
+    if (!binance) return
+    // Schrijf ook als ind ontbreekt: overzicht ziet dan iig HOLD/50.
+    saveLocalTA(binance, overall.score, overall.status)
+  }, [binance, overall.score, overall.status])
 
   if (!coin) {
     return (

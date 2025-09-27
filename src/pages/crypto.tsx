@@ -96,6 +96,41 @@ function scoreFromIndicators(ind?: IndResp): { score: number, status: Status } {
   return { score, status: statusFromScore(score) }
 }
 
+/* ====== NIEUW: detail→home localStorage handshake ====== */
+type LocalTA = { score: number; status: Status; ts: number }
+const TA_KEY_PREFIX = 'ta:' // sleutels zoals ta:BTCUSDT
+
+function readAllLocalTA(): Map<string, LocalTA> {
+  if (typeof window === 'undefined') return new Map()
+  const out = new Map<string, LocalTA>()
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i) || ''
+      if (!k.startsWith(TA_KEY_PREFIX)) continue
+      const sym = k.slice(TA_KEY_PREFIX.length)
+      const raw = localStorage.getItem(k)
+      if (!raw) continue
+      const obj = JSON.parse(raw)
+      const score = Number(obj?.score)
+      const status = (obj?.status as Status) || 'HOLD'
+      const ts = Number(obj?.ts) || 0
+      if (Number.isFinite(score) && (status === 'BUY' || status === 'HOLD' || status === 'SELL')) {
+        out.set(sym, { score, status, ts })
+      }
+    }
+  } catch {}
+  return out
+}
+
+function saveLocalTA(symUSDT: string, score: number, status: Status) {
+  try {
+    const k = `${TA_KEY_PREFIX}${symUSDT}`
+    localStorage.setItem(k, JSON.stringify({ score, status, ts: Date.now() }))
+    // evt. notify — sommige browsers propagaten 'storage' alleen tussen tabs
+    window.dispatchEvent(new StorageEvent('storage', { key: k, newValue: localStorage.getItem(k) }))
+  } catch {}
+}
+
 // ---------- rechterkolom ----------
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
@@ -348,6 +383,18 @@ function PageInner() {
     })
   }
 
+  // NEW: lokale TA state (detailpagina schrijft hierin via localStorage)
+  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
+  useEffect(() => {
+    setLocalTA(readAllLocalTA())
+    function onStorage(ev: StorageEvent) {
+      if (!ev.key || !ev.key.startsWith(TA_KEY_PREFIX)) return
+      setLocalTA(readAllLocalTA())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   // ---- Indicators ophalen (Light) ----
   const symbolsCsv = useMemo(
     () => baseRows.map(r => r.binance).filter(Boolean).join(','),
@@ -397,10 +444,23 @@ function PageInner() {
       // 2) Fallback naar bestaande clientberekening
       const calc = scoreFromIndicators(ind)
 
-      const finalScore = serverScore ?? calc.score
-      const finalStatus = serverStatus ?? calc.status
+      let finalScore = serverScore ?? calc.score
+      let finalStatus = serverStatus ?? calc.status
 
-      const px   = c.binance ? pxBySym.get(c.binance) : undefined
+      // 3) NEW: override met localStorage (door detailpagina berekend)
+      const localKey = c.binance // bijv. "VETUSDT"
+      if (localKey) {
+        const ta = localTA.get(localKey)
+        if (ta) {
+          const fresh = (Date.now() - ta.ts) <= 10 * 60 * 1000 // 10 min
+          if (fresh || serverScore == null) {
+            finalScore = Number.isFinite(ta.score) ? ta.score : finalScore
+            finalStatus = (ta.status as Status) || finalStatus
+          }
+        }
+      }
+
+      const px = c.binance ? pxBySym.get(c.binance) : undefined
       return {
         ...c,
         _fav: faves.includes(symU),
@@ -429,7 +489,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym, localTA])
 
   const updatedAt = (indData || pxData) ? Date.now() : undefined
 

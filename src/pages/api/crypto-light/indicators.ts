@@ -3,8 +3,11 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
+// ---------- helpers (general) ----------
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
-// Breid dit eenvoudig uit als er iets mist.
 const CG_ALIASES: Record<string, string[]> = {
   BTCUSDT: ['bitcoin'],
   ETHUSDT: ['ethereum'],
@@ -26,8 +29,6 @@ const CG_ALIASES: Record<string, string[]> = {
   ATOMUSDT: ['cosmos'],
   ETCUSDT: ['ethereum-classic'],
   XMRUSDT: ['monero'],
-
-  // Extra's die je in je lijst gebruikt
   ARBUSDT:  ['arbitrum'],
   OPUSDT:   ['optimism'],
   INJUSDT:  ['injective-protocol'],
@@ -56,8 +57,6 @@ const CG_ALIASES: Record<string, string[]> = {
   JASMYUSDT:['jasmycoin'],
   FTMUSDT:  ['fantom'],
   PEPEUSDT: ['pepe'],
-
-  // Gevraagde aanvullingen
   ICPUSDT:  ['internet-computer'],
   FILUSDT:  ['filecoin'],
   ALGOUSDT: ['algorand'],
@@ -65,8 +64,7 @@ const CG_ALIASES: Record<string, string[]> = {
   THETAUSDT:['theta-token'],
 }
 
-// ---- kleine TA helpers (geen externe libs) ----
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+// ---------- tiny TA utils ----------
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
   let s = 0
@@ -96,11 +94,9 @@ const rsi14 = (closes: number[]): number | null => {
 const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   if (closes.length < slow) return { macd: null as number | null, signal: null as number | null, hist: null as number | null }
   const kF = 2 / (fast + 1), kS = 2 / (slow + 1)
-
   let emaF = closes.slice(0, fast).reduce((a, b) => a + b, 0) / fast
   let emaS = closes.slice(0, slow).reduce((a, b) => a + b, 0) / slow
   for (let i = fast; i < slow; i++) emaF = closes[i] * kF + emaF * (1 - kF)
-
   const macdSeries: number[] = []
   for (let i = slow; i < closes.length; i++) {
     emaF = closes[i] * kF + emaF * (1 - kF)
@@ -109,7 +105,6 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   }
   const macd = macdSeries.at(-1) ?? null
   if (macdSeries.length < sig) return { macd, signal: null, hist: null }
-
   const kSig = 2 / (sig + 1)
   let signal = macdSeries.slice(0, sig).reduce((a, b) => a + b, 0) / sig
   for (let i = sig; i < macdSeries.length; i++) signal = macdSeries[i] * kSig + signal * (1 - kSig)
@@ -117,38 +112,67 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ---- CoinGecko fetch (met optionele API key header) ----
-type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
+// ---------- market data fetchers (OKX -> Bitfinex -> CoinGecko) ----------
+type MarketData = { closes: number[]; volumes: number[] }
 
+async function okxFetch(instId: string): Promise<MarketData | null> {
+  // OKX bar=1D (200 candles)
+  const url = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=1D&limit=200`
+  const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
+  if (!r.ok) return null
+  const j = await r.json()
+  const arr: any[] = Array.isArray(j?.data) ? j.data : []
+  if (!arr.length) return null
+  // OKX row: [ts, o, h, l, c, vol, ...] — take close idx 4, volume idx 5, reverse to oldest→newest
+  const rows = arr.slice().reverse()
+  const closes = rows.map(x => Number(x?.[4])).filter(Number.isFinite)
+  const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
+  if (closes.length < 50) return null
+  return { closes, volumes }
+}
+
+async function bitfinexFetch(tSymbol: string): Promise<MarketData | null> {
+  // Bitfinex: /v2/candles/trade:1D:tBTCUSD/hist
+  const url = `https://api-pub.bitfinex.com/v2/candles/trade:1D:${encodeURIComponent(tSymbol)}/hist?limit=200`
+  const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
+  if (!r.ok) return null
+  const arr: any[] = await r.json()
+  if (!Array.isArray(arr) || !arr.length) return null
+  // Row: [MTS, OPEN, CLOSE, HIGH, LOW, VOLUME]
+  const rows = arr.slice().reverse()
+  const closes = rows.map(x => Number(x?.[2])).filter(Number.isFinite)
+  const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
+  if (closes.length < 50) return null
+  return { closes, volumes }
+}
+
+// ---- CoinGecko (fallback) ----
+type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
 function cgHeaders() {
   const apiKey = process.env.COINGECKO_API_KEY || ''
   const h: Record<string,string> = { 'cache-control': 'no-cache' }
   if (apiKey) h['x-cg-demo-api-key'] = apiKey
   return h
 }
-
-async function fetchMarketChartOne(id: string, days = 200): Promise<{ closes: number[]; volumes: number[] }> {
-  const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}&interval=daily`
+async function coingeckoFetchOne(id: string): Promise<MarketData | null> {
+  const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=200&interval=daily`
   const r = await fetch(url, { headers: cgHeaders() })
-  if (!r.ok) throw new Error(`CG ${id} HTTP ${r.status}`)
+  if (!r.ok) return null
   const j = (await r.json()) as MarketChart
   const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
   const volumes = (j.total_volumes || []).map(v => Number(v[1])).filter(Number.isFinite)
+  if (closes.length < 50) return null
   return { closes, volumes }
 }
-
-async function fetchMarketChartWithAliases(aliases: string[]) {
-  let lastErr: any = null
+async function coingeckoWithAliases(aliases: string[]): Promise<MarketData | null> {
   for (const id of aliases) {
-    try {
-      const d = await fetchMarketChartOne(id, 200)
-      return { ok: true as const, id, ...d }
-    } catch (e) { lastErr = e }
+    const got = await coingeckoFetchOne(id)
+    if (got) return got
   }
-  return { ok: false as const, error: lastErr?.message || 'No data for any alias' }
+  return null
 }
 
-// Heuristische fallback voor veel voorkomende bases, als mapping ontbreekt
+// ---- Heuristische fallback voor missing mapping
 function guessIdFromBase(base: string): string | null {
   const b = base.toLowerCase()
   const m: Record<string,string> = {
@@ -170,16 +194,14 @@ function guessIdFromBase(base: string): string | null {
   return m[b] ?? null
 }
 
-// ---- indicatoren berekenen ----
+// ---------- derive indicators + score ----------
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
   const cross: 'Golden Cross' | 'Death Cross' | '—' =
     ma50 != null && ma200 != null ? (ma50 > ma200 ? 'Golden Cross' : ma50 < ma200 ? 'Death Cross' : '—') : '—'
-
   const rsi = rsi14(closes)
   const macd = macdCalc(closes, 12, 26, 9)
-
   const volume = volumes.at(-1) ?? null
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
@@ -194,7 +216,7 @@ function computeIndicators(closes: number[], volumes: number[]) {
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // Performance (24h/7d/30d/90d) afgeleid uit closes
+  // Perf (d/w/m/q) optioneel (niet gebruikt voor score hier)
   const last = closes.at(-1) ?? null
   const pct = (from?: number, to?: number) => (from && to) ? ((to - from) / from) * 100 : null
   const perf = {
@@ -214,8 +236,7 @@ function computeIndicators(closes: number[], volumes: number[]) {
   }
 }
 
-// ==== score + status (zelfde weging als UI) ====
-type UiStatus = 'BUY' | 'HOLD' | 'SELL'
+type UiStatus = 'BUY'|'HOLD'|'SELL'
 function statusFromScore(score: number): UiStatus {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
@@ -228,7 +249,6 @@ function taScoreFrom(ind: {
   volume?: { ratio: number|null }
 }) {
   const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
-
   // MA (35%)
   let maScore = 50
   if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
@@ -240,35 +260,80 @@ function taScoreFrom(ind: {
       maScore = 40 - (spread / 0.2) * 40
     }
   }
-
   // RSI (25%)
   let rsiScore = 50
   if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
-
   // MACD (25%)
   let macdScore = 50
   const hist = ind.macd?.hist
   if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
-
   // Volume (15%)
   let volScore = 50
   const ratio = ind.volume?.ratio
   if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
 
-  const score = Math.round(clamp(
-    0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore,
-    0, 100
-  ))
+  const score = Math.round(clamp(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore, 0, 100))
   return { score, status: statusFromScore(score) as UiStatus }
 }
 
-// Klein batching-hulpje (minder kans op 429)
+// ---------- symbol mapping helpers ----------
+function symbolToOkx(symUSDT: string) {
+  // BTCUSDT -> BTC-USDT
+  const base = symUSDT.replace(/USDT$/,'')
+  if (!base) return null
+  return `${base}-USDT`
+}
+function symbolToBitfinex(symUSDT: string) {
+  // Try USD first, then UST (Tether legacy code on Bitfinex)
+  const base = symUSDT.replace(/USDT$/,'')
+  return [`t${base}USD`, `t${base}UST`]
+}
+
+// ---------- fetch chain for one symbol ----------
+async function fetchMarketDataFor(symUSDT: string): Promise<{ ok: true; data: MarketData; source: string } | { ok: false; error: string }> {
+  // A) OKX
+  const okxId = symbolToOkx(symUSDT)
+  if (okxId) {
+    try {
+      const d = await okxFetch(okxId)
+      if (d) return { ok: true, data: d, source: 'okx' }
+    } catch {}
+  }
+
+  // B) Bitfinex
+  const tSymbols = symbolToBitfinex(symUSDT)
+  for (const t of tSymbols) {
+    try {
+      const d = await bitfinexFetch(t)
+      if (d) return { ok: true, data: d, source: `bitfinex:${t}` }
+    } catch {}
+  }
+
+  // C) CoinGecko
+  let aliases = CG_ALIASES[symUSDT]
+  if (!aliases || aliases.length === 0) {
+    const base = symUSDT.replace(/USDT$/,'')
+    const guess = guessIdFromBase(base)
+    if (guess) aliases = [guess]
+  }
+  if (aliases?.length) {
+    try {
+      const d = await coingeckoWithAliases(aliases)
+      if (d) return { ok: true, data: d, source: 'coingecko' }
+    } catch {}
+  }
+
+  return { ok: false, error: 'No source returned data' }
+}
+
+// ---------- batching ----------
 function chunk<T>(arr: T[], size: number) {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
 }
 
+// ---------- API handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
@@ -278,47 +343,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
 
-    // Verdeel in batches van 5 om rate-limits te ontzien
-    const batches = chunk(symbols, 5)
+    // gentle throttle to avoid rate-limits on free sources
+    const batches = chunk(symbols, 3)
     const results: any[] = []
 
-    for (const group of batches) {
+    for (let bi = 0; bi < batches.length; bi++) {
+      const group = batches[bi]
+
       const groupResults = await Promise.all(group.map(async (sym) => {
-        // aliaslijst
-        let aliases = CG_ALIASES[sym]
+        // Try OKX -> Bitfinex -> CoinGecko
+        const got = await fetchMarketDataFor(sym)
+        dbg?.used.push({ symbol: sym, ok: got.ok, source: (got as any).source ?? null })
 
-        // heuristische fallback als niets bekend
-        if (!aliases || aliases.length === 0) {
-          const base = sym.replace(/USDT$/,'')
-          const guess = guessIdFromBase(base)
-          if (guess) aliases = [guess]
-        }
-
-        if (!aliases?.length) {
-          dbg?.missing.push(sym)
-          return { symbol: sym, error: 'No CG mapping' }
-        }
-
-        const got = await fetchMarketChartWithAliases(aliases)
-        dbg?.used.push({ symbol: sym, ok: got.ok, tried: aliases, chosen: (got as any).id ?? null })
-
-        if (!got.ok) return { symbol: sym, error: (got as any).error || 'Fetch failed' }
+        if (!got.ok) return { symbol: sym, error: got.error }
 
         try {
-          const ind = computeIndicators(got.closes, got.volumes)
+          const ind = computeIndicators(got.data.closes, got.data.volumes)
           const { score, status } = taScoreFrom({
             ma: ind.ma,
             rsi: ind.rsi,
             macd: ind.macd,
             volume: ind.volume,
           })
-          // <<— BELANGRIJK: score + status meesturen voor de homepage
           return { symbol: sym, ...ind, score, status }
         } catch (e: any) {
           return { symbol: sym, error: e?.message || 'Compute failed' }
         }
       }))
+
       results.push(...groupResults)
+
+      // sleep between batches (except after last)
+      if (bi < batches.length - 1) await sleep(650)
     }
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
