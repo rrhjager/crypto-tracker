@@ -5,6 +5,7 @@ import { useRouter } from 'next/router'
 import useSWR from 'swr'
 import { useMemo, useEffect } from 'react'
 import { COINS } from '@/lib/coins'
+import TradingViewChart from '@/components/TradingViewChart' // ⬅️ NIEUW
 
 type IndResp = {
   symbol: string
@@ -110,7 +111,7 @@ function fmtInt(n: number | null | undefined) {
   return Math.round(n).toLocaleString('nl-NL')
 }
 
-/* === NIEUW: dezelfde helpers als lijstpagina === */
+/* === Zelfde helpers als lijstpagina === */
 // Binance-pair fallback: SYMBOL → SYMBOLUSDT (behalve stablecoins)
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -141,6 +142,14 @@ function PageInner() {
   const binanceFromList = (coin as any)?.pairUSD?.binance || null
   const binance = binanceFromList || (coin ? toBinancePair(coin.symbol) : null)
 
+  // ===== TradingView symbol: voorkeur BINANCE, fallback OKX =====
+  const tvSymbol = useMemo(() => {
+    const base = (coin?.symbol || '').toUpperCase()
+    if (binance) return `BINANCE:${binance}` // bv. BINANCE:VETUSDT
+    if (base) return `OKX:${base}USDT`      // fallback dekt veel pairs
+    return 'BINANCE:BTCUSDT'
+  }, [coin, binance])
+
   // Indicators
   const { data } = useSWR<{ results: IndResp[] }>(
     binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}` : null,
@@ -158,10 +167,9 @@ function PageInner() {
   )
   const price = pxData?.results?.[0]?.price ?? null
 
-  // === NIEUW: schrijf score/status naar localStorage ===
+  // Schrijf score/status naar localStorage (voor de overzichtspagina)
   useEffect(() => {
     if (!binance) return
-    // Schrijf ook als ind ontbreekt: overzicht ziet dan iig HOLD/50.
     saveLocalTA(binance, overall.score, overall.status)
   }, [binance, overall.score, overall.status])
 
@@ -249,6 +257,17 @@ function PageInner() {
             Volume: {fmtInt(ind?.volume?.volume ?? null)} — Gem.20d: {fmtInt(ind?.volume?.avg20d ?? null)} — Ratio: {fmtNum(ind?.volume?.ratio ?? null, 2)}
           </div>
         </div>
+      </section>
+
+      {/* 🔥 TradingView Chart onder de indicatoren */}
+      <section className="mt-6">
+        <TradingViewChart
+          tvSymbol={tvSymbol}
+          height={480}     // pas aan naar wens
+          theme="dark"     // of 'light'
+          interval="D"     // Daily
+          locale="nl_NL"   // NL UI
+        />
       </section>
 
       {/* knoppen */}
