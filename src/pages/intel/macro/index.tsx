@@ -1,7 +1,7 @@
 // src/pages/intel/macro/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type Row = {
   dateISO: string
@@ -16,24 +16,45 @@ export default function MacroCalendar() {
   const [rows, setRows] = useState<Row[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hint, setHint] = useState<string | null>(null)
+  const [detail, setDetail] = useState<string | null>(null)
+
+  const apiUrl = useMemo(() => `/api/market/macro?days=120`, [])
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setErr(null); setLoading(true)
-        const r = await fetch('/api/market/macro?days=120', { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        if (!aborted) setRows(Array.isArray(j.items) ? j.items : [])
+        setErr(null); setHint(null); setDetail(null); setLoading(true)
+        const r = await fetch(apiUrl, { cache: 'no-store' })
+        let j: any = {}
+        try { j = await r.json() } catch {}
+        if (!r.ok) {
+          // Niet meer hard crashen; toon nette fout+hint
+          if (!aborted) {
+            setErr(`HTTP ${r.status}`)
+            if (j?.hint) setHint(String(j.hint))
+            if (j?.detail) setDetail(String(j.detail))
+            setRows([])
+          }
+          return
+        }
+        if (!aborted) {
+          setRows(Array.isArray(j.items) ? j.items : [])
+          if (j?.hint) setHint(String(j.hint))
+          if (j?.detail) setDetail(String(j.detail))
+        }
       } catch (e: any) {
-        if (!aborted) setErr(String(e?.message || e))
+        if (!aborted) {
+          setErr(String(e?.message || e))
+          setRows([])
+        }
       } finally {
         if (!aborted) setLoading(false)
       }
     })()
     return () => { aborted = true }
-  }, [])
+  }, [apiUrl])
 
   const chip = (impact: Row['impact']) =>
     impact === 'high'   ? 'bg-red-600/15 text-red-700 border-red-600/30' :
@@ -45,9 +66,16 @@ export default function MacroCalendar() {
       <Head><title>Macro Calendar — SignalHub</title></Head>
 
       <main className="min-h-screen">
-        <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
+        <section className="max-w-6xl mx-auto px-4 pt-16 pb-4">
           <h1 className="hero">Macro Calendar</h1>
-          {err && <div className="mt-2 text-sm text-red-600">Fout bij laden: {err}</div>}
+
+          {/* 🔎 Debug-balk */}
+          <div className="mt-2 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2">
+            <div><span className="font-semibold">API:</span> <code>{apiUrl}</code></div>
+            {hint && <div className="mt-1"><span className="font-semibold">Hint:</span> {hint}</div>}
+            {detail && <div className="mt-1"><span className="font-semibold">Detail:</span> {detail}</div>}
+            {err && <div className="mt-1 text-red-600"><span className="font-semibold">Error:</span> {err}</div>}
+          </div>
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">

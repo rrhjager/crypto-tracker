@@ -78,10 +78,8 @@ async function getFutureReleaseDates(apiKey: string, releaseId: number, fromISO:
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const apiKey = process.env.FRED_API_KEY || ''
-    if (!apiKey) {
-      return res.status(400).json({ items: [], hint: 'FRED_API_KEY ontbreekt (gratis key via fred.stlouisfed.org).' })
-    }
+    // ✅ Key: uit env of desnoods uit query (handig voor testen)
+    const apiKey = String(req.query.apiKey || process.env.FRED_API_KEY || '')
 
     const daysQ = Number(req.query.days)
     const windowDays = Number.isFinite(daysQ) ? Math.min(Math.max(daysQ, 7), 180) : 120
@@ -92,6 +90,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     to.setUTCDate(to.getUTCDate() + windowDays)
     const toISO = iso(to)
 
+    // ❗ Als er geen API key is, géén 400 meer → 200 met hint,
+    // zodat de frontend netjes kan tonen wat er mis is i.p.v. te crashen.
+    if (!apiKey) {
+      res.setHeader('Cache-Control', 'no-store')
+      return res.status(200).json({
+        items: [],
+        hint: 'FRED_API_KEY ontbreekt (haal gratis key op fred.stlouisfed.org en zet in Vercel env). Je kunt ook tijdelijk ?apiKey=TESTKEY in de URL testen.',
+        debug: { fromISO, toISO, windowDays }
+      })
+    }
+
     const rows: Row[] = []
 
     await Promise.all(INDICATORS.map(async ind => {
@@ -99,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const relId = await getReleaseIdForSeries(apiKey, ind.seriesId)
         if (!relId) return
         const dates = await getFutureReleaseDates(apiKey, relId, fromISO, toISO)
-        const fredReleaseUrl = `https://fred.stlouisfed.org/release?rid=${relId}` // official release page
+        const fredReleaseUrl = `https://fred.stlouisfed.org/release?rid=${relId}`
         dates.forEach(d => rows.push({
           dateISO: d,
           dateLabel: nl(d),
@@ -109,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           sourceUrl: fredReleaseUrl,
         }))
       } catch {
-        // skip indicator on error
+        // skip this indicator on error
       }
     }))
 
@@ -118,9 +127,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Cache-Control', 's-maxage=900, stale-while-revalidate=3600')
     return res.status(200).json({
       items: rows,
-      hint: `FRED release calendar (real) · ${rows.length} events · window=${windowDays}d`,
+      hint: `FRED release calendar · ${rows.length} events · window=${windowDays}d`,
+      debug: { fromISO, toISO, windowDays }
     })
   } catch (e: any) {
-    return res.status(502).json({ items: [], hint: 'FRED fetch failed', detail: String(e?.message || e) })
+    return res.status(200).json({
+      items: [],
+      hint: 'FRED fetch failed',
+      detail: String(e?.message || e)
+    })
   }
 }
