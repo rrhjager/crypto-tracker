@@ -7,7 +7,7 @@ type Row = {
   publishedISO?: string | null
   publishedLabel: string
   person: string
-  ticker: string            // bevat issuer + evt. symbool, bv. "Company MSFT:US"
+  ticker: string            // bv. "Company MSFT:US"
   amount: string            // "1K–15K", "250K–500K", "N/A"
   price: string             // "$192.76" of "N/A"
   side?: 'BUY' | 'SELL' | string | null
@@ -36,7 +36,6 @@ function tradingViewUrl(symbol?: string) {
   return core ? `https://www.tradingview.com/symbols/${core.toUpperCase()}/` : null
 }
 
-// Koop/Verkoop badge
 function inferSide(txt?: string | null, apiSide?: string | null): 'BUY' | 'SELL' | '—' {
   const s = (apiSide || '').toUpperCase().trim()
   if (s === 'BUY' || s === 'PURCHASE') return 'BUY'
@@ -93,22 +92,37 @@ export default function MarketIntel() {
     return () => { aborted = true }
   }, [])
 
-  // ▶ Sortering: eerst rijen zonder datum ("—"), daarna met datum (nieuwste eerst)
+  const TWO_DAYS = 2 * 24 * 60 * 60 * 1000
+
+  // Verrijk + sorteer:
+  // - "recent" = (heeft datum én < 2 dagen oud) OF (heeft géén datum → behandelen als recent)
+  // - recent bovenaan; binnen recent: zonder datum vóór met datum (nieuw → oud)
+  // - daarna rest op datum (nieuw → oud)
+  const enriched = useMemo(() => {
+    const now = Date.now()
+    return (rows || []).map((r, i) => {
+      const tISO = r.publishedISO ? Date.parse(r.publishedISO) : NaN
+      const tLabel = Number.isFinite(tISO) ? tISO : parseDutchDate(r.publishedLabel)
+      const hasDate = Number.isFinite(tLabel)
+      const isRecent = hasDate ? (now - Number(tLabel)) < TWO_DAYS : true
+      return { r, i, t: hasDate ? Number(tLabel) : NaN, hasDate, isRecent }
+    })
+  }, [rows])
+
   const sorted = useMemo(() => {
-    return rows
-      .map((r, i) => {
-        const noDate = !r.publishedLabel || r.publishedLabel.trim() === '—'
-        const tISO = r.publishedISO ? Date.parse(r.publishedISO) : NaN
-        const t = Number.isFinite(tISO) ? tISO : parseDutchDate(r.publishedLabel)
-        return { r, i, t: Number.isFinite(t) ? t : 0, noDate }
-      })
+    return enriched
       .sort((a, b) => {
-        if (a.noDate !== b.noDate) return a.noDate ? -1 : 1   // zonder datum eerst
-        if (!a.noDate && !b.noDate && a.t !== b.t) return b.t - a.t // beide mét datum → desc
+        if (a.isRecent !== b.isRecent) return a.isRecent ? -1 : 1
+        if (a.isRecent && b.isRecent) {
+          if (a.hasDate !== b.hasDate) return a.hasDate ? 1 : -1
+          if (a.hasDate && b.hasDate) return b.t - a.t
+          return a.i - b.i
+        }
+        if (a.hasDate && b.hasDate) return b.t - a.t
+        if (a.hasDate !== b.hasDate) return a.hasDate ? -1 : 1
         return a.i - b.i
       })
-      .map(x => x.r)
-  }, [rows])
+  }, [enriched])
 
   return (
     <>
@@ -124,7 +138,7 @@ export default function MarketIntel() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr className="text-left text-gray-500">
-                  <th className="px-4 py-3 w-[140px]">Published</th>
+                  <th className="px-4 py-3 w-[160px]">Published</th>
                   <th className="px-4 py-3 w-[220px]">Persoon</th>
                   <th className="px-4 py-3">Ticker</th>
                   <th className="px-4 py-3 w-[90px]">Side</th>
@@ -139,14 +153,17 @@ export default function MarketIntel() {
                 {!loading && sorted.length === 0 && (
                   <tr><td className="px-4 py-3 text-gray-500" colSpan={6}>Geen data gevonden.</td></tr>
                 )}
-                {sorted.map((r, i) => {
+                {sorted.map(({ r, hasDate, isRecent }, i) => {
                   const { company, symbol } = splitIssuer(r.ticker)
                   const tvUrl = tradingViewUrl(symbol)
                   const side: 'BUY' | 'SELL' | '—' = inferSide(r.ticker, r.side ?? null)
 
+                  // Render published: "< 2 days ago" voor alles dat <2 dagen oud is of geen datum heeft
+                  const publishedDisplay = isRecent ? '< 2 days ago' : (r.publishedLabel || '—')
+
                   return (
                     <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">{r.publishedLabel || '—'}</td>
+                      <td className="px-4 py-3">{publishedDisplay}</td>
                       <td className="px-4 py-3">{r.person || '—'}</td>
                       <td className="px-4 py-3">
                         <div className="leading-tight">
