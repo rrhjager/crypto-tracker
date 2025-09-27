@@ -22,6 +22,14 @@ function chipCls(t?: string) {
   return 'text-gray-700 bg-gray-100 border-gray-200'
 }
 
+/* === recency helpers === */
+const TWO_DAYS_MS = 48 * 60 * 60 * 1000
+const isUnderTwoDays = (iso?: string | null, now = Date.now()) => {
+  if (!iso) return false
+  const t = Date.parse(iso)
+  return Number.isFinite(t) && (now - t) < TWO_DAYS_MS
+}
+
 export default function CongressTradingPage() {
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(false)
@@ -52,13 +60,38 @@ export default function CongressTradingPage() {
 
   const rows = useMemo(() => (items || []).slice(0, 100), [items])
 
+  /* “now” ticker zodat labels vanzelf omslaan */
+  const [now, setNow] = useState<number>(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000) // elke minuut
+    return () => clearInterval(id)
+  }, [])
+
+  /* verrijk + sorteer (verse eerst, dan nieuwste) */
+  const enrichedRows = useMemo(() => {
+    return rows.map((r) => {
+      const iso = r.transactionDate || r.filingDate || null
+      const fresh = isUnderTwoDays(iso, now)
+      // >>> Wens: toon "> 2 days ago" zolang het jonger dan 48u is
+      const ageLabel = fresh ? '> 2 days ago' : (iso || '—')
+      const ts = iso ? Date.parse(iso) : 0
+      return { ...r, _fresh: fresh, _t: ts, _ageLabel: ageLabel }
+    })
+  }, [rows, now])
+
+  const sortedRows = useMemo(() => {
+    return [...enrichedRows].sort((a: any, b: any) => {
+      if (a._fresh !== b._fresh) return a._fresh ? -1 : 1
+      return (b._t || 0) - (a._t || 0)
+    })
+  }, [enrichedRows])
+
   return (
     <>
       <Head><title>Congress Trading — SignalHub</title></Head>
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">Congress Trading</h1>
-          {/* subheader/verduidelijkende zin verwijderd */}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16 grid lg:grid-cols-[2fr_1fr] gap-4">
@@ -109,9 +142,11 @@ export default function CongressTradingPage() {
                   <tr><td colSpan={8} className="px-4 py-6 text-gray-500">Laden…</td></tr>
                 ) : rows.length === 0 ? (
                   <tr><td colSpan={8} className="px-4 py-6 text-gray-500">Geen resultaten.</td></tr>
-                ) : rows.map((it, i) => (
+                ) : sortedRows.map((it: any, i: number) => (
                   <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-700">{it.transactionDate || it.filingDate || '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">
+                      {it._ageLabel ?? it.transactionDate ?? it.filingDate ?? '—'}
+                    </td>
                     <td className="px-4 py-3 text-gray-900">{it.representative || '—'}</td>
                     <td className="px-4 py-3">
                       <span className="text-xs px-2 py-1 rounded-full border text-gray-700 bg-gray-100 border-gray-200">

@@ -269,7 +269,7 @@ export default function Homepage() {
               <p>
                 <strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected
                 indicators across both crypto and global equities, we deliver a complete market overview that
-                cuts through the noise. Every asset is distilled into a clear stoplight signal — BUY, HOLD, or SELL —
+                cuts through the noise. Every asset is distilled into a clear stoplight signal: BUY, HOLD, or SELL,
                 backed by momentum, volume, sentiment, and market insights.
               </p>
               <p>
@@ -282,7 +282,7 @@ export default function Homepage() {
                 sharper insights, faster decisions, and a more confident investment journey.
               </p>
               <p>
-                <em>Clarity, confidence, and control — all in one clear buy, hold or sell overview.</em>
+                <em>Clarity, confidence, and control. All in one clear buy, hold or sell overview.</em>
               </p>
             </div>
           </div>

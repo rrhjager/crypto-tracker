@@ -65,7 +65,7 @@ export default function About() {
                 enrich the market through informed decisions, and ultimately create a healthier financial ecosystem.
               </p>
               <p>
-                We support the principles of transparency, accountability, and equal access to information — values that
+                We support the principles of transparency, accountability, and equal access to information: values that
                 are essential to the integrity of free and competitive markets.
               </p>
             </div>
