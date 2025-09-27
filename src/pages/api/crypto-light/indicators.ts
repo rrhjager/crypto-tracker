@@ -290,7 +290,9 @@ function symbolToBitfinex(symUSDT: string) {
 }
 
 // ---------- fetch chain for one symbol ----------
-async function fetchMarketDataFor(symUSDT: string): Promise<{ ok: true; data: MarketData; source: string } | { ok: false; error: string }> {
+async function fetchMarketDataFor(symUSDT: string): Promise<
+  { ok: true; data: MarketData; source: string } | { ok: false; error: string }
+> {
   // A) OKX
   const okxId = symbolToOkx(symUSDT)
   if (okxId) {
@@ -355,7 +357,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const got = await fetchMarketDataFor(sym)
         dbg?.used.push({ symbol: sym, ok: got.ok, source: (got as any).source ?? null })
 
-        if (!got.ok) return { symbol: sym, error: got.error }
+        // ✅ TypeScript narrowing fix
+        if (got.ok === false) {
+          return { symbol: sym, error: got.error }
+        }
 
         try {
           const ind = computeIndicators(got.data.closes, got.data.volumes)
