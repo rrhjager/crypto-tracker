@@ -228,6 +228,8 @@ function taScoreFrom(ind: {
   volume?: { ratio: number|null }
 }) {
   const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
+
+  // MA (35%)
   let maScore = 50
   if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
     if (ind.ma.ma50 > ind.ma.ma200) {
@@ -238,11 +240,17 @@ function taScoreFrom(ind: {
       maScore = 40 - (spread / 0.2) * 40
     }
   }
+
+  // RSI (25%)
   let rsiScore = 50
   if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
+
+  // MACD (25%)
   let macdScore = 50
   const hist = ind.macd?.hist
   if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
+
+  // Volume (15%)
   let volScore = 50
   const ratio = ind.volume?.ratio
   if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
@@ -278,12 +286,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const groupResults = await Promise.all(group.map(async (sym) => {
         // aliaslijst
         let aliases = CG_ALIASES[sym]
+
         // heuristische fallback als niets bekend
         if (!aliases || aliases.length === 0) {
           const base = sym.replace(/USDT$/,'')
           const guess = guessIdFromBase(base)
           if (guess) aliases = [guess]
         }
+
         if (!aliases?.length) {
           dbg?.missing.push(sym)
           return { symbol: sym, error: 'No CG mapping' }
@@ -302,6 +312,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             macd: ind.macd,
             volume: ind.volume,
           })
+          // <<— BELANGRIJK: score + status meesturen voor de homepage
           return { symbol: sym, ...ind, score, status }
         } catch (e: any) {
           return { symbol: sym, error: e?.message || 'Compute failed' }
