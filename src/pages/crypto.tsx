@@ -6,6 +6,13 @@ import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
 import ScoreBadge from '@/components/ScoreBadge' // blijft staan, maar we tonen nu status-badge
 
+// ⬇️ NIEUW: shared indicator cache + queue (voor koppeling met detail/achtergrond)
+import {
+  useIndicatorMap,
+  prefetchIndicatorsQueue,
+  type IndResp as StoreIndResp,
+} from '@/state/indicatorCache'
+
 // ---------- helpers ----------
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -52,7 +59,7 @@ type IndResp = {
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  // NIEUW: door backend meegeleverd (optioneel)
+  // door backend meegeleverd (optioneel)
   score?: number
   status?: Status
   error?: string
@@ -328,6 +335,9 @@ function PageInner() {
     })
   }, [])
 
+  // ⬇️ NIEUW: gedeelde store (kan gevuld zijn door detail of prefetch)
+  const indicatorMap = useIndicatorMap()
+
   // Favorieten
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
@@ -364,6 +374,12 @@ function PageInner() {
     return map
   }, [indData])
 
+  // ⬇️ NIEUW: start achtergrond-prefetch per coin (voedt de gedeelde store)
+  useEffect(() => {
+    const syms = baseRows.map(r => r.binance).filter(Boolean) as string[]
+    prefetchIndicatorsQueue(syms, { concurrency: 3, startDelayMs: 300 }).catch(() => {})
+  }, [baseRows])
+
   // ---- Prijs + d/w/m ophalen (Light) ----
   const { data: pxData } = useSWR<{ results: { symbol: string, price: number|null, d: number|null, w: number|null, m: number|null }[] }>(
     symbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
@@ -388,13 +404,23 @@ function PageInner() {
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
-      const ind  = c.binance ? indBySym.get(c.binance) : undefined
+      const binanceSym = c.binance ? String(c.binance).toUpperCase() : ''
 
-      // 1) Probeer serverwaarden (status/score)
+      // 1) Probeer shared store (per-coin prefetch of detailpagina)
+      const storeEntry = binanceSym ? (indicatorMap as any)[binanceSym] as { data: StoreIndResp } | undefined : undefined
+      const storeInd = storeEntry?.data
+
+      // 2) Zo niet: batch-indicators fallback (SWR)
+      const batchInd = c.binance ? indBySym.get(c.binance) : undefined
+
+      // Kies bron
+      const ind = (storeInd || batchInd) as IndResp | undefined
+
+      // a) Gebruik serverstatus/score indien aanwezig
       const serverScore = (ind?.score != null && Number.isFinite(Number(ind.score))) ? Number(ind.score) : null
       const serverStatus = ind?.status as Status | undefined
 
-      // 2) Fallback naar bestaande clientberekening
+      // b) Fallback: clientberekening
       const calc = scoreFromIndicators(ind)
 
       const finalScore = serverScore ?? calc.score
@@ -429,7 +455,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym, indicatorMap])
 
   const updatedAt = (indData || pxData) ? Date.now() : undefined
 
