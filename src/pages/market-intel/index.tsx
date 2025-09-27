@@ -13,6 +13,11 @@ type Item = {
   assetName?: string
   amount?: string
   link?: string
+  // sommige feeds gebruiken andere namen:
+  disclosureDate?: string
+  reportedDate?: string
+  reportedAt?: string
+  date?: string
 }
 
 function chipCls(t?: string) {
@@ -24,10 +29,48 @@ function chipCls(t?: string) {
 
 /* === recency helpers === */
 const TWO_DAYS_MS = 48 * 60 * 60 * 1000
-const isUnderTwoDays = (iso?: string | null, now = Date.now()) => {
-  if (!iso) return false
-  const t = Date.parse(iso)
-  return Number.isFinite(t) && (now - t) < TWO_DAYS_MS
+
+// probeer een bruikbare datum te vinden in het item
+function pickDateString(it: Item): string | null {
+  const tried = [
+    it.transactionDate,
+    it.filingDate,
+    it.disclosureDate,
+    it.reportedDate,
+    it.reportedAt,
+    it.date,
+  ].filter(Boolean) as string[]
+
+  if (tried.length) return tried[0]
+
+  // laatste redmiddel: probeer YYYY-MM-DD of YYYY/MM/DD uit de link te halen
+  if (it.link) {
+    const m = it.link.match(/(\d{4})[-/](\d{2})[-/](\d{2})/)
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  }
+  return null
+}
+
+function parseTs(s?: string | null): number | null {
+  if (!s) return null
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? t : null
+}
+
+function isUnderTwoDays(ts: number | null, now = Date.now()) {
+  return ts != null && (now - ts) < TWO_DAYS_MS
+}
+
+function fmtDisplayDate(orig?: string | null) {
+  if (!orig) return '—'
+  // probeer netjes te formatteren als het ISO-achtig is; anders laat de bronstring staan
+  const t = Date.parse(orig)
+  if (Number.isFinite(t)) {
+    try {
+      return new Date(t).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' })
+    } catch { /* fallthrough */ }
+  }
+  return orig
 }
 
 export default function CongressTradingPage() {
@@ -58,33 +101,30 @@ export default function CongressTradingPage() {
     return () => { aborted = true }
   }, [chamber, symbol])
 
-  const rows = useMemo(() => (items || []).slice(0, 100), [items])
+  const rows = useMemo(() => (items || []).slice(0, 200), [items])
 
-  /* “now” ticker zodat labels vanzelf omslaan */
+  // “now” ticker zodat labels vanzelf omslaan
   const [now, setNow] = useState<number>(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000) // elke minuut
     return () => clearInterval(id)
   }, [])
 
-  /* verrijk + sorteer (verse eerst, dan nieuwste) */
-  const enrichedRows = useMemo(() => {
-    return rows.map((r) => {
-      const iso = r.transactionDate || r.filingDate || null
-      const fresh = isUnderTwoDays(iso, now)
-      // >>> Wens: toon "> 2 days ago" zolang het jonger dan 48u is
-      const ageLabel = fresh ? '> 2 days ago' : (iso || '—')
-      const ts = iso ? Date.parse(iso) : 0
-      return { ...r, _fresh: fresh, _t: ts, _ageLabel: ageLabel }
+  // verrijk + sorteer: verse eerst, daarbinnen nieuwste eerst; daarna rest op datum
+  const sortedRows = useMemo(() => {
+    const mapped = rows.map((r) => {
+      const dateStr = pickDateString(r)
+      const ts = parseTs(dateStr)
+      const fresh = isUnderTwoDays(ts, now)
+      const display = fresh ? '> 2 days ago' : fmtDisplayDate(dateStr)
+      return { ...r, _ts: ts ?? 0, _fresh: fresh, _displayDate: display }
+    })
+
+    return mapped.sort((a: any, b: any) => {
+      if (a._fresh !== b._fresh) return a._fresh ? -1 : 1 // verse bovenaan
+      return (b._ts || 0) - (a._ts || 0)                  // nieuwste eerst
     })
   }, [rows, now])
-
-  const sortedRows = useMemo(() => {
-    return [...enrichedRows].sort((a: any, b: any) => {
-      if (a._fresh !== b._fresh) return a._fresh ? -1 : 1
-      return (b._t || 0) - (a._t || 0)
-    })
-  }, [enrichedRows])
 
   return (
     <>
@@ -140,12 +180,12 @@ export default function CongressTradingPage() {
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
                   <tr><td colSpan={8} className="px-4 py-6 text-gray-500">Laden…</td></tr>
-                ) : rows.length === 0 ? (
+                ) : sortedRows.length === 0 ? (
                   <tr><td colSpan={8} className="px-4 py-6 text-gray-500">Geen resultaten.</td></tr>
                 ) : sortedRows.map((it: any, i: number) => (
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-gray-700">
-                      {it._ageLabel ?? it.transactionDate ?? it.filingDate ?? '—'}
+                      {it._displayDate}
                     </td>
                     <td className="px-4 py-3 text-gray-900">{it.representative || '—'}</td>
                     <td className="px-4 py-3">
