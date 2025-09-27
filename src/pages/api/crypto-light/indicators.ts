@@ -65,7 +65,7 @@ const CG_ALIASES: Record<string, string[]> = {
   THETAUSDT:['theta-token'],
 }
 
-// ========== Kleine helpers ==========
+// ---- kleine TA helpers (geen externe libs) ----
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sma = (arr: number[], win: number): number | null => {
   if (arr.length < win) return null
@@ -117,48 +117,7 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
   return { macd, signal, hist }
 }
 
-// ========== Binance first (multi-host) ==========
-const BINANCE_HOSTS = [
-  'https://api.binance.com',
-  'https://api1.binance.com',
-  'https://api2.binance.com',
-  'https://api3.binance.com',
-]
-const BINANCE_ENABLED = String(process.env.BINANCE_ENABLED ?? '1') !== '0'
-const isBinanceBlocked = (status: number) => [401, 403, 451].includes(status)
-
-async function fetchBinanceDaily(symbol: string, limit = 210): Promise<{ closes: number[]; volumes: number[]; host: string }> {
-  if (!BINANCE_ENABLED) throw new Error('BINANCE_DISABLED')
-
-  let lastErr: any = null
-  for (const host of BINANCE_HOSTS) {
-    try {
-      const url = `${host}/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1d&limit=${limit}`
-      const r = await fetch(url, {
-        headers: {
-          'cache-control': 'no-cache',
-          'user-agent': 'SignalHub/1.0 (+https://signalhub.app)',
-        },
-      })
-      if (!r.ok) {
-        if (isBinanceBlocked(r.status)) throw new Error(`BINANCE ${symbol} BLOCKED ${r.status}`)
-        lastErr = new Error(`BINANCE ${symbol} HTTP ${r.status}`)
-        continue
-      }
-      const rows = (await r.json()) as any[]
-      const closes = rows.map(k => Number(k[4])).filter(Number.isFinite)
-      const volumes = rows.map(k => Number(k[5])).filter(Number.isFinite)
-      if (closes.length === 0) throw new Error(`BINANCE ${symbol} EMPTY`)
-      return { closes, volumes, host }
-    } catch (e) {
-      lastErr = e
-      // probeer volgende host
-    }
-  }
-  throw lastErr ?? new Error(`BINANCE ${symbol} FAILED`)
-}
-
-// ========== CoinGecko fallback ==========
+// ---- CoinGecko fetch (met optionele API key header) ----
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }
 
 function cgHeaders() {
@@ -211,7 +170,7 @@ function guessIdFromBase(base: string): string | null {
   return m[b] ?? null
 }
 
-// ========== Indicatoren berekenen ==========
+// ---- indicatoren berekenen ----
 function computeIndicators(closes: number[], volumes: number[]) {
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
@@ -310,7 +269,6 @@ function chunk<T>(arr: T[], size: number) {
   return out
 }
 
-// ========== API handler ==========
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbolsParam = String(req.query.symbols || '').trim()
@@ -320,47 +278,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
 
-    // batches om rate limits te ontzien
+    // Verdeel in batches van 5 om rate-limits te ontzien
     const batches = chunk(symbols, 5)
     const results: any[] = []
 
     for (const group of batches) {
       const groupResults = await Promise.all(group.map(async (sym) => {
-        // 0) Probeer eerst BINANCE (indien enabled)
-        if (BINANCE_ENABLED) {
-          try {
-            const b = await fetchBinanceDaily(sym, 210)
-            const ind = computeIndicators(b.closes, b.volumes)
-            const { score, status } = taScoreFrom({ ma: ind.ma, rsi: ind.rsi, macd: ind.macd, volume: ind.volume })
-            dbg?.used.push({ symbol: sym, source: 'binance', ok: true, host: b.host })
-            return { symbol: sym, ...ind, score, status }
-          } catch (e: any) {
-            dbg?.used.push({ symbol: sym, source: 'binance', ok: false, error: e?.message || String(e) })
-            // ga door naar CoinGecko fallback
-          }
-        } else {
-          dbg?.used.push({ symbol: sym, source: 'binance', ok: false, error: 'BINANCE_DISABLED' })
-        }
-
-        // 1) CoinGecko via aliassen
+        // aliaslijst
         let aliases = CG_ALIASES[sym]
+
+        // heuristische fallback als niets bekend
         if (!aliases || aliases.length === 0) {
           const base = sym.replace(/USDT$/,'')
           const guess = guessIdFromBase(base)
           if (guess) aliases = [guess]
         }
+
         if (!aliases?.length) {
           dbg?.missing.push(sym)
           return { symbol: sym, error: 'No CG mapping' }
         }
 
-        const cg = await fetchMarketChartWithAliases(aliases)
-        dbg?.used.push({ symbol: sym, source: 'coingecko', ok: cg.ok, tried: aliases, chosen: (cg as any).id ?? null, error: (cg as any).error || null })
-        if (!cg.ok) return { symbol: sym, error: (cg as any).error || 'Fetch failed' }
+        const got = await fetchMarketChartWithAliases(aliases)
+        dbg?.used.push({ symbol: sym, ok: got.ok, tried: aliases, chosen: (got as any).id ?? null })
+
+        if (!got.ok) return { symbol: sym, error: (got as any).error || 'Fetch failed' }
 
         try {
-          const ind = computeIndicators(cg.closes, cg.volumes)
-          const { score, status } = taScoreFrom({ ma: ind.ma, rsi: ind.rsi, macd: ind.macd, volume: ind.volume })
+          const ind = computeIndicators(got.closes, got.volumes)
+          const { score, status } = taScoreFrom({
+            ma: ind.ma,
+            rsi: ind.rsi,
+            macd: ind.macd,
+            volume: ind.volume,
+          })
+          // <<— BELANGRIJK: score + status meesturen voor de homepage
           return { symbol: sym, ...ind, score, status }
         } catch (e: any) {
           return { symbol: sym, error: e?.message || 'Compute failed' }
