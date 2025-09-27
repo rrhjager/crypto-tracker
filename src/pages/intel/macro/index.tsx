@@ -1,7 +1,7 @@
-// src/pages/api/market/macro/index.ts
-import type { NextApiRequest, NextApiResponse } from 'next'
-
-export const config = { runtime: 'nodejs' }
+// src/pages/intel/macro/index.tsx
+import Head from 'next/head'
+import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 
 type Row = {
   dateISO: string
@@ -9,132 +9,128 @@ type Row = {
   event: string
   impact: 'low'|'medium'|'high'
   region: string
-  sourceUrl: string
+  sourceUrl?: string
 }
 
-type Indicator = {
-  name: string
-  seriesId: string
-  impact: 'low'|'medium'|'high'
-  region?: string
-}
+export default function MacroCalendar() {
+  const [rows, setRows] = useState<Row[]>([])
+  const [err, setErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [hint, setHint] = useState<string | null>(null)
+  const [detail, setDetail] = useState<string | null>(null)
 
-const INDICATORS: Indicator[] = [
-  { name: 'US CPI (YoY)',              seriesId: 'CPIAUCSL', impact: 'high'   },
-  { name: 'US Core CPI (YoY)',         seriesId: 'CPILFESL', impact: 'high'   },
-  { name: 'US PCE (YoY)',              seriesId: 'PCEPI',    impact: 'high'   },
-  { name: 'US Core PCE (YoY)',         seriesId: 'PCEPILFE', impact: 'high'   },
-  { name: 'US Nonfarm Payrolls',       seriesId: 'PAYEMS',   impact: 'high'   },
-  { name: 'US Retail Sales (MoM)',     seriesId: 'RSAFS',    impact: 'medium' },
-  { name: 'US PPI (YoY)',              seriesId: 'PPIACO',   impact: 'medium' },
-  { name: 'US Initial Jobless Claims', seriesId: 'ICSA',     impact: 'medium' },
-  { name: 'U. Michigan Sentiment',     seriesId: 'UMCSENT',  impact: 'low'    },
-]
+  const apiUrl = useMemo(() => `/api/market/macro?days=120`, [])
 
-const FRED_BASE = 'https://api.stlouisfed.org/fred'
-const REGION = 'United States'
-
-const iso = (d: Date) => d.toISOString().slice(0,10)
-const nl = (isoStr: string) =>
-  new Date(isoStr + 'T00:00:00Z').toLocaleDateString('nl-NL', { day:'2-digit', month:'short', year:'numeric' })
-
-async function fetchJSON(url: string) {
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
-  return r.json()
-}
-
-async function getReleaseIdForSeries(apiKey: string, seriesId: string): Promise<number | null> {
-  const u = `${FRED_BASE}/series/release?series_id=${encodeURIComponent(seriesId)}&api_key=${apiKey}&file_type=json`
-  const j = await fetchJSON(u)
-  const rel = (Array.isArray(j?.releases) ? j.releases[0] : j?.release) || null
-  return (rel && typeof rel.id === 'number') ? rel.id : null
-}
-
-async function getFutureReleaseDates(apiKey: string, releaseId: number, fromISO: string, toISO: string): Promise<string[]> {
-  const paths = ['release/dates', 'releases/dates']
-  const paramsVariants = [
-    `start=${fromISO}&end=${toISO}`,
-    `realtime_start=${fromISO}&realtime_end=${toISO}`,
-  ]
-  for (const p of paths) {
-    for (const q of paramsVariants) {
+  useEffect(() => {
+    let aborted = false
+    ;(async () => {
       try {
-        const url = `${FRED_BASE}/${p}?release_id=${releaseId}&include_release_dates_with_no_data=true&${q}&api_key=${apiKey}&file_type=json&limit=1000`
-        const j = await fetchJSON(url)
-        const arr = Array.isArray(j?.release_dates) ? j.release_dates : []
-        const out = arr
-          .map((x: any) => String(x?.date || '').slice(0,10))
-          .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-          .filter((d: string) => d >= fromISO && d <= toISO)
-        if (out.length) return out
-      } catch {
-        // try next variant
+        setErr(null); setHint(null); setDetail(null); setLoading(true)
+        const r = await fetch(apiUrl, { cache: 'no-store' })
+        let j: any = {}
+        try { j = await r.json() } catch {}
+        if (!r.ok) {
+          // Niet meer hard crashen; toon nette fout+hint
+          if (!aborted) {
+            setErr(`HTTP ${r.status}`)
+            if (j?.hint) setHint(String(j.hint))
+            if (j?.detail) setDetail(String(j.detail))
+            setRows([])
+          }
+          return
+        }
+        if (!aborted) {
+          setRows(Array.isArray(j.items) ? j.items : [])
+          if (j?.hint) setHint(String(j.hint))
+          if (j?.detail) setDetail(String(j.detail))
+        }
+      } catch (e: any) {
+        if (!aborted) {
+          setErr(String(e?.message || e))
+          setRows([])
+        }
+      } finally {
+        if (!aborted) setLoading(false)
       }
-    }
-  }
-  return []
-}
+    })()
+    return () => { aborted = true }
+  }, [apiUrl])
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    // ✅ Key: uit env of desnoods uit query (handig voor testen)
-    const apiKey = String(req.query.apiKey || process.env.FRED_API_KEY || '')
+  const chip = (impact: Row['impact']) =>
+    impact === 'high'   ? 'bg-red-600/15 text-red-700 border-red-600/30' :
+    impact === 'medium' ? 'bg-amber-500/15 text-amber-700 border-amber-500/30' :
+                          'bg-gray-500/15 text-gray-700 border-gray-500/30'
 
-    const daysQ = Number(req.query.days)
-    const windowDays = Number.isFinite(daysQ) ? Math.min(Math.max(daysQ, 7), 180) : 120
+  return (
+    <>
+      <Head><title>Macro Calendar — SignalHub</title></Head>
 
-    const now = new Date()
-    const fromISO = iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())))
-    const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-    to.setUTCDate(to.getUTCDate() + windowDays)
-    const toISO = iso(to)
+      <main className="min-h-screen">
+        <section className="max-w-6xl mx-auto px-4 pt-16 pb-4">
+          <h1 className="hero">Macro Calendar</h1>
 
-    // ❗ Als er geen API key is, géén 400 meer → 200 met hint,
-    // zodat de frontend netjes kan tonen wat er mis is i.p.v. te crashen.
-    if (!apiKey) {
-      res.setHeader('Cache-Control', 'no-store')
-      return res.status(200).json({
-        items: [],
-        hint: 'FRED_API_KEY ontbreekt (haal gratis key op fred.stlouisfed.org en zet in Vercel env). Je kunt ook tijdelijk ?apiKey=TESTKEY in de URL testen.',
-        debug: { fromISO, toISO, windowDays }
-      })
-    }
+          {/* 🔎 Debug-balk */}
+          <div className="mt-2 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2">
+            <div><span className="font-semibold">API:</span> <code>{apiUrl}</code></div>
+            {hint && <div className="mt-1"><span className="font-semibold">Hint:</span> {hint}</div>}
+            {detail && <div className="mt-1"><span className="font-semibold">Detail:</span> {detail}</div>}
+            {err && <div className="mt-1 text-red-600"><span className="font-semibold">Error:</span> {err}</div>}
+          </div>
+        </section>
 
-    const rows: Row[] = []
+        <section className="max-w-6xl mx-auto px-4 pb-16">
+          <div className="table-card p-0 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr className="text-left text-gray-500">
+                  <th className="px-4 py-3 w-[140px]">Datum</th>
+                  <th className="px-4 py-3">Event</th>
+                  <th className="px-4 py-3 w-[160px]">Impact</th>
+                  <th className="px-4 py-3 w-[160px]">Regio</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {loading && (
+                  <tr><td className="px-4 py-3 text-gray-500" colSpan={4}>Laden…</td></tr>
+                )}
+                {!loading && rows.length === 0 && (
+                  <tr><td className="px-4 py-3 text-gray-500" colSpan={4}>Geen events gevonden.</td></tr>
+                )}
+                {rows.map((r, i) => (
+                  <tr key={`${r.dateISO}-${r.event}-${i}`} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">{r.dateLabel}</td>
+                    <td className="px-4 py-3">
+                      {r.sourceUrl ? (
+                        <a
+                          href={r.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline"
+                          title="Bekijk op FRED (met link naar officiële bron/press release)"
+                        >
+                          {r.event}
+                        </a>
+                      ) : (
+                        r.event
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-block text-xs font-semibold px-2 py-1 rounded-full border ${chip(r.impact)}`}>
+                        {r.impact.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">{r.region}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-    await Promise.all(INDICATORS.map(async ind => {
-      try {
-        const relId = await getReleaseIdForSeries(apiKey, ind.seriesId)
-        if (!relId) return
-        const dates = await getFutureReleaseDates(apiKey, relId, fromISO, toISO)
-        const fredReleaseUrl = `https://fred.stlouisfed.org/release?rid=${relId}`
-        dates.forEach(d => rows.push({
-          dateISO: d,
-          dateLabel: nl(d),
-          event: ind.name,
-          impact: ind.impact,
-          region: ind.region || REGION,
-          sourceUrl: fredReleaseUrl,
-        }))
-      } catch {
-        // skip this indicator on error
-      }
-    }))
-
-    rows.sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0))
-
-    res.setHeader('Cache-Control', 's-maxage=900, stale-while-revalidate=3600')
-    return res.status(200).json({
-      items: rows,
-      hint: `FRED release calendar · ${rows.length} events · window=${windowDays}d`,
-      debug: { fromISO, toISO, windowDays }
-    })
-  } catch (e: any) {
-    return res.status(200).json({
-      items: [],
-      hint: 'FRED fetch failed',
-      detail: String(e?.message || e)
-    })
-  }
+          <div className="mt-4">
+            <Link href="/" className="btn">← Terug</Link>
+          </div>
+        </section>
+      </main>
+    </>
+  )
 }
