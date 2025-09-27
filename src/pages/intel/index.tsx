@@ -70,6 +70,8 @@ function parseDutchDate(label?: string): number {
   return new Date(Date.UTC(yyyy, mm, dd)).getTime()
 }
 
+const TWO_DAYS_MS = 48 * 60 * 60 * 1000
+
 export default function MarketIntel() {
   const [rows, setRows] = useState<Row[]>([])
   const [err, setErr] = useState<string | null>(null)
@@ -93,26 +95,32 @@ export default function MarketIntel() {
     return () => { aborted = true }
   }, [])
 
-  // ▶ Sortering: nieuwste bovenaan (val terug op DOM-volgorde)
+  // “now” ticker so labels flip automatically after 48h
+  const [now, setNow] = useState<number>(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000) // every minute
+    return () => clearInterval(id)
+  }, [])
+
+  // ▶ Enrich + sort: fresh (<48h) first, newest first; then the rest by date desc
   const sorted = useMemo(() => {
     return rows
       .map((r, i) => {
-        // 1) publishedISO (voorkeur)
+        // 1) prefer ISO
         const tISO = r.publishedISO ? Date.parse(r.publishedISO) : NaN
-        // 2) anders NL-label
-        const tLabel = Number.isFinite(tISO) ? tISO : parseDutchDate(r.publishedLabel)
-        return { r, i, t: tLabel }
+        // 2) fallback to NL label
+        const t = Number.isFinite(tISO) ? tISO : parseDutchDate(r.publishedLabel)
+        const fresh = Number.isFinite(t) && (now - t) < TWO_DAYS_MS
+        const display = fresh ? '> 2 days ago' : (r.publishedLabel || '—')
+        return { r, i, t: Number.isFinite(t) ? t : 0, fresh, display }
       })
       .sort((a, b) => {
-        const aHas = Number.isFinite(a.t)
-        const bHas = Number.isFinite(b.t)
-        if (aHas && bHas) return b.t - a.t          // beiden datum → desc
-        if (aHas && !bHas) return -1                // met datum eerst
-        if (!aHas && bHas) return 1
-        return a.i - b.i                            // geen datum → oorspronkelijke volgorde
+        if (a.fresh !== b.fresh) return a.fresh ? -1 : 1      // fresh first
+        if (a.t !== b.t) return b.t - a.t                      // newest first
+        return a.i - b.i                                       // stable
       })
-      .map(x => x.r)
-  }, [rows])
+      .map(x => ({ ...x.r, _display: x.display }))
+  }, [rows, now])
 
   return (
     <>
@@ -143,14 +151,14 @@ export default function MarketIntel() {
                 {!loading && sorted.length === 0 && (
                   <tr><td className="px-4 py-3 text-gray-500" colSpan={6}>Geen data gevonden.</td></tr>
                 )}
-                {sorted.map((r, i) => {
+                {sorted.map((r: any, i: number) => {
                   const { company, symbol } = splitIssuer(r.ticker)
                   const tvUrl = tradingViewUrl(symbol)
                   const side: 'BUY' | 'SELL' | '—' = inferSide(r.ticker, r.side ?? null)
 
                   return (
                     <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">{r.publishedLabel || '—'}</td>
+                      <td className="px-4 py-3">{r._display || r.publishedLabel || '—'}</td>
                       <td className="px-4 py-3">{r.person || '—'}</td>
                       <td className="px-4 py-3">
                         <div className="leading-tight">
