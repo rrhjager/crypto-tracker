@@ -7,7 +7,7 @@ export default function Footer() {
   const a = 'text-gray-300 hover:underline'
 
   return (
-    <footer className="mt-16 border-t border-gray-800 bg-gray-900">
+    <footer className="mt-16 border-t border-gray-800" style={{ backgroundColor: '#1a1a1a' }}>
       <div className="max-w-6xl mx-auto px-4 py-10">
         {/* top */}
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-5">
@@ -19,7 +19,7 @@ export default function Footer() {
             </p>
           </div>
 
-          {/* resources / site */}
+          {/* resources */}
           <div>
             <div className={head}>Resources</div>
             <ul className="mt-3 space-y-2 text-sm">
@@ -57,7 +57,7 @@ export default function Footer() {
             </ul>
           </div>
 
-          {/* disclaimer column */}
+          {/* disclaimer */}
           <div>
             <div className={head}>Disclaimer</div>
             <ul className="mt-3 space-y-2 text-sm">
@@ -74,7 +74,6 @@ export default function Footer() {
           <div className="text-sm text-gray-400">
             © {year} SignalHub. All rights reserved.
           </div>
-          {/* right text intentionally removed */}
         </div>
       </div>
     </footer>
