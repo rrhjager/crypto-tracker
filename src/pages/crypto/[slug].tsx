@@ -23,12 +23,6 @@ const pill = (s: Status) =>
   s === 'BUY'  ? 'badge-buy'  :
   s === 'SELL' ? 'badge-sell' : 'badge-hold'
 
-// Light-grey pill style for action links/buttons
-const lightPill =
-  "inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm " +
-  "bg-white/10 text-white/80 ring-1 ring-white/15 " +
-  "hover:bg-white/15 hover:text-white transition";
-
 function statusFromOverall(score: number): Status {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
@@ -196,7 +190,7 @@ function PageInner() {
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="hero">Niet gevonden</h1>
         <p className="sub mb-6">Deze coin bestaat niet in je COINS-lijst.</p>
-        <Link href="/crypto" className={lightPill}>← Back to Crypto (light)</Link>
+        <Link href="/crypto" className="btn">← Terug naar Crypto (light)</Link>
       </main>
     )
   }
@@ -328,10 +322,10 @@ function PageInner() {
         </div>
       </section>
 
-      {/* knoppen (EN + lichtgrijs) */}
+      {/* knoppen */}
       <section className="mt-6 flex gap-3">
-        <Link href="/crypto" className={lightPill}>← Back to Crypto (light)</Link>
-        <Link href="/" className={lightPill}>Go to homepage</Link>
+        <Link href="/crypto" className="btn">← Terug naar Crypto (light)</Link>
+        <Link href="/" className="btn btn-secondary">Naar homepage</Link>
       </section>
     </main>
   )

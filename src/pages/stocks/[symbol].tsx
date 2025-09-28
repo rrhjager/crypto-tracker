@@ -178,7 +178,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : macd en macd.macd != null en macd.signal != null
+                  : macd && macd.macd != null && macd.signal != null
                     ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
                     : 'Onvoldoende data voor MACD'
             }
@@ -193,7 +193,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : vol20 en vol20.volume != null en vol20.avg20 != null
+                  : vol20 && vol20.volume != null && vol20.avg20 != null
                     ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
                     : 'Onvoldoende data voor volume'
             }
@@ -201,9 +201,8 @@ export default function StockDetail() {
         </div>
 
         <div className="flex gap-3">
-          {/* ⬇️ Alleen deze twee knoppen aangepast: Engels + grijze stijl */}
-          <Link href="/stocks" className="btn btn-secondary">← Back to AEX list</Link>
-          <Link href="/" className="btn btn-secondary">Go to homepage</Link>
+          <Link href="/stocks" className="btn">← Terug naar AEX-lijst</Link>
+          <Link href="/" className="btn">Naar homepage</Link>
         </div>
       </div>
     </main>
