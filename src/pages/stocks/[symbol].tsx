@@ -199,16 +199,16 @@ export default function StockDetail() {
         </div>
 
         <div className="flex gap-3">
-          {/* Engels + hard forced grey (overrulet blauwe .btn) */}
+          {/* custom grijze buttons (geen .btn classes) */}
           <Link
             href="/stocks"
-            className="btn btn-secondary !bg-gray-200 !text-gray-900 !border-gray-300 !hover:bg-gray-300"
+            className="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-gray-200 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-300 shadow-sm"
           >
             ← Back to AEX list
           </Link>
           <Link
             href="/"
-            className="btn btn-secondary !bg-gray-200 !text-gray-900 !border-gray-300 !hover:bg-gray-300"
+            className="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-gray-200 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-300 shadow-sm"
           >
             Go to homepage
           </Link>
