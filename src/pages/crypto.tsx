@@ -500,10 +500,7 @@ function PageInner() {
           <h1 className="hero">Crypto Tracker (light)</h1>
           <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
         </div>
-        <nav className="flex items-center gap-4">
-          <Link href="/indicators" className="text-sky-400 hover:text-sky-300 text-sm font-medium">Uitleg indicatoren</Link>
-          <Link href="/disclaimer" className="text-sky-400 hover:text-sky-300 text-sm font-medium">Disclaimer</Link>
-        </nav>
+        {/* Navigatieknoppen verwijderd (Uitleg indicatoren / Disclaimer) */}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
