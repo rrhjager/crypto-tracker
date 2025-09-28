@@ -78,7 +78,7 @@ async function getFutureReleaseDates(apiKey: string, releaseId: number, fromISO:
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // ✅ Key: uit env of desnoods uit query (handig voor testen)
+    // Key uit query (testen) of env (prod)
     const apiKey = String(req.query.apiKey || process.env.FRED_API_KEY || '')
 
     const daysQ = Number(req.query.days)
@@ -90,51 +90,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     to.setUTCDate(to.getUTCDate() + windowDays)
     const toISO = iso(to)
 
-    // ❗ Als er geen API key is, géén 400 meer → 200 met hint,
-    // zodat de frontend netjes kan tonen wat er mis is i.p.v. te crashen.
+    // Geen key? — geen 400 meer: 200 met hint voor nette UI
     if (!apiKey) {
       res.setHeader('Cache-Control', 'no-store')
       return res.status(200).json({
         items: [],
-        hint: 'FRED_API_KEY ontbreekt (haal gratis key op fred.stlouisfed.org en zet in Vercel env). Je kunt ook tijdelijk ?apiKey=TESTKEY in de URL testen.',
-        debug: { fromISO, toISO, windowDays }
+        hint: 'FRED_API_KEY ontbreekt (zet in Vercel env). Eventueel tijdelijk testen met ?apiKey=... aan de URL.',
+        debug: { fromISO, toISO, windowDays },
       })
     }
 
     const rows: Row[] = []
 
-    await Promise.all(INDICATORS.map(async ind => {
-      try {
-        const relId = await getReleaseIdForSeries(apiKey, ind.seriesId)
-        if (!relId) return
-        const dates = await getFutureReleaseDates(apiKey, relId, fromISO, toISO)
-        const fredReleaseUrl = `https://fred.stlouisfed.org/release?rid=${relId}`
-        dates.forEach(d => rows.push({
-          dateISO: d,
-          dateLabel: nl(d),
-          event: ind.name,
-          impact: ind.impact,
-          region: ind.region || REGION,
-          sourceUrl: fredReleaseUrl,
-        }))
-      } catch {
-        // skip this indicator on error
-      }
-    }))
+    await Promise.all(
+      INDICATORS.map(async (ind) => {
+        try {
+          const relId = await getReleaseIdForSeries(apiKey, ind.seriesId)
+          if (!relId) return
+          const dates = await getFutureReleaseDates(apiKey, relId, fromISO, toISO)
+          const fredReleaseUrl = `https://fred.stlouisfed.org/release?rid=${relId}`
+          dates.forEach((d) =>
+            rows.push({
+              dateISO: d,
+              dateLabel: nl(d),
+              event: ind.name,
+              impact: ind.impact,
+              region: ind.region || REGION,
+              sourceUrl: fredReleaseUrl,
+            }),
+          )
+        } catch {
+          // skip this indicator on error
+        }
+      }),
+    )
 
-    rows.sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0))
+    // ✅ DEDUPE op (event, dateISO)
+    const seen = new Set<string>()
+    const uniq: Row[] = []
+    for (const r of rows) {
+      const key = `${r.event}__${r.dateISO}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      uniq.push(r)
+    }
+
+    // sorteer op datum oplopend
+    uniq.sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0))
 
     res.setHeader('Cache-Control', 's-maxage=900, stale-while-revalidate=3600')
     return res.status(200).json({
-      items: rows,
-      hint: `FRED release calendar · ${rows.length} events · window=${windowDays}d`,
-      debug: { fromISO, toISO, windowDays }
+      items: uniq,
+      hint: `FRED release calendar · ${uniq.length} events · window=${windowDays}d`,
+      debug: { fromISO, toISO, windowDays },
     })
   } catch (e: any) {
     return res.status(200).json({
       items: [],
       hint: 'FRED fetch failed',
-      detail: String(e?.message || e)
+      detail: String(e?.message || e),
     })
   }
 }
