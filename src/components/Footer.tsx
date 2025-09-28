@@ -10,7 +10,7 @@ export default function Footer() {
     <footer className="mt-16 border-t border-gray-800 bg-neutral-900">
       <div className="max-w-6xl mx-auto px-4 py-10">
         {/* top */}
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-5">
           {/* brand */}
           <div className="col-span-1">
             <div className="text-lg font-semibold text-gray-100">SignalHub</div>
@@ -55,6 +55,17 @@ export default function Footer() {
               <li><Link className={a} href="/hangseng">Hang Seng</Link></li>
               <li><Link className={a} href="/sensex">Sensex</Link></li>
             </ul>
+          </div>
+
+          {/* disclaimer column */}
+          <div>
+            <div className={head}>Disclaimer</div>
+            <ul className="mt-3 space-y-2 text-sm">
+              <li><Link className={a} href="/disclaimer">Read disclaimer</Link></li>
+            </ul>
+            <p className="mt-3 text-xs text-gray-400">
+              Research Only: not investment advice.
+            </p>
           </div>
         </div>
 
