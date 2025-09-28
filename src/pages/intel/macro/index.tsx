@@ -16,7 +16,7 @@ export default function MacroCalendar() {
   const [rows, setRows] = useState<Row[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [hint, setHint] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)   // blijft bestaan, maar niet meer getoond
   const [detail, setDetail] = useState<string | null>(null)
 
   const apiUrl = useMemo(() => `/api/market/macro?days=120`, [])
@@ -30,7 +30,6 @@ export default function MacroCalendar() {
         let j: any = {}
         try { j = await r.json() } catch {}
         if (!r.ok) {
-          // Niet meer hard crashen; toon nette fout+hint
           if (!aborted) {
             setErr(`HTTP ${r.status}`)
             if (j?.hint) setHint(String(j.hint))
@@ -68,14 +67,11 @@ export default function MacroCalendar() {
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-4">
           <h1 className="hero">Macro Calendar</h1>
-
-          {/* 🔎 Debug-balk */}
-          <div className="mt-2 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2">
-            <div><span className="font-semibold">API:</span> <code>{apiUrl}</code></div>
-            {hint && <div className="mt-1"><span className="font-semibold">Hint:</span> {hint}</div>}
-            {detail && <div className="mt-1"><span className="font-semibold">Detail:</span> {detail}</div>}
-            {err && <div className="mt-1 text-red-600"><span className="font-semibold">Error:</span> {err}</div>}
-          </div>
+          {err && (
+            <div className="mt-2 text-sm text-red-600">
+              Fout bij laden: {err}{detail ? ` — ${detail}` : ''}
+            </div>
+          )}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
