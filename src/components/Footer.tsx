@@ -7,7 +7,7 @@ export default function Footer() {
   const a = 'text-gray-300 hover:underline'
 
   return (
-    <footer className="mt-16 border-t border-gray-800 bg-neutral-900">
+    <footer className="mt-16 border-t border-gray-800 bg-gray-900">
       <div className="max-w-6xl mx-auto px-4 py-10">
         {/* top */}
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-5">
@@ -70,13 +70,11 @@ export default function Footer() {
         </div>
 
         {/* bottom */}
-        <div className="mt-10 pt-6 border-t border-gray-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="mt-10 pt-6 border-t border-gray-800 flex items-center justify-between">
           <div className="text-sm text-gray-400">
             © {year} SignalHub. All rights reserved.
           </div>
-          <div className="text-sm text-gray-400">
-            Made with ❤️ for market research.
-          </div>
+          {/* right text intentionally removed */}
         </div>
       </div>
     </footer>
