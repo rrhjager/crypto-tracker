@@ -119,11 +119,11 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : ma
-                    ? (ma.ma50 != null && ma.ma200 != null
-                        ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
-                        : 'Nog onvoldoende data om MA50/MA200 te bepalen')
-                    : '—'
+                  : ma && ma.ma50 != null && ma.ma200 != null
+                    ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
+                    : ma
+                      ? 'Nog onvoldoende data om MA50/MA200 te bepalen'
+                      : '—'
             }
           />
           <StockIndicatorCard
@@ -160,7 +160,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : vol20 en vol20.volume != null en vol20.avg20 != null
+                  : vol20 && vol20.volume != null && vol20.avg20 != null
                     ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
                     : 'Onvoldoende data voor volume'
             }
