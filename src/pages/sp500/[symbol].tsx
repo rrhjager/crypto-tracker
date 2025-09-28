@@ -161,9 +161,10 @@ export default function SpStockDetail() {
           />
         </div>
 
+        {/* Alleen knoppen aangepast (Engels + grijze stijl) */}
         <div className="flex gap-3">
-          <Link href="/sp500" className="btn">← Terug naar S&amp;P 500-lijst</Link>
-          <Link href="/" className="btn">Naar homepage</Link>
+          <Link href="/sp500" className="btn btn-secondary">← Back to S&amp;P 500 list</Link>
+          <Link href="/" className="btn btn-secondary">Go to homepage</Link>
         </div>
       </div>
     </main>
