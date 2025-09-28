@@ -133,8 +133,8 @@ export default function Homepage() {
     }
     ;[
       '/api/coin/top-movers',
-      '/api/news/google?topic=crypto',
-      '/api/news/google?topic=equities',
+      '/api/news/google?q=crypto',
+      '/api/news/google?q=equities',
     ].forEach(prime)
     return () => { aborted = true }
   }, [])
@@ -203,21 +203,25 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- News (Google News RSS via API) — thumbnails verwijderd -------- */
+  /* -------- News (Google News RSS via /api/news/google?q=...) -------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
     let aborted=false
     async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
       try{
-        const r = await fetch(`/api/news/google?topic=${topic}`, { cache:'no-store' })
+        const query =
+          topic === 'crypto'
+            ? 'crypto OR bitcoin OR ethereum OR blockchain'
+            : 'equities OR stocks OR stock market OR aandelen OR beurs'
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}`, { cache:'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
-          title: x.title || x.headline || '',
-          url: x.url || x.link,
-          source: x.source || x.publisher || '',
-          published: x.published || x.time || x.date || '',
+          title: x.title || '',
+          url: x.link,                // API returns `link`
+          source: x.source || '',
+          published: x.pubDate || '',
           image: null,
         }))
         if (!aborted) setter(arr)
@@ -427,7 +431,7 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Equities News</h2>
             <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
           </div>
-          <ul className="grid gap-2">
+        <ul className="grid gap-2">
             {newsEq.length===0 ? <li className="text-white/60">Geen nieuws…</li> :
               newsEq.map((n,i)=>(
                 <li key={i} className="leading-tight">
