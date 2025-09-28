@@ -146,11 +146,9 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : ma
-                    ? (ma.ma50 != null && ma.ma200 != null
-                        ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
-                        : 'Nog onvoldoende data om MA50/MA200 te bepalen')
-                    : '—'
+                  : (ma?.ma50 != null && ma?.ma200 != null)
+                    ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
+                    : 'Nog onvoldoende data om MA50/MA200 te bepalen'
             }
           />
 
@@ -163,7 +161,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : rsi && rsi.rsi != null
+                  : (rsi?.rsi != null)
                     ? `RSI: ${rsi.rsi.toFixed(2)}`
                     : 'Onvoldoende data voor RSI'
             }
@@ -178,7 +176,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : macd && macd.macd != null && macd.signal != null
+                  : (macd?.macd != null && macd?.signal != null)
                     ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
                     : 'Onvoldoende data voor MACD'
             }
@@ -193,7 +191,7 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : vol20 && vol20.volume != null && vol20.avg20 != null
+                  : (vol20?.volume != null && vol20?.avg20 != null)
                     ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
                     : 'Onvoldoende data voor volume'
             }
