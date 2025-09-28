@@ -151,9 +151,21 @@ export default function FTSEStockDetail() {
           />
         </div>
 
+        {/* Grijze, simpele knoppen — inline Tailwind */}
         <div className="flex gap-3">
-          <Link href="/ftse100" className="btn">← Terug naar FTSE 100</Link>
-          <Link href="/" className="btn">Naar homepage</Link>
+          <Link
+            href="/ftse100"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            <span aria-hidden>←</span>
+            <span>Back to FTSE 100 list</span>
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>

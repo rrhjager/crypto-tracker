@@ -121,9 +121,21 @@ export default function StockDetail() {
           />
         </div>
 
+        {/* Grijze, simpele knoppen — inline Tailwind */}
         <div className="flex gap-3">
-          <Link href="/dax" className="btn">← Terug naar DAX-lijst</Link>
-          <Link href="/" className="btn">Naar homepage</Link>
+          <Link
+            href="/dax"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            <span aria-hidden>←</span>
+            <span>Back to DAX list</span>
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>

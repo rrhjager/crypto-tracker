@@ -1,3 +1,4 @@
+// src/pages/sensex/[symbol].tsx
 import { useRouter } from 'next/router'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
@@ -159,16 +160,28 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : vol20 && vol20.volume != null && vol20.avg20 != null
+                  : vol20 en vol20.volume != null en vol20.avg20 != null
                     ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
                     : 'Onvoldoende data voor volume'
             }
           />
         </div>
 
+        {/* Grijze, simpele knoppen — consistent met andere pagina's */}
         <div className="flex gap-2.5">
-          <Link href="/sensex" className="btn text-[13px]">← Terug naar lijst</Link>
-          <Link href="/" className="btn text-[13px]">Naar homepage</Link>
+          <Link
+            href="/sensex"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            <span aria-hidden>←</span>
+            <span>Back to Sensex list</span>
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>
