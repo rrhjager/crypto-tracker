@@ -3,7 +3,7 @@ import Link from 'next/link'
 import Head from 'next/head'
 
 export default function DisclaimerPage() {
-  const today = new Date().toLocaleDateString('nl-NL', {
+  const today = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -16,145 +16,134 @@ export default function DisclaimerPage() {
       </Head>
 
       <main className="p-6 max-w-6xl mx-auto">
-        {/* Topbar (zelfde opbouw als indicators) */}
+        {/* Topbar */}
         <div className="mb-6 flex items-center justify-between">
-          <Link href="/" className="link">← Terug</Link>
-          <Link href="/" className="link text-sky-400 hover:text-sky-300">
-            Naar overzicht
-          </Link>
+          <Link href="/" className="link">← Back</Link>
+          {/* Removed the right-side "Naar overzicht" button */}
         </div>
 
         {/* Header */}
         <header className="mb-6">
           <h1 className="hero">Disclaimer</h1>
           <p className="text-white/70 text-sm mt-2">
-            Laatst bijgewerkt: {today}
+            Last updated: {today}
           </p>
         </header>
 
-        {/* Inhoud in een table-card, met duidelijke secties */}
+        {/* Content */}
         <section className="table-card">
           <div className="space-y-5">
             <div className="space-y-2">
-              <h3 className="font-bold">Geen financieel advies</h3>
+              <h3 className="font-bold">No Financial Advice</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                De informatie, signalen en indicatoren op deze website zijn uitsluitend bedoeld voor informatieve en educatieve
-                doeleinden. Niets op deze site is (of mag worden opgevat als) financieel advies, beleggingsadvies, handelsadvies,
-                juridisch advies of belastingadvies.
+                The information, signals, and indicators on this website are provided for informational and educational
+                purposes only. Nothing on this site constitutes (or should be construed as) financial, investment,
+                trading, legal, or tax advice.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Geen aanbeveling of klantrelatie</h3>
+              <h3 className="font-bold">No Recommendation or Client Relationship</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                BUY/HOLD/SELL-labels, scores, heatmaps, prijsinformatie of andere outputs vormen geen persoonlijke aanbeveling of
-                uitnodiging tot aan- of verkoop van enig instrument of cryptovaluta. Door het gebruik van deze site ontstaat geen
-                advies- of vermogensbeheerrelatie.
+                BUY/HOLD/SELL labels, scores, heatmaps, price information or any other outputs are not a personal
+                recommendation or an invitation to buy or sell any instrument or cryptocurrency. Using this site does
+                not create an advisory or asset-management relationship.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Risico’s van crypto</h3>
+              <h3 className="font-bold">Risks of Crypto Assets</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Handel in crypto is speculatief en volatiel; je kunt (een aanzienlijk deel van) je inleg verliezen. Neem alleen
-                beslissingen die passen bij je kennis, doelen en risicobereidheid. Overweeg onafhankelijk advies van een bevoegd
-                adviseur.
+                Trading crypto assets is speculative and volatile; you can lose (a substantial part of) your capital.
+                Make decisions that fit your knowledge, objectives, and risk tolerance. Consider seeking independent
+                advice from a qualified professional.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Databronnen, nauwkeurigheid en beschikbaarheid</h3>
+              <h3 className="font-bold">Data Sources, Accuracy & Availability</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Prijzen, nieuws, sentiment, volumes en andere gegevens kunnen afkomstig zijn van derden en/of geautomatiseerde
-                systemen. Er kunnen fouten, vertragingen, onderbrekingen en onnauwkeurigheden optreden. Er wordt geen enkele
-                garantie gegeven op juistheid, volledigheid, tijdigheid of beschikbaarheid.
+                Prices, news, sentiment, volumes and other data may come from third parties and/or automated systems.
+                Errors, delays, interruptions and inaccuracies can occur. No warranty is given regarding accuracy,
+                completeness, timeliness, or availability.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Automatische signalen &amp; latency</h3>
+              <h3 className="font-bold">Automated Signals & Latency</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Signalen kunnen achterlopen op de markt of onderhevig zijn aan kwaliteitsissues (false positives/negatives).
-                Resultaten kunnen afwijken per beurs of handelspaar.
+                Signals may lag the market or be subject to quality issues (false positives/negatives). Results may
+                differ per exchange or trading pair.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Prestaties uit het verleden</h3>
+              <h3 className="font-bold">Past Performance</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Resultaten of signalen uit het verleden bieden geen garantie voor de toekomst.
+                Past results or signals are not indicative of future performance.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Eigen verantwoordelijkheid</h3>
+              <h3 className="font-bold">Your Responsibility</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Je bent zelf volledig verantwoordelijk voor je handelsbeslissingen en voor het controleren van informatie voordat
-                je handelt. De eigenaar/beheerder van deze site aanvaardt geen aansprakelijkheid voor verlies, schade of kosten die
-                voortvloeien uit gebruik van (of vertrouwen op) deze site.
+                You are fully responsible for your trading decisions and for verifying information before you act.
+                The owner/operator of this site accepts no liability for losses, damages, or costs arising from the use
+                of (or reliance on) this site.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Beperking van aansprakelijkheid</h3>
+              <h3 className="font-bold">Limitation of Liability</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Voor zover wettelijk toegestaan is iedere aansprakelijkheid uitgesloten, zowel direct als indirect, inclusief (maar
-                niet beperkt tot) winstderving, verlies van data, opportunity loss, of gevolg-/bijzondere schade.
+                To the extent permitted by law, any liability is excluded, whether direct or indirect, including (but
+                not limited to) loss of profits, data loss, opportunity loss, or consequential/special damages.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Vrijwaring</h3>
+              <h3 className="font-bold">Indemnification</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Je vrijwaart de site-eigenaar en diens medewerkers tegen aanspraken van derden die verband houden met jouw gebruik
-                van de site of schending van deze voorwaarden.
+                You agree to indemnify and hold harmless the site owner and its affiliates from third-party claims
+                related to your use of the site or your breach of these terms.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Regelgeving, belastingen en leeftijd</h3>
+              <h3 className="font-bold">Compliance, Taxes & Age</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Je bent zelf verantwoordelijk voor naleving van lokale wet- en regelgeving, KYC/AML-verplichtingen en fiscale
-                verplichtingen. Deze site is niet bedoeld voor minderjarigen.
+                You are responsible for complying with local laws and regulations, KYC/AML obligations, and tax
+                requirements. This site is not intended for minors.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Geen verplichting tot bijwerken</h3>
+              <h3 className="font-bold">No Obligation to Update</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Inhoud, indicatoren en datasets kunnen zonder voorafgaande kennisgeving worden gewijzigd, tijdelijk of permanent
-                worden onderbroken, of worden beëindigd.
+                Content, indicators, and datasets may be changed, suspended, or discontinued at any time without notice.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Intellectuele eigendom</h3>
+              <h3 className="font-bold">Intellectual Property</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Alle inhoud, code en vormgeving zijn beschermd door toepasselijke rechten. Hergebruik is alleen toegestaan conform de
-                vermelde licentie(s) of met schriftelijke toestemming.
+                All content, code, and design are protected by applicable rights. Reuse is only permitted in accordance
+                with the stated license(s) or with prior written permission.
               </p>
             </div>
 
             <div className="space-y-2">
-              <h3 className="font-bold">Toepasselijk recht en forum</h3>
+              <h3 className="font-bold">Changes</h3>
               <p className="text-sm text-white/80 leading-relaxed">
-                Op deze disclaimer en het gebruik van de site is Nederlands recht van toepassing. Geschillen worden voorgelegd aan
-                de bevoegde rechter te Amsterdam, tenzij dwingend recht anders bepaalt.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <h3 className="font-bold">Wijzigingen</h3>
-              <p className="text-sm text-white/80 leading-relaxed">
-                Deze disclaimer kan periodiek worden aangepast. Raadpleeg altijd de meest recente versie op deze pagina.
+                This disclaimer may be updated from time to time. Always refer to the most recent version on this page.
               </p>
             </div>
           </div>
         </section>
 
-        {/* Footer (zelfde sfeer als indicators) */}
+        {/* Footer note */}
         <footer className="mt-8 text-white/60 text-sm">
-          <p>Dit is géén financieel advies.</p>
+          <p>This is not financial advice.</p>
         </footer>
       </main>
     </>
