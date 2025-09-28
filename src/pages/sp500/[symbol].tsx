@@ -161,9 +161,22 @@ export default function SpStockDetail() {
           />
         </div>
 
+        {/* Grijze, simpele knoppen — inline Tailwind om globale .btn (blauw) te overriden */}
         <div className="flex gap-3">
-          <Link href="/sp500" className="btn">← Terug naar S&amp;P 500-lijst</Link>
-          <Link href="/" className="btn">Naar homepage</Link>
+          <Link
+            href="/sp500"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            <span aria-hidden>←</span>
+            <span>Back to S&amp;P 500 list</span>
+          </Link>
+
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>
