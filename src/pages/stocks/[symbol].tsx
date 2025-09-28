@@ -199,9 +199,19 @@ export default function StockDetail() {
         </div>
 
         <div className="flex gap-3">
-          {/* Alleen de knoppen aangepast: Engels + grijze stijl */}
-          <Link href="/stocks" className="btn btn-secondary">← Back to AEX list</Link>
-          <Link href="/" className="btn btn-secondary">Go to homepage</Link>
+          {/* Engels + hard forced grey (overrulet blauwe .btn) */}
+          <Link
+            href="/stocks"
+            className="btn btn-secondary !bg-gray-200 !text-gray-900 !border-gray-300 !hover:bg-gray-300"
+          >
+            ← Back to AEX list
+          </Link>
+          <Link
+            href="/"
+            className="btn btn-secondary !bg-gray-200 !text-gray-900 !border-gray-300 !hover:bg-gray-300"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>
