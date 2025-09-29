@@ -551,115 +551,119 @@ function PageInner() {
   const updatedAt = (indUpdatedAt || pxData) ? (indUpdatedAt ?? Date.now()) : undefined
 
   return (
-    <main className="p-6 max-w-6xl mx-auto">
-      <header className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="hero">Crypto Tracker (light)</h1>
-          <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
-        </div>
-        {/* Nav-knoppen waren verwijderd; laten zo */}
-      </header>
-
-      <div className="grid gap-6 lg:grid-cols-12">
-        {/* LINKS: TABEL */}
-        <div className="lg:col-span-8">
-          <div className="table-card overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-white/60">
-                <tr>
-                  <th className="text-left py-2">#</th>
-                  <th className="py-2 w-10 text-center">
-                    <button
-                      onClick={() => toggleSort('fav')}
-                      title="Sorteren op favoriet"
-                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
-                    >
-                      <span className="leading-none">⭐</span>
-                      <span className="sr-only">Favoriet</span>
-                    </button>
-                  </th>
-                  <th className="text-left py-2">
-                    <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">Coin</button>
-                  </th>
-                  <th className="text-right py-2">
-                    <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Prijs</button>
-                  </th>
-                  <th className="text-right py-2">
-                    <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
-                  </th>
-                  <th className="text-right py-2">
-                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
-                  </th>
-                  <th className="text-right py-2">
-                    <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
-                  </th>
-                  <th className="text-right py-2">
-                    <button onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Status</button>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c: any, i: number) => {
-                  const sym = String(c.symbol || '').toUpperCase()
-                  const isFav = c._fav === true
-                  const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
-                  const status = (c.status as Status) || 'HOLD'
-                  const badgeCls =
-                    status === 'BUY'  ? 'badge-buy'  :
-                    status === 'SELL' ? 'badge-sell' : 'badge-hold'
-
-                  return (
-                    <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
-                      <td className="py-3 pr-3">{i + 1}</td>
-                      <td className="py-3 w-10 text-center">
-                        <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
-                          aria-pressed={isFav}
-                          title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
-                          className={[
-                            'inline-flex items-center justify-center',
-                            'h-5 w-5 rounded hover:bg-white/10 transition',
-                            isFav ? 'text-yellow-400' : 'text-white/40 hover:text-yellow-300',
-                          ].join(' ')}
-                        >
-                          <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
-                        </button>
-                      </td>
-                      <td className="py-3">
-                        <Link href={`/crypto/${c.slug}`} className="link font-semibold">
-                          {c.name} <span className="ticker">({c.symbol})</span>
-                        </Link>
-                      </td>
-                      <td className="py-3 text-right">{formatFiat(c._price)}</td>
-                      <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
-                      <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
-                      <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
-
-                      {/* Status-badge met score */}
-                      <td className="py-3 text-right">
-                        <button
-                          type="button"
-                          className={`${badgeCls} text-xs px-2 py-1 rounded`}
-                          title={`Status: ${status} · Score: ${scoreNum}`}
-                          aria-label={`Status ${status} met score ${scoreNum}`}
-                        >
-                          {status} · {scoreNum}
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+    // BELANGRIJK: hoofd-wrapper is nu full-width + voorkomt horizontale scroll,
+    // content zit in een binnenste container met max-w zodat header/footer 100% blijven.
+    <main className="w-full overflow-x-hidden">
+      <div className="max-w-6xl mx-auto p-6">
+        <header className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="hero">Crypto Tracker (light)</h1>
+            <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
           </div>
-        </div>
+          {/* Nav-knoppen waren verwijderd; laten zo */}
+        </header>
 
-        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
-        <div className="lg:col-span-4">
-          <div className="sticky top-6 space-y-6">
-            <AISummary rows={rows} updatedAt={updatedAt} />
-            <DailySummary rows={rows} updatedAt={updatedAt} />
-            <Heatmap rows={rows} />
+        <div className="grid gap-6 lg:grid-cols-12 min-w-0">
+          {/* LINKS: TABEL */}
+          <div className="lg:col-span-8 min-w-0">
+            <div className="table-card overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-white/60">
+                  <tr>
+                    <th className="text-left py-2">#</th>
+                    <th className="py-2 w-10 text-center">
+                      <button
+                        onClick={() => toggleSort('fav')}
+                        title="Sorteren op favoriet"
+                        className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
+                      >
+                        <span className="leading-none">⭐</span>
+                        <span className="sr-only">Favoriet</span>
+                      </button>
+                    </th>
+                    <th className="text-left py-2">
+                      <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">Coin</button>
+                    </th>
+                    <th className="text-right py-2">
+                      <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Prijs</button>
+                    </th>
+                    <th className="text-right py-2">
+                      <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
+                    </th>
+                    <th className="text-right py-2">
+                      <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
+                    </th>
+                    <th className="text-right py-2">
+                      <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
+                    </th>
+                    <th className="text-right py-2">
+                      <button onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Status</button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((c: any, i: number) => {
+                    const sym = String(c.symbol || '').toUpperCase()
+                    const isFav = c._fav === true
+                    const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
+                    const status = (c.status as Status) || 'HOLD'
+                    const badgeCls =
+                      status === 'BUY'  ? 'badge-buy'  :
+                      status === 'SELL' ? 'badge-sell' : 'badge-hold'
+
+                    return (
+                      <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
+                        <td className="py-3 pr-3">{i + 1}</td>
+                        <td className="py-3 w-10 text-center">
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
+                            aria-pressed={isFav}
+                            title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
+                            className={[
+                              'inline-flex items-center justify-center',
+                              'h-5 w-5 rounded hover:bg-white/10 transition',
+                              isFav ? 'text-yellow-400' : 'text-white/40 hover:text-yellow-300',
+                            ].join(' ')}
+                          >
+                            <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
+                          </button>
+                        </td>
+                        <td className="py-3">
+                          <Link href={`/crypto/${c.slug}`} className="link font-semibold">
+                            {c.name} <span className="ticker">({c.symbol})</span>
+                          </Link>
+                        </td>
+                        <td className="py-3 text-right">{formatFiat(c._price)}</td>
+                        <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
+                        <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
+                        <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
+
+                        {/* Status-badge met score */}
+                        <td className="py-3 text-right">
+                          <button
+                            type="button"
+                            className={`${badgeCls} text-xs px-2 py-1 rounded`}
+                            title={`Status: ${status} · Score: ${scoreNum}`}
+                            aria-label={`Status ${status} met score ${scoreNum}`}
+                          >
+                            {status} · {scoreNum}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
+          <div className="lg:col-span-4 min-w-0">
+            <div className="sticky top-6 space-y-6">
+              <AISummary rows={rows} updatedAt={updatedAt} />
+              <DailySummary rows={rows} updatedAt={updatedAt} />
+              <Heatmap rows={rows} />
+            </div>
           </div>
         </div>
       </div>

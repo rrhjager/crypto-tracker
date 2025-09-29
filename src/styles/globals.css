@@ -117,3 +117,12 @@ main, section, article, .table-card, .hero, .sub {
            leading-none text-[11px] font-semibold rounded-full
            whitespace-nowrap;
   }
+  /* --- Prevent horizontal scrolling site-wide (mobile twitch + white stripe) --- */
+html, body {
+  overflow-x: hidden;
+}
+
+/* Flex/Grid kinderen mogen wrappen i.p.v. forceren tot overflow */
+*, *::before, *::after {
+  min-width: 0;
+}
