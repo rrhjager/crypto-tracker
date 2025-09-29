@@ -131,6 +131,24 @@ function saveLocalTA(symUSDT: string, score: number, status: Status) {
   } catch {}
 }
 
+/* ====== NIEUW: snellere, incrementele indicator-fetch ====== */
+async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return await r.json()
+  } finally {
+    clearTimeout(t)
+  }
+}
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
 // ---------- rechterkolom ----------
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
@@ -356,7 +374,7 @@ function PageInner() {
         _d: 0 as number | null,
         _w: 0 as number | null,
         _m: 0 as number | null,
-        _score: 0,
+        _score: 50,
         status: 'HOLD' as Status,
         _fav: false,
       }
@@ -395,23 +413,62 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // ---- Indicators ophalen (Light) ----
-  const symbolsCsv = useMemo(
-    () => baseRows.map(r => r.binance).filter(Boolean).join(','),
-    [baseRows]
-  )
-  const { data: indData } = useSWR<{ results: IndResp[] }>(
-    symbolsCsv ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(symbolsCsv)}` : null,
-    fetcher,
-    { revalidateOnFocus: false, refreshInterval: 120_000 }
-  )
-  const indBySym = useMemo(() => {
-    const map = new Map<string, IndResp>()
-    for (const it of (indData?.results || [])) map.set(it.symbol, it)
-    return map
-  }, [indData])
+  // ---- Indicators ophalen (INCREMENTEEL & SNELLER) ----
+  const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
+  const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
+  const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
+
+  useEffect(() => {
+    if (!symbols.length) return
+    let aborted = false
+
+    async function runOnce() {
+      try {
+        const chunks = chunk(symbols, 12) // parallel kleinere batches
+        await Promise.all(chunks.map(async (group, gi) => {
+          // kleine delay tussen groepen om burst te voorkomen
+          if (gi) await new Promise(r => setTimeout(r, 120 * gi))
+          const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
+          try {
+            const j = await fetchJSON(url, { timeoutMs: 9000 })
+            const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
+            if (aborted) return
+            setIndBySym(prev => {
+              const next = new Map(prev)
+              for (const it of arr) next.set(it.symbol, it)
+              return next
+            })
+            setIndUpdatedAt(Date.now())
+          } catch {
+            // retry één keer voor deze groep
+            if (aborted) return
+            try {
+              const j2 = await fetchJSON(url, { timeoutMs: 9000 })
+              const arr2: IndResp[] = Array.isArray(j2?.results) ? j2.results : []
+              if (aborted) return
+              setIndBySym(prev => {
+                const next = new Map(prev)
+                for (const it of arr2) next.set(it.symbol, it)
+                return next
+              })
+              setIndUpdatedAt(Date.now())
+            } catch {}
+          }
+        }))
+      } finally {
+        if (!aborted) {
+          // noop
+        }
+      }
+    }
+
+    runOnce()
+    const id = setInterval(runOnce, 120_000) // dezelfde interval als voorheen
+    return () => { aborted = true; clearInterval(id) }
+  }, [symbols])
 
   // ---- Prijs + d/w/m ophalen (Light) ----
+  const symbolsCsv = useMemo(() => symbols.join(','), [symbols])
   const { data: pxData } = useSWR<{ results: { symbol: string, price: number|null, d: number|null, w: number|null, m: number|null }[] }>(
     symbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
     fetcher,
@@ -437,7 +494,7 @@ function PageInner() {
       const symU = String(c.symbol || '').toUpperCase()
       const ind  = c.binance ? indBySym.get(c.binance) : undefined
 
-      // 1) Probeer serverwaarden (status/score)
+      // 1) Probeer serverwaarden (status/score) — nu incrementeel binnenkomend
       const serverScore = (ind?.score != null && Number.isFinite(Number(ind.score))) ? Number(ind.score) : null
       const serverStatus = ind?.status as Status | undefined
 
@@ -447,7 +504,7 @@ function PageInner() {
       let finalScore = serverScore ?? calc.score
       let finalStatus = serverStatus ?? calc.status
 
-      // 3) NEW: override met localStorage (door detailpagina berekend)
+      // 3) Override met localStorage (door detailpagina berekend) — blijft bestaan
       const localKey = c.binance // bijv. "VETUSDT"
       if (localKey) {
         const ta = localTA.get(localKey)
@@ -491,7 +548,7 @@ function PageInner() {
     })
   }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym, localTA])
 
-  const updatedAt = (indData || pxData) ? Date.now() : undefined
+  const updatedAt = (indUpdatedAt || pxData) ? (indUpdatedAt ?? Date.now()) : undefined
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
@@ -500,7 +557,7 @@ function PageInner() {
           <h1 className="hero">Crypto Tracker (light)</h1>
           <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
         </div>
-        {/* Navigatieknoppen verwijderd (Uitleg indicatoren / Disclaimer) */}
+        {/* Nav-knoppen waren verwijderd; laten zo */}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
