@@ -2,6 +2,58 @@
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
+import { createPortal } from 'react-dom'
+
+function MobileMenuPortal({
+  open,
+  onClose,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const [mounted, setMounted] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setMounted(true)
+    const el = document.createElement('div')
+    containerRef.current = el
+    document.body.appendChild(el)
+    return () => {
+      if (containerRef.current && containerRef.current.parentNode) {
+        containerRef.current.parentNode.removeChild(containerRef.current)
+      }
+    }
+  }, [])
+
+  // Lock body scroll when open
+  useEffect(() => {
+    if (!mounted) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = open ? 'hidden' : prev || ''
+    return () => { document.body.style.overflow = prev }
+  }, [mounted, open])
+
+  if (!mounted || !containerRef.current || !open) return null
+
+  return createPortal(
+    <>
+      {/* Overlay above everything */}
+      <div
+        className="fixed inset-0 z-[99998] bg-black/50"
+        onClick={onClose}
+        aria-hidden
+      />
+      {/* Fullscreen drawer */}
+      <div className="fixed inset-0 z-[99999] bg-ink text-white flex flex-col">
+        {children}
+      </div>
+    </>,
+    containerRef.current
+  )
+}
 
 export default function SiteHeader() {
   const [open, setOpen] = useState(false)
@@ -12,7 +64,7 @@ export default function SiteHeader() {
   const intelRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
 
-  // Klik buiten desktop-dropdowns => sluiten
+  // Close desktop dropdowns on outside click
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       const t = e.target as Node
@@ -23,12 +75,11 @@ export default function SiteHeader() {
     return () => document.removeEventListener('click', onDoc)
   }, [])
 
-  // Sluit mobiel menu op route change + via Esc
+  // Close mobile menu on route changes & Esc
   useEffect(() => {
     const close = () => setOpen(false)
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
 
-    // fallback: sluit als het pad wijzigt (betrouwbaar in iedere Next versie)
     let lastPath = router.asPath
     const obs = setInterval(() => {
       if (router.asPath !== lastPath) { lastPath = router.asPath; close() }
@@ -45,13 +96,6 @@ export default function SiteHeader() {
       router.events?.off?.('hashChangeComplete', close)
     }
   }, [router])
-
-  // Body scroll lock als drawer open is
-  useEffect(() => {
-    const prev = document.body.style.overflow
-    document.body.style.overflow = open ? 'hidden' : prev || ''
-    return () => { document.body.style.overflow = prev }
-  }, [open])
 
   const onMobileLinkClick = () => setOpen(false)
 
@@ -161,87 +205,76 @@ export default function SiteHeader() {
         </button>
       </div>
 
-      {/* Mobile overlay + full-screen drawer */}
-      {open && (
-        <div className="md:hidden">
-          {/* Overlay boven alles behalve de drawer (z-80) */}
-          <div
-            className="fixed inset-0 z-[80] bg-black/50"
+      {/* Mobile menu rendered in a portal to break any stacking contexts */}
+      <MobileMenuPortal open={open} onClose={() => setOpen(false)}>
+        {/* Drawer header */}
+        <div className="h-14 px-4 flex items-center justify-between border-b border-white/10">
+          <Link href="/" className="group font-semibold tracking-tight" onClick={onMobileLinkClick}>
+            <span className={`text-black transition-all duration-300 ${rainbow}`}>SignalHub</span>
+          </Link>
+          <button
+            className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-white/15 text-white/90"
             onClick={() => setOpen(false)}
-            aria-hidden
-          />
-          {/* Drawer zelf (z-90), full screen */}
-          <div className="fixed inset-0 z-[90] bg-ink flex flex-col">
-            {/* Drawer header met close-knop */}
-            <div className="h-14 px-4 flex items-center justify-between border-b border-white/10">
-              <Link href="/" className="group font-semibold tracking-tight" onClick={onMobileLinkClick}>
-                <span className={`text-black transition-all duration-300 ${rainbow}`}>SignalHub</span>
-              </Link>
-              <button
-                className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-white/15 text-white/90"
-                onClick={() => setOpen(false)}
-                aria-label="Close menu"
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
-              </button>
-            </div>
-
-            {/* Drawer content (scrolbaar) */}
-            <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
-              <Link href="/crypto" className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base" onClick={onMobileLinkClick}>
-                <span className={rainbow}>Crypto tracker</span>
-              </Link>
-
-              <div className="rounded-xl px-3 py-2">
-                <div className="text-white/70 mb-2 px-1">Stock tracker</div>
-                {[
-                  { href: '/stocks',     label: 'AEX' },
-                  { href: '/sp500',      label: 'S&P 500' },
-                  { href: '/nasdaq',     label: 'NASDAQ' },
-                  { href: '/dowjones',   label: 'Dow Jones' },
-                  { href: '/dax',        label: 'DAX' },
-                  { href: '/ftse100',    label: 'FTSE 100' },
-                  { href: '/nikkei225',  label: 'Nikkei 225' },
-                  { href: '/hangseng',   label: 'Hang Seng' },
-                  { href: '/sensex',     label: 'Sensex' },
-                ].map(it => (
-                  <Link
-                    key={it.href}
-                    href={it.href}
-                    className="group block rounded-lg px-4 py-3 text-base hover:bg-white/10"
-                    onClick={onMobileLinkClick}
-                  >
-                    <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
-                  </Link>
-                ))}
-              </div>
-
-              <div className="rounded-xl px-3 py-2">
-                <div className="text-white/70 mb-2 px-1">Market intel</div>
-                {[
-                  { href: '/intel',            label: 'Congress Trading' },
-                  { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
-                  { href: '/intel/macro',      label: 'Macro calendar' },
-                  { href: '/intel/sectors',    label: 'Sector performance' },
-                ].map(it => (
-                  <Link
-                    key={it.href}
-                    href={it.href}
-                    className="group block rounded-lg px-4 py-3 text-base hover:bg-white/10"
-                    onClick={onMobileLinkClick}
-                  >
-                    <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
-                  </Link>
-                ))}
-              </div>
-
-              <Link href="/about" className="group rounded-xl px-4 py-3 text-base hover:bg-white/10" onClick={onMobileLinkClick}>
-                <span className={rainbow}>About us</span>
-              </Link>
-            </nav>
-          </div>
+            aria-label="Close menu"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+          </button>
         </div>
-      )}
+
+        {/* Drawer content */}
+        <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
+          <Link href="/crypto" className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base" onClick={onMobileLinkClick}>
+            <span className={rainbow}>Crypto tracker</span>
+          </Link>
+
+          <div className="rounded-xl px-3 py-2">
+            <div className="text-white/70 mb-2 px-1">Stock tracker</div>
+            {[
+              { href: '/stocks',     label: 'AEX' },
+              { href: '/sp500',      label: 'S&P 500' },
+              { href: '/nasdaq',     label: 'NASDAQ' },
+              { href: '/dowjones',   label: 'Dow Jones' },
+              { href: '/dax',        label: 'DAX' },
+              { href: '/ftse100',    label: 'FTSE 100' },
+              { href: '/nikkei225',  label: 'Nikkei 225' },
+              { href: '/hangseng',   label: 'Hang Seng' },
+              { href: '/sensex',     label: 'Sensex' },
+            ].map(it => (
+              <Link
+                key={it.href}
+                href={it.href}
+                className="group block rounded-lg px-4 py-3 text-base hover:bg-white/10"
+                onClick={onMobileLinkClick}
+              >
+                <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+              </Link>
+            ))}
+          </div>
+
+          <div className="rounded-xl px-3 py-2">
+            <div className="text-white/70 mb-2 px-1">Market intel</div>
+            {[
+              { href: '/intel',            label: 'Congress Trading' },
+              { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
+              { href: '/intel/macro',      label: 'Macro calendar' },
+              { href: '/intel/sectors',    label: 'Sector performance' },
+            ].map(it => (
+              <Link
+                key={it.href}
+                href={it.href}
+                className="group block rounded-lg px-4 py-3 text-base hover:bg-white/10"
+                onClick={onMobileLinkClick}
+              >
+                <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+              </Link>
+            ))}
+          </div>
+
+          <Link href="/about" className="group rounded-xl px-4 py-3 text-base hover:bg-white/10" onClick={onMobileLinkClick}>
+            <span className={rainbow}>About us</span>
+          </Link>
+        </nav>
+      </MobileMenuPortal>
     </header>
   )
 }
