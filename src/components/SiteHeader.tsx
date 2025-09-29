@@ -10,10 +10,9 @@ export default function SiteHeader() {
 
   const stockRef = useRef<HTMLDivElement>(null)
   const intelRef = useRef<HTMLDivElement>(null)
-
   const router = useRouter()
 
-  // Sluit desktop dropdowns bij klik buiten
+  // Klik buiten desktop-dropdowns => sluiten
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       const t = e.target as Node
@@ -24,21 +23,30 @@ export default function SiteHeader() {
     return () => document.removeEventListener('click', onDoc)
   }, [])
 
-  // Sluit het mobiele menu bij routechanges en met Escape
+  // Sluit mobiel menu op route change + via Esc
   useEffect(() => {
     const close = () => setOpen(false)
-    router.events.on('routeChangeComplete', close)
-    router.events.on('hashChangeComplete', close)
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => {
-      router.events.off('routeChangeComplete', close)
-      router.events.off('hashChangeComplete', close)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [router.events])
 
-  // Body scroll lock wanneer drawer open is
+    // fallback: sluit als het pad wijzigt (betrouwbaar in iedere Next versie)
+    let lastPath = router.asPath
+    const obs = setInterval(() => {
+      if (router.asPath !== lastPath) { lastPath = router.asPath; close() }
+    }, 100)
+
+    window.addEventListener('keydown', onKey)
+    router.events?.on?.('routeChangeComplete', close)
+    router.events?.on?.('hashChangeComplete', close)
+
+    return () => {
+      clearInterval(obs)
+      window.removeEventListener('keydown', onKey)
+      router.events?.off?.('routeChangeComplete', close)
+      router.events?.off?.('hashChangeComplete', close)
+    }
+  }, [router])
+
+  // Body scroll lock als drawer open is
   useEffect(() => {
     const prev = document.body.style.overflow
     document.body.style.overflow = open ? 'hidden' : prev || ''
@@ -51,7 +59,7 @@ export default function SiteHeader() {
     'group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-[linear-gradient(90deg,#ff004c,#ff8a00,#ffd300,#00e472,#00c3ff,#7a00ff,#ff004c)]'
 
   return (
-    <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-50">
+    <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-[60]">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Home / Logo */}
         <Link href="/" className="group font-semibold tracking-tight" onClick={() => setOpen(false)}>
@@ -153,18 +161,33 @@ export default function SiteHeader() {
         </button>
       </div>
 
-      {/* Mobile overlay + drawer (full-screen) */}
+      {/* Mobile overlay + full-screen drawer */}
       {open && (
         <div className="md:hidden">
-          {/* Overlay (tap to close) */}
+          {/* Overlay boven alles behalve de drawer (z-80) */}
           <div
-            className="fixed inset-0 z-40 bg-black/40"
+            className="fixed inset-0 z-[80] bg-black/50"
             onClick={() => setOpen(false)}
             aria-hidden
           />
-          {/* Drawer */}
-          <div className="fixed inset-x-0 top-14 bottom-0 z-50 overflow-y-auto bg-ink border-t border-white/10">
-            <nav className="mx-auto max-w-6xl px-4 py-4 flex flex-col gap-2">
+          {/* Drawer zelf (z-90), full screen */}
+          <div className="fixed inset-0 z-[90] bg-ink flex flex-col">
+            {/* Drawer header met close-knop */}
+            <div className="h-14 px-4 flex items-center justify-between border-b border-white/10">
+              <Link href="/" className="group font-semibold tracking-tight" onClick={onMobileLinkClick}>
+                <span className={`text-black transition-all duration-300 ${rainbow}`}>SignalHub</span>
+              </Link>
+              <button
+                className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-white/15 text-white/90"
+                onClick={() => setOpen(false)}
+                aria-label="Close menu"
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+              </button>
+            </div>
+
+            {/* Drawer content (scrolbaar) */}
+            <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
               <Link href="/crypto" className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base" onClick={onMobileLinkClick}>
                 <span className={rainbow}>Crypto tracker</span>
               </Link>
