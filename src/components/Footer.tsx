@@ -62,6 +62,8 @@ export default function Footer() {
             <div className={head}>Disclaimer</div>
             <ul className="mt-3 space-y-2 text-sm">
               <li><Link className={a} href="/disclaimer">Read disclaimer</Link></li>
+              {/* NEW: link directly under "Read disclaimer" */}
+              <li><Link className={a} href="/explanation-indicators">Explanation indicators</Link></li>
             </ul>
             <p className="mt-3 text-xs text-gray-400">
               Research Only: not investment advice.
