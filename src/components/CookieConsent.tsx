@@ -11,12 +11,11 @@ const LS_KEY = 'cookie:prefs:v1'
 function readPrefs(): Prefs | null {
   try {
     const raw = localStorage.getItem(LS_KEY)
-    return raw ? JSON.parse(raw) as Prefs : null
+    return raw ? (JSON.parse(raw) as Prefs) : null
   } catch { return null }
 }
 function savePrefs(p: Prefs) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(p)) } catch {}
-  // Eventueel: hier analytics initialiseren op basis van p.analytics / p.marketing
 }
 
 export default function CookieConsent() {
@@ -36,31 +35,20 @@ export default function CookieConsent() {
 
   function acceptAll() {
     const p: Prefs = { necessary: true, analytics: true, marketing: true }
-    savePrefs(p)
-    setPrefs(p)
-    setOpen(false)
-    setShowPanel(false)
+    savePrefs(p); setPrefs(p); setOpen(false); setShowPanel(false)
   }
-
   function declineAll() {
     const p: Prefs = { necessary: true, analytics: false, marketing: false }
-    savePrefs(p)
-    setPrefs(p)
-    setOpen(false)
-    setShowPanel(false)
+    savePrefs(p); setPrefs(p); setOpen(false); setShowPanel(false)
   }
-
   function saveCurrent() {
-    savePrefs(prefs)
-    setOpen(false)
-    setShowPanel(false)
+    savePrefs(prefs); setOpen(false); setShowPanel(false)
   }
 
   if (!open) return null
 
   return (
     <div className="fixed z-[10000] bottom-4 right-4">
-      {/* Card */}
       <div className="w-[320px] sm:w-[360px] rounded-2xl border shadow-xl bg-white text-gray-900">
         <div className="p-4">
           <div className="font-semibold mb-1">Cookies</div>
@@ -69,7 +57,6 @@ export default function CookieConsent() {
             Kies “Accept” of “Decline”, of pas instellingen aan.
           </p>
 
-          {/* Inline settings toggle */}
           <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
@@ -79,24 +66,25 @@ export default function CookieConsent() {
               Settings
             </button>
 
+            {/* Decline = grijs gevuld */}
             <button
               type="button"
               onClick={declineAll}
-              className="px-3 py-1.5 rounded-lg text-sm bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+              className="px-3 py-1.5 rounded-lg text-sm bg-gray-200 text-gray-900 border border-gray-300 hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
             >
               Decline
             </button>
 
+            {/* Accept = wit met rand */}
             <button
               type="button"
               onClick={acceptAll}
-              className="ml-auto px-3 py-1.5 rounded-lg text-sm bg-blue-600 !text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="ml-auto px-3 py-1.5 rounded-lg text-sm bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               Accept
             </button>
           </div>
 
-          {/* Settings panel */}
           {showPanel && (
             <div className="mt-3 border-t pt-3 space-y-2">
               <label className="flex items-center justify-between text-sm">
@@ -126,7 +114,7 @@ export default function CookieConsent() {
                 <button
                   type="button"
                   onClick={saveCurrent}
-                  className="px-3 py-1.5 rounded-lg text-sm bg-blue-600 !text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="px-3 py-1.5 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Save
                 </button>
@@ -143,7 +131,6 @@ export default function CookieConsent() {
         </div>
       </div>
 
-      {/* Dark-mode override (optioneel) */}
       <style jsx>{`
         @media (prefers-color-scheme: dark) {
           .dark .cookie-card { background: #111827; color: #e5e7eb; }
