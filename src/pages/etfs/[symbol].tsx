@@ -3,8 +3,8 @@ import { useRouter } from 'next/router'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import StockIndicatorCard from '@/components/StockIndicatorCard'
-import ScoreBadge from '@/components/ScoreBadge'
 import { ETFS } from '@/lib/etfs'
+import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
@@ -12,21 +12,7 @@ type RsiResp    = { symbol: string; period: number; rsi: number | null; status: 
 type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
 type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
-const W_MA=0.40, W_MACD=0.30, W_RSI=0.20, W_VOL=0.10
-
-function toPts(status?: Advice, pts?: number | null) {
-  if (Number.isFinite(pts as number)) return Math.max(-2, Math.min(2, Number(pts)))
-  if (status === 'BUY') return  2
-  if (status === 'SELL') return -2
-  return 0
-}
-function statusFromScore(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-
-export default function EtfDetail() {
+export default function ETFDetail() {
   const router = useRouter()
   const symbol = (router.query.symbol as string) || ''
   const meta = useMemo(() => ETFS.find(t => t.symbol === symbol), [symbol])
@@ -39,12 +25,26 @@ export default function EtfDetail() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
-  const computeScore = () => {
-    const nMA   = (toPts(ma?.status,   ma?.points)   + 2) / 4
-    const nMACD = (toPts(macd?.status, macd?.points) + 2) / 4
-    const nRSI  = (toPts(rsi?.status,  rsi?.points)  + 2) / 4
-    const nVOL  = (toPts(vol20?.status,vol20?.points)+ 2) / 4
-    return Math.round((W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL) * 100)
+  // samengesteld advies (zelfde weging als index)
+  const computeScore = (ma?: MaCrossResp | null, rsi?: RsiResp | null, macd?: MacdResp | null, vol?: Vol20Resp | null) => {
+    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+    const toPts = (status?: Advice, pts?: number | null) => {
+      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
+      if (status === 'BUY') return 2
+      if (status === 'SELL') return -2
+      return 0
+    }
+    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+    const pMA   = toPts(ma?.status,   ma?.points)
+    const pMACD = toPts(macd?.status, macd?.points)
+    const pRSI  = toPts(rsi?.status,  rsi?.points)
+    const pVOL  = toPts(vol?.status,  vol?.points)
+    const nMA   = (pMA   + 2) / 4
+    const nMACD = (pMACD + 2) / 4
+    const nRSI  = (pRSI  + 2) / 4
+    const nVOL  = (pVOL  + 2) / 4
+    const agg = 0.40*nMA + 0.30*nMACD + 0.20*nRSI + 0.10*nVOL
+    return Math.round(agg * 100)
   }
 
   useEffect(() => {
@@ -52,13 +52,16 @@ export default function EtfDetail() {
     let aborted = false
     ;(async () => {
       try {
-        setLoading(true); setErr(null)
+        setLoading(true)
+        setErr(null)
+
         const [rMa, rRsi, rMacd, rVol] = await Promise.all([
           fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
           fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
           fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
           fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
         ])
+
         if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
         if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
         if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
@@ -68,7 +71,9 @@ export default function EtfDetail() {
           rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
         ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-        if (!aborted) { setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol) }
+        if (!aborted) {
+          setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol)
+        }
       } catch (e: any) {
         if (!aborted) setErr(String(e?.message || e))
       } finally {
@@ -78,8 +83,7 @@ export default function EtfDetail() {
     return () => { aborted = true }
   }, [symbol])
 
-  const score = computeScore()
-  const advice = statusFromScore(Number.isFinite(score as number) ? (score as number) : 50)
+  const score = computeScore(ma, rsi, macd, vol20)
 
   return (
     <main className="min-h-screen">
@@ -87,14 +91,15 @@ export default function EtfDetail() {
         <header className="space-y-1">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h1 className="hero">{meta?.name || 'ETF'}</h1>
+              <h1 className="hero">{meta?.name || 'Onbekende ETF'}</h1>
               <p className="sub">{symbol}</p>
             </div>
             <div className="shrink-0">
-              <ScoreBadge score={Number.isFinite(score as number) ? score : 50} />
+              {Number.isFinite(score as number)
+                ? <ScoreBadge score={score as number} />
+                : <span className="badge badge-hold">HOLD · 50</span>}
             </div>
           </div>
-          {err ? <p className="text-sm text-red-400">Fout bij ophalen: {err}</p> : null}
         </header>
 
         <div className="grid md:grid-cols-2 gap-4">
@@ -102,9 +107,9 @@ export default function EtfDetail() {
             title="MA50 vs MA200 (Golden/Death Cross)"
             status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
-              ma
+              loading ? 'Bezig met ophalen...'
+              : err ? `Fout: ${err}`
+              : ma
                 ? (ma.ma50 != null && ma.ma200 != null
                     ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
                     : 'Nog onvoldoende data om MA50/MA200 te bepalen')
@@ -115,9 +120,9 @@ export default function EtfDetail() {
             title="RSI (14)"
             status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
-              rsi && rsi.rsi != null
+              loading ? 'Bezig met ophalen...'
+              : err ? `Fout: ${err}`
+              : rsi && rsi.rsi != null
                 ? `RSI: ${rsi.rsi.toFixed(2)}`
                 : 'Onvoldoende data voor RSI'
             }
@@ -126,9 +131,9 @@ export default function EtfDetail() {
             title="MACD (12/26/9)"
             status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
-              macd && macd.macd != null && macd.signal != null
+              loading ? 'Bezig met ophalen...'
+              : err ? `Fout: ${err}`
+              : macd && macd.macd != null && macd.signal != null
                 ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
                 : 'Onvoldoende data voor MACD'
             }
@@ -137,9 +142,9 @@ export default function EtfDetail() {
             title="Volume vs 20d gemiddelde"
             status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
-              vol20 && vol20.volume != null && vol20.avg20 != null
+              loading ? 'Bezig met ophalen...'
+              : err ? `Fout: ${err}`
+              : vol20 && vol20.volume != null && vol20.avg20 != null
                 ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
                 : 'Onvoldoende data voor volume'
             }
@@ -147,8 +152,19 @@ export default function EtfDetail() {
         </div>
 
         <div className="flex gap-3">
-          <Link href="/etfs" className="btn">← Terug naar ETF-lijst</Link>
-          <Link href="/" className="btn">Naar homepage</Link>
+          <Link
+            href="/etfs"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            <span aria-hidden>←</span>
+            <span>Back to ETFs list</span>
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+          >
+            Go to homepage
+          </Link>
         </div>
       </div>
     </main>
