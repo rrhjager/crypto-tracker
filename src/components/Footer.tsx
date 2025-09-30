@@ -29,7 +29,6 @@ export default function Footer() {
               <li><Link className={a} href="/intel">Congress trading</Link></li>
               <li><Link className={a} href="/intel/hedgefunds">Hedge funds</Link></li>
               <li><Link className={a} href="/intel/sectors">Sectors</Link></li>
-              <li><Link className={a} href="/disclaimer">Disclaimer</Link></li>
             </ul>
           </div>
 
@@ -55,7 +54,7 @@ export default function Footer() {
               <li><Link className={a} href="/hangseng">Hang Seng</Link></li>
               <li><Link className={a} href="/sensex">Sensex</Link></li>
               {/* ✅ Nieuw: ETFs-pagina */}
-              <li><Link className={a} href="/etfs">ETFs (Top 20)</Link></li>
+              <li><Link className={a} href="/etfs">ETFs</Link></li>
             </ul>
           </div>
 

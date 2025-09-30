@@ -212,7 +212,7 @@ export default function ETFsIndex() {
 
   return (
     <>
-      <Head><title>ETFs (Top 20) — SignalHub</title></Head>
+      <Head><title>ETFs — SignalHub</title></Head>
 
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
