@@ -38,149 +38,122 @@ const getCache = (sym: string): Quote | null => {
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-function lastValid<T>(arr: (T | null | undefined)[]): T | null {
+const isNum = (v: any): v is number => Number.isFinite(v)
+const isValidPrice = (v: any): v is number => Number.isFinite(v) && v > 0
+
+/* ---------------- Yahoo helpers ---------------- */
+
+// Batch: v7 quote endpoint (meest betrouwbaar voor EU/UK/DE/HK)
+async function fetchBatchQuotesV7(symbols: string[]): Promise<Record<string, Quote>> {
+  // Yahoo kan ~300+ symbols aan; wij sturen jouw set in één batch
+  const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(','))}`
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const j: any = await r.json()
+  const res = j?.quoteResponse?.result ?? []
+  const out: Record<string, Quote> = {}
+
+  for (const row of res) {
+    const symbol = row?.symbol as string
+    if (!symbol) continue
+
+    const price = Number(row?.regularMarketPrice)
+    const prev  = Number(row?.regularMarketPreviousClose)
+    const change = isValidPrice(price) && isValidPrice(prev) ? price - prev : null
+    const pct    = isValidPrice(price) && isValidPrice(prev) && prev !== 0 ? (change as number) / prev * 100 : null
+
+    out[symbol] = {
+      symbol,
+      longName: row?.longName ?? row?.shortName ?? undefined,
+      shortName: row?.shortName ?? undefined,
+      regularMarketPrice: isValidPrice(price) ? price : null,
+      regularMarketPreviousClose: isValidPrice(prev) ? prev : null,
+      regularMarketChange: isNum(change) ? change : null,
+      regularMarketChangePercent: isNum(pct) ? pct : null,
+      currency: row?.currency ?? undefined,
+      marketState: row?.marketState ?? undefined,
+    }
+  }
+  return out
+}
+
+// Chart fallback (per symbool) — voor missers of als v7 0/null gaf
+async function fetchChart(symbol: string, range: string, interval: string) {
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const j: any = await r.json()
+  const res = j?.chart?.result?.[0]
+  if (!res) throw new Error('no result')
+  return res
+}
+
+function lastValid(arr: (number | null | undefined)[]): number | null {
   for (let i = arr.length - 1; i >= 0; i--) {
     const v = arr[i]
-    if (v != null && Number.isFinite(v as any)) return v as any
+    if (isValidPrice(v)) return v as number
   }
   return null
 }
+
 function lastAndPrevValid(arr: (number | null | undefined)[]) {
   let last: number | null = null
   let prev: number | null = null
   for (let i = arr.length - 1; i >= 0; i--) {
     const v = arr[i]
-    if (Number.isFinite(v)) {
+    if (isValidPrice(v)) {
       if (last == null) last = v as number
       else { prev = v as number; break }
     }
   }
   return { last, prev }
 }
-function pct(change: number | null, base: number | null): number | null {
-  if (!Number.isFinite(change as number) || !Number.isFinite(base as number) || (base as number) === 0) return null
-  return (change as number) / (base as number) * 100
-}
 
-/* ---------------- Yahoo helpers ---------------- */
-async function fetchJSON(url: string) {
-  const r = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return r.json()
-}
-
-async function fetchQuoteSummaryPrice(symbol: string) {
-  // quoteSummary heeft vaak consistent previousClose wereldwijd
-  const url =
-    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/` +
-    `${encodeURIComponent(symbol)}?modules=price&lang=en-US&region=US`
-  const j: any = await fetchJSON(url)
-  const price = j?.quoteSummary?.result?.[0]?.price
-  if (!price) throw new Error('no price module')
-  return {
-    price: Number.isFinite(price.regularMarketPrice?.raw) ? Number(price.regularMarketPrice.raw) : null,
-    previousClose: Number.isFinite(price.regularMarketPreviousClose?.raw) ? Number(price.regularMarketPreviousClose.raw)
-                   : Number.isFinite(price.preMarketPreviousClose?.raw) ? Number(price.preMarketPreviousClose.raw)
-                   : Number.isFinite(price.previousClose?.raw) ? Number(price.previousClose.raw)
-                   : null,
-    currency: price.currency ?? undefined,
-    marketState: price.marketState ?? undefined,
-    longName: price.longName ?? undefined,
-    shortName: price.symbol ?? undefined,
-  }
-}
-
-async function fetchChart(symbol: string, range: string, interval: string) {
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&lang=en-US&region=US&includePrePost=false`
-  const j: any = await fetchJSON(url)
-  const res = j?.chart?.result?.[0]
-  if (!res) throw new Error('no result')
-  return res
-}
-
-/**
- * Hybride strategie:
- * 1) Haal price/previousClose uit quoteSummary:price (wereldwijd stabieler).
- * 2) Vul aan met chart:
- *    - live prijs uit 1d/1m (laatste geldige 1m close) als price ontbreekt
- *    - vorige close uit 5d/1d als previousClose ontbreekt
- * 3) Bereken change/% met harde guards.
- */
-async function fetchRobustQuote(symbol: string): Promise<Quote> {
+async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
+  // 1) probeer intraday prijs via 1d/1m
   let price: number | null = null
-  let prevClose: number | null = null
   let currency: string | undefined
   let marketState: string | undefined
   let longName: string | undefined
   let shortName: string | undefined
 
-  const errs: string[] = []
-
-  // 1) quoteSummary
   try {
-    const ps = await fetchQuoteSummaryPrice(symbol)
-    price = ps.price ?? null
-    prevClose = ps.previousClose ?? null
-    currency = ps.currency
-    marketState = ps.marketState
-    longName = ps.longName
-    shortName = ps.shortName
-  } catch (e: any) {
-    errs.push(`[quoteSummary] ${String(e?.message || e)}`)
-  }
+    const res1 = await fetchChart(symbol, '1d', '1m')
+    currency = res1?.meta?.currency ?? undefined
+    marketState = res1?.meta?.marketState ?? undefined
+    longName = res1?.meta?.longName ?? undefined
+    shortName = res1?.meta?.symbol ?? undefined
 
-  // 2a) live prijs (chart 1d/1m) als nodig
-  if (!Number.isFinite(price as number)) {
-    try {
-      const c = await fetchChart(symbol, '1d', '1m')
-      const closes1m: (number | null | undefined)[] = (c?.indicators?.quote?.[0]?.close ?? []).map(Number)
-      price = lastValid<number>(closes1m)
-      if (!Number.isFinite(price as number) && Number.isFinite(c?.meta?.regularMarketPrice))
-        price = Number(c.meta.regularMarketPrice)
-      if (!currency) currency = c?.meta?.currency ?? undefined
-      if (!marketState) marketState = c?.meta?.marketState ?? undefined
-      if (!shortName) shortName = c?.meta?.symbol ?? undefined
-    } catch (e: any) {
-      errs.push(`[chart 1d/1m] ${String(e?.message || e)}`)
-    }
-  }
+    const closes1m: (number | null | undefined)[] = (res1?.indicators?.quote?.[0]?.close ?? []).map(Number)
+    const last1m = lastValid(closes1m)
+    const rmp = Number(res1?.meta?.regularMarketPrice)
+    price = isValidPrice(last1m) ? last1m : (isValidPrice(rmp) ? rmp : null)
+  } catch { /* fallback hieronder */ }
 
-  // 2b) vorige close (chart 5d/1d) als nodig
-  if (!Number.isFinite(prevClose as number)) {
-    try {
-      const c5 = await fetchChart(symbol, '5d', '1d')
-      const closes1d: number[] = (c5?.indicators?.quote?.[0]?.close ?? []).map(Number)
-      const { last, prev } = lastAndPrevValid(closes1d)
-      if (prev != null) prevClose = prev
-      else if (Number.isFinite(c5?.meta?.chartPreviousClose)) prevClose = Number(c5.meta.chartPreviousClose)
-      else if (Number.isFinite(c5?.meta?.previousClose)) prevClose = Number(c5.meta.previousClose)
-      else if (last != null) prevClose = last
-      if (!currency) currency = c5?.meta?.currency ?? undefined
-      if (!shortName) shortName = c5?.meta?.symbol ?? undefined
-    } catch (e: any) {
-      errs.push(`[chart 5d/1d] ${String(e?.message || e)}`)
-    }
-  }
+  // 2) prev close via 5d/1d
+  let prevClose: number | null = null
+  try {
+    const res5 = await fetchChart(symbol, '5d', '1d')
+    const closes1d: (number | null | undefined)[] = (res5?.indicators?.quote?.[0]?.close ?? []).map(Number)
+    const { last, prev } = lastAndPrevValid(closes1d)
+    if (isValidPrice(prev)) prevClose = prev!
+    else if (isValidPrice(res5?.meta?.chartPreviousClose)) prevClose = Number(res5.meta.chartPreviousClose)
+    else if (isValidPrice(res5?.meta?.previousClose)) prevClose = Number(res5.meta.previousClose)
+    else if (isValidPrice(last)) prevClose = last!
+  } catch { /* ignore */ }
 
-  // 3) change berekenen — nooit meer "price == change"
-  let change: number | null = null
-  let changePct: number | null = null
-  if (Number.isFinite(price as number) && Number.isFinite(prevClose as number)) {
-    change = (price as number) - (prevClose as number)
-    changePct = pct(change, prevClose)
-  } else {
-    change = null
-    changePct = null
-  }
+  // 3) change/pct
+  const change = (isValidPrice(price) && isValidPrice(prevClose)) ? (price! - prevClose!) : null
+  const pct = (isValidPrice(price) && isValidPrice(prevClose) && prevClose! !== 0) ? (change as number) / prevClose! * 100 : null
 
   return {
     symbol,
     longName,
     shortName,
-    regularMarketPrice: Number.isFinite(price as number) ? price! : null,
-    regularMarketPreviousClose: Number.isFinite(prevClose as number) ? prevClose! : null,
-    regularMarketChange: Number.isFinite(change as number) ? change! : null,
-    regularMarketChangePercent: Number.isFinite(changePct as number) ? changePct! : null,
+    regularMarketPrice: isValidPrice(price) ? price! : null,
+    regularMarketPreviousClose: isValidPrice(prevClose) ? prevClose! : null,
+    regularMarketChange: isNum(change) ? change : null,
+    regularMarketChangePercent: isNum(pct) ? pct : null,
     currency,
     marketState,
   }
@@ -219,14 +192,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       else need.push(s)
     }
 
-    // 2) fetch missende met pool
     const errors: string[] = []
-    const fetched: Quote[] = need.length
-      ? (await mapWithPool(need, 4, async (sym) => {
+    const fromV7: Record<string, Quote> = need.length ? await fetchBatchQuotesV7(need) : {}
+
+    // 2) bepaal welke symbols nog missen of "0/null" hebben → chart-fallback
+    const needFallback: string[] = []
+    const primed: Quote[] = []
+    for (const s of need) {
+      const q = fromV7[s]
+      if (!q || !isValidPrice(q.regularMarketPrice) || !isValidPrice(q.regularMarketPreviousClose)) {
+        needFallback.push(s)
+      } else {
+        primed.push(q)
+      }
+    }
+
+    const viaChart: Quote[] = needFallback.length
+      ? (await mapWithPool(needFallback, 4, async (sym) => {
           try {
-            const q = await fetchRobustQuote(sym)
-            setCache(q)
-            await sleep(60) // beetje beleefd voor rate limits
+            const q = await fetchQuoteFromChart(sym)
             return q
           } catch (e: any) {
             errors.push(`${sym}: ${String(e?.message || e)}`)
@@ -235,12 +219,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               regularMarketPrice: null,
               regularMarketChange: null,
               regularMarketChangePercent: null,
+              regularMarketPreviousClose: null,
             } as Quote
+          } finally {
+            await sleep(60)
           }
         }))
       : []
 
-    const all = [...hits, ...fetched]
+    const all = [...hits, ...primed, ...viaChart]
+
+    // 3) harde guard — zet ongeldige “0” naar null zodat UI geen streepjes door foute nullen krijgt
+    for (const q of all) {
+      if (!isValidPrice(q.regularMarketPrice)) q.regularMarketPrice = null
+      if (!isValidPrice(q.regularMarketPreviousClose)) q.regularMarketPreviousClose = null
+      if (!(isNum(q.regularMarketChange) && isNum(q.regularMarketPreviousClose))) {
+        if (isValidPrice(q.regularMarketPrice) && isValidPrice(q.regularMarketPreviousClose)) {
+          const change = q.regularMarketPrice! - q.regularMarketPreviousClose!
+          q.regularMarketChange = change
+          q.regularMarketChangePercent = q.regularMarketPreviousClose! !== 0 ? (change / q.regularMarketPreviousClose!) * 100 : null
+        }
+      }
+      setCache(q)
+    }
+
     const map: Record<string, Quote> = {}
     for (const q of all) map[q.symbol] = q
 
@@ -249,10 +251,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       quotes: map,
       meta: {
         requested: symbols.length,
-        received: all.filter(q => q.regularMarketPrice != null).length,
-        partial: all.some(q => q.regularMarketPrice == null),
+        received: all.filter(q => isValidPrice(q.regularMarketPrice)).length,
+        partial: all.some(q => !isValidPrice(q.regularMarketPrice)),
         errors: errors.length ? errors.slice(0, 8) : undefined,
-        used: 'quoteSummary:price + chart(1d/1m,5d/1d)',
+        used: `v7:quote${needFallback.length ? ' + chart(1m/1d)' : ''}`,
       }
     })
   } catch (e: any) {
