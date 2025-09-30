@@ -1,6 +1,10 @@
 // src/pages/api/market/congress/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCache } from '@/lib/kv'   // ⬅️ KV helper (named export)
 
+// ----------------------------------------------------
+// Types
+// ----------------------------------------------------
 type Item = {
   publishedISO: string | null
   publishedLabel: string
@@ -15,7 +19,9 @@ type Item = {
 
 export const config = { runtime: 'nodejs' }
 
-// ----- utils -----
+// ----------------------------------------------------
+// Kleine utils
+// ----------------------------------------------------
 const monthMap: Record<string, number> = {
   jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5,
   jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, sept:9, september:9,
@@ -52,22 +58,32 @@ function subDaysISO(iso: string, days: number): string {
   return addDaysISO(iso, -days)
 }
 
-// ----- chromium/puppeteer bootstrap (Vercel & lokaal) -----
+function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
+  const t = (s || '').toLowerCase()
+  if (!t) return '—'
+  const isBuy  = /\b(buy|purchase|acquisition|acquire|bought)\b/.test(t)
+  const isSell = /\b(sell|sale|disposal|dispose|sold)\b/.test(t)
+  if (isBuy && !isSell) return 'BUY'
+  if (isSell && !isBuy) return 'SELL'
+  return '—'
+}
+
+// ----------------------------------------------------
+// Puppeteer bootstrap (Vercel & lokaal)
+// ----------------------------------------------------
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
-    // Pak de DEFAULT export van @sparticuz/chromium (belangrijk voor ESM)
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
 
-    // Typings van puppeteer-core (in jouw versie) staan alleen boolean | "shell" toe.
-    // Gebruik daarom een boolean (true) voor headless op Vercel.
     const chr = chromium as unknown as {
       args?: string[]
       defaultViewport?: any
       executablePath: () => Promise<string>
       headless?: unknown
     }
-    const headlessOpt: boolean = typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
+    const headlessOpt: boolean =
+      typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
 
     const browser = await puppeteer.default.launch({
       args: chr.args ?? [],
@@ -83,36 +99,27 @@ async function getBrowser() {
   }
 }
 
-function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
-  const t = (s || '').toLowerCase()
-  if (!t) return '—'
-  const isBuy  = /\b(buy|purchase|acquisition|acquire|bought)\b/.test(t)
-  const isSell = /\b(sell|sale|disposal|dispose|sold)\b/.test(t)
-  if (isBuy && !isSell) return 'BUY'
-  if (isSell && !isBuy) return 'SELL'
-  return '—'
-}
-
-// ----- handler -----
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const limitQ = Number(req.query.limit)
-  const limit = Number.isFinite(limitQ) ? Math.min(Math.max(limitQ, 1), 100) : 25
-
+// ----------------------------------------------------
+// De daadwerkelijke scrape (los van HTTP handler)
+// We halen tot ~150 rijen op en cachen het als geheel.
+// ----------------------------------------------------
+async function scrapeCongress(maxItems: number): Promise<Item[]> {
+  const out: Item[] = []
   let browser: any
+
   try {
     const { browser: b } = await getBrowser()
     browser = b
     const page = await browser.newPage()
-    // Belangrijk: zorg dat ALLE kolommen zichtbaar zijn (Traded/Type kan verborgen zijn bij small width)
+
+    // Zorg dat alle kolommen zichtbaar zijn
     await page.setViewport({ width: 1480, height: 1200, deviceScaleFactor: 1 })
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
     )
 
-    const out: Item[] = []
     let pageNum = 1
-
-    while (out.length < limit && pageNum <= 6) {
+    while (out.length < maxItems && pageNum <= 6) {
       const url = `https://www.capitoltrades.com/trades?page=${pageNum}&sort=-transaction_date`
       await page.goto(url, { waitUntil: 'networkidle0', timeout: 60_000 })
 
@@ -178,11 +185,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             priceText = m ? m[0] : t
           }
 
-          // Side/Type (BUY/SELL). Probeer eerst expliciete kolom:
           let sideRaw = ''
           if (idxType >= 0) sideRaw = getCell(tr, idxType)
-
-          // Fallback: badge/tekst in de hele rij
           if (!sideRaw) {
             const whole = clean(tr.textContent || '')
             const m = whole.match(/\b(buy|purchase|acquisition|acquire|sold|sell|sale|disposal|dispose)\b/i)
@@ -199,8 +203,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (const r of rows) {
         const pubISO = toISO(r.publishedText as any)
-
-        // reconstruct traded via "Filed After" indien nodig
         let trdISO = toISO(r.tradedText as any)
         if (!trdISO && pubISO && r.filedAfterDays != null && r.filedAfterDays >= 0) {
           trdISO = subDaysISO(pubISO, r.filedAfterDays)
@@ -220,27 +222,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           price: r.priceText || '—',
           side,
         })
-        if (out.length >= limit) break
+        if (out.length >= maxItems) break
       }
 
       pageNum++
     }
 
-    // newest first (published > traded)
     out.sort((a, b) => {
       const tA = new Date(a.publishedISO || a.tradedISO || 0).getTime()
       const tB = new Date(b.publishedISO || b.tradedISO || 0).getTime()
       return tB - tA
     })
 
-    res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
-    return res.status(200).json({
-      items: out.slice(0, limit),
-      hint: 'CapitolTrades scrape (Published/Traded/Size/Price + BUY/SELL; viewport-wide + filed-after fallback)',
-    })
-  } catch (e: any) {
-    return res.status(502).json({ items: [], hint: 'Headless scrape failed', detail: String(e?.message || e) })
+    return out
   } finally {
     try { await browser?.close() } catch {}
+  }
+}
+
+// ----------------------------------------------------
+// HTTP handler met KV-cache
+// ----------------------------------------------------
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const limitQ = Number(req.query.limit)
+  const limit = Number.isFinite(limitQ) ? Math.min(Math.max(limitQ, 1), 100) : 25
+
+  // Cache-sleutel en TTL
+  // We scrapen standaard tot 150 items en cachen die (client kan met ?limit=… minder opvragen).
+  const SCRAPE_BATCH = 150
+  const CACHE_KEY = `congress:v1:${SCRAPE_BATCH}`
+  const TTL_SEC = 180 // 3 minuten
+
+  const force = (String(req.query.force || '').toLowerCase() === '1')
+
+  try {
+    // Optioneel: force bypass cache
+    const data = force
+      ? await scrapeCongress(SCRAPE_BATCH)
+      : await withCache<Item[]>(CACHE_KEY, TTL_SEC, () => scrapeCongress(SCRAPE_BATCH))
+
+    res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
+    return res.status(200).json({
+      items: data.slice(0, limit),
+      hint: force
+        ? 'Fresh scrape (force=1)'
+        : `KV cached (${TTL_SEC}s) – fresh on miss`,
+    })
+  } catch (e: any) {
+    return res.status(502).json({
+      items: [],
+      hint: 'Congress scrape failed',
+      detail: String(e?.message || e),
+    })
   }
 }
