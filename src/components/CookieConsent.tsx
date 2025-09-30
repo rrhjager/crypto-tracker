@@ -53,8 +53,8 @@ export default function CookieConsent() {
         <div className="p-4">
           <div className="font-semibold mb-1">Cookies</div>
           <p className="text-sm text-gray-600">
-            We gebruiken noodzakelijke cookies en (optioneel) analytics/marketing.
-            Kies “Accept” of “Decline”, of pas instellingen aan.
+            We use essential cookies and optional analytics/marketing cookies.
+            Choose “Accept” or “Decline”, or adjust your preferences.
           </p>
 
           <div className="mt-3 flex items-center gap-2">
@@ -66,7 +66,7 @@ export default function CookieConsent() {
               Settings
             </button>
 
-            {/* Decline = grijs gevuld */}
+            {/* Decline = grey filled */}
             <button
               type="button"
               onClick={declineAll}
@@ -75,7 +75,7 @@ export default function CookieConsent() {
               Decline
             </button>
 
-            {/* Accept = wit met rand */}
+            {/* Accept = white with border */}
             <button
               type="button"
               onClick={acceptAll}
@@ -88,7 +88,7 @@ export default function CookieConsent() {
           {showPanel && (
             <div className="mt-3 border-t pt-3 space-y-2">
               <label className="flex items-center justify-between text-sm">
-                <span className="text-gray-700">Necessary</span>
+                <span className="text-gray-700">Essential</span>
                 <input type="checkbox" checked readOnly className="h-4 w-4 accent-gray-500" />
               </label>
               <label className="flex items-center justify-between text-sm">
