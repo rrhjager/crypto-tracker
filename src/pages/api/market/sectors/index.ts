@@ -1,6 +1,5 @@
 // src/pages/api/market/sectors/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCache, kvGetJSON, kvSetJSON } from '@/lib/kv'  // <-- named import
 
 export const config = { runtime: 'nodejs' }
 
@@ -39,21 +38,14 @@ const MAP: Record<string, string> = {
 
 const SYMBOLS = Object.keys(MAP) // ['XLE','XLF',...]
 
-/* ---------------- In-memory cache (per instance) ---------------- */
 const G: any = globalThis as any
-if (!G.__SECTORS_MEM__) {
-  G.__SECTORS_MEM__ = { ts: 0, data: null as SectorRow[] | null }
+if (!G.__SECTORS_CACHE__) {
+  // eenvoudige in-memory cache (5 min)
+  G.__SECTORS_CACHE__ = { ts: 0, data: null as null | SectorRow[] }
 }
-// 5 min in-memory (super snel voor hot instances)
-const MEM_TTL_MS = 5 * 60 * 1000
-// 30 min gedeeld via KV (EOD data – prima om langer te cachen)
-const KV_TTL_SEC = 30 * 60
-const KV_KEY = 'sectors:v2:stooq-eod'
 
-// helpers
 function pct(a?: number | null, b?: number | null) {
-  if (a == null || b == null) return null
-  if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return null
+  if (!a || !b || !isFinite(a) || !isFinite(b)) return null
   return ((a / b) - 1) * 100
 }
 
@@ -68,8 +60,8 @@ async function fetchStooqCSV(sym: string) {
   const rows = lines.slice(1).map(line => {
     const [d, , , , c] = line.split(',')
     const close = Number(c)
-    return { date: d, close: Number.isFinite(close) ? close : NaN }
-  }).filter(x => x.date && Number.isFinite(x.close))
+    return { date: d, close: isFinite(close) ? close : NaN }
+  }).filter(x => x.date && isFinite(x.close))
   return rows
 }
 
@@ -78,10 +70,12 @@ function takeCloseAtOffset(arr: {date:string,close:number}[], offFromEnd: number
   if (idx < 0 || idx >= arr.length) return null
   return arr[idx].close
 }
+
 function findYtdBase(arr: {date:string,close:number}[]) {
   if (!arr.length) return null
   const last = arr[arr.length - 1].date // yyyy-mm-dd
   const year = Number(last.slice(0,4))
+  // eerste handelsdag van dit jaar: zoek eerste rij met zelfde jaar
   const i = arr.findIndex(r => Number(r.date.slice(0,4)) === year)
   return i >= 0 ? arr[i].close : null
 }
@@ -113,79 +107,33 @@ async function buildOne(sym: string): Promise<SectorRow> {
   }
 }
 
-async function buildAll(): Promise<SectorRow[]> {
-  // Parallel, maar met kleine pauze om beleefd te blijven
-  const out: SectorRow[] = []
-  for (const s of SYMBOLS) {
-    try {
-      out.push(await buildOne(s))
-      await new Promise(r => setTimeout(r, 80))
-    } catch {
-      out.push({ code: s, sector: MAP[s], close: null })
-    }
-  }
-  out.sort((a, b) => ( (b.d1 ?? -999) - (a.d1 ?? -999) ))
-  return out
-}
-
-/* ---------------- handler ---------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const force = String(req.query.force || '') === '1'
-  const debug = String(req.query.debug || '') === '1'
-
-  // 1) ultrasnel: memory cache
-  if (!force && G.__SECTORS_MEM__.data && (Date.now() - G.__SECTORS_MEM__.ts) < MEM_TTL_MS) {
-    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600')
-    return res.status(200).json({
-      items: G.__SECTORS_MEM__.data,
-      source: 'memory',
-      ...(debug ? { meta: { memAgeSec: Math.round((Date.now()-G.__SECTORS_MEM__.ts)/1000) } } : {})
-    })
+  // cache 5 min
+  const TTL = 5 * 60 * 1000
+  if (G.__SECTORS_CACHE__.data && (Date.now() - G.__SECTORS_CACHE__.ts) < TTL) {
+    return res.status(200).json({ items: G.__SECTORS_CACHE__.data, source: 'stooq-cache' })
   }
 
-  // 2) probeer gedeelde KV cache
-  if (!force) {
-    const kvData = await kvGetJSON<SectorRow[]>(KV_KEY)
-    if (kvData?.length) {
-      // hydrate memory cache voor volgende hits
-      G.__SECTORS_MEM__ = { ts: Date.now(), data: kvData }
-      res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900')
-      return res.status(200).json({
-        items: kvData,
-        source: 'kv',
-        ...(debug ? { meta: { kvKey: KV_KEY } } : {})
-      })
-    }
-  }
-
-  // 3) fresh build (of force)
   try {
-    // met KV wrapper die no-ops als KV ontbreekt
-    const items = force
-      ? await buildAll()
-      : await withCache<SectorRow[]>(KV_KEY, KV_TTL_SEC, async () => await buildAll())
-
-    // update memory cache
-    G.__SECTORS_MEM__ = { ts: Date.now(), data: items }
-
-    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1200')
-    return res.status(200).json({
-      items,
-      source: force ? 'fresh(force)' : 'fresh-or-kvfill',
-      ...(debug ? { meta: { kvKey: KV_KEY } } : {})
-    })
-  } catch (e: any) {
-    // laatste redmiddel: toch kijken of er nog KV stale staat
-    const stale = await kvGetJSON<SectorRow[]>(KV_KEY)
-    if (stale?.length) {
-      G.__SECTORS_MEM__ = { ts: Date.now(), data: stale }
-      res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=900')
-      return res.status(200).json({
-        items: stale,
-        source: 'kv-stale',
-        hint: 'Fresh build failed; served stale KV cache.'
-      })
+    // fetch sequentieel om rate-limits te vermijden (Stooq is snel)
+    const out: SectorRow[] = []
+    for (const s of SYMBOLS) {
+      try {
+        out.push(await buildOne(s))
+        // kleine delay om beleefd te zijn
+        await new Promise(r => setTimeout(r, 120))
+      } catch (e: any) {
+        out.push({ code: s, sector: MAP[s], close: null })
+      }
     }
+
+    // sorteer op dagrendement desc (als aanwezig)
+    out.sort((a, b) => ( (b.d1 ?? -999) - (a.d1 ?? -999) ))
+
+    G.__SECTORS_CACHE__ = { ts: Date.now(), data: out }
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1200')
+    return res.status(200).json({ items: out, source: 'stooq' })
+  } catch (e: any) {
     return res.status(502).json({ items: [], hint: 'Sectors from Stooq failed', detail: String(e?.message || e) })
   }
 }
