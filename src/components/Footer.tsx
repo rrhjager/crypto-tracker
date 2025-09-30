@@ -1,10 +1,18 @@
 // src/components/Footer.tsx
 import Link from 'next/link'
+import React from 'react'
 
 export default function Footer() {
   const year = new Date().getFullYear()
   const head = 'font-semibold text-gray-100'
   const a = 'text-gray-300 hover:underline'
+
+  function openCookieSettings(e: React.MouseEvent) {
+    e.preventDefault()
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('cookie:open'))
+    }
+  }
 
   return (
     <footer className="mt-16 border-t" style={{ backgroundColor: '#232323', borderColor: '#2b2b2b' }}>
@@ -75,6 +83,17 @@ export default function Footer() {
         <div className="mt-10 pt-6 border-t flex items-center justify-between" style={{ borderColor: '#2b2b2b' }}>
           <div className="text-sm text-gray-400">
             © {year} SignalHub. All rights reserved.
+          </div>
+
+          {/* ✅ Nieuw: Cookie settings knop rechts */}
+          <div className="text-sm">
+            <a
+              href="#cookie-settings"
+              onClick={openCookieSettings}
+              className="text-gray-300 hover:underline"
+            >
+              Cookie settings
+            </a>
           </div>
         </div>
       </div>

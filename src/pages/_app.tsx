@@ -4,8 +4,11 @@ import type { NextPage } from 'next'
 import '@/styles/globals.css'
 import { SWRConfig } from 'swr'
 import Layout from '@/components/Layout'
-import Footer from '@/components/Footer'   // ⬅️ nieuw
+import Footer from '@/components/Footer'
 import React from 'react'
+
+// ⬇️ Nieuw: compacte cookie-keuze rechtsonder
+import CookieConsent from '@/components/CookieConsent'
 
 type NextPageWithLayout = NextPage & {
   getLayout?: (page: React.ReactElement) => React.ReactNode
@@ -66,7 +69,9 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
     >
       <>
         {page}
-        <Footer /> {/* ⬅️ render de site-footer overal */}
+        <Footer />
+        {/* Rechtsonder, klein en onopvallend */}
+        <CookieConsent />
       </>
     </SWRConfig>
   )
