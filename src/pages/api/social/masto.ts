@@ -5,22 +5,25 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 
 type MastoStatus = {
   id: string
-  url: string | null
+  url: string
   created_at: string
   content: string
+  language?: string | null
+  reblogs_count: number
+  favourites_count: number
   account: {
     id: string
-    acct: string
     username: string
+    acct: string
     display_name: string
     url: string
     avatar: string
-    followers_count?: number
+    followers_count: number
   }
   media_attachments?: Array<{
-    url: string
-    preview_url: string
-    type: 'image' | 'gifv' | 'video' | string
+    preview_url?: string
+    url?: string
+    type?: string
     description?: string | null
   }>
 }
@@ -28,96 +31,130 @@ type MastoStatus = {
 type Item = {
   id: string
   url: string
+  author: string
+  handle: string
+  avatar: string
+  followers: number
   createdAt: string
-  text: string
-  author: {
-    handle: string
-    name: string
-    avatar: string
-    followers: number
-    profileUrl: string
-  }
+  contentHtml: string
+  favourites: number
+  reblogs: number
   image?: string | null
-  source: 'mastodon'
-  instance: string
-  tag: string
 }
 
-function stripHtml(html: string) {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/\s+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+// ---- simpele in-memory cache (2 min) ----
+const G: any = globalThis as any
+if (!G.__MASTO_CACHE__) {
+  G.__MASTO_CACHE__ = new Map<string, { ts: number; data: any }>()
+}
+const putCache = (key: string, data: any, ttlMs = 120_000) =>
+  G.__MASTO_CACHE__.set(key, { ts: Date.now() + ttlMs, data })
+const getCache = (key: string) => {
+  const hit = G.__MASTO_CACHE__.get(key)
+  if (!hit) return null
+  if (Date.now() > hit.ts) return null
+  return hit.data
 }
 
-async function fetchTagFromInstance(instance: string, tag: string, limit = 40): Promise<MastoStatus[]> {
+async function fetchTag(instance: string, tag: string, limit: number): Promise<MastoStatus[]> {
   const url = `https://${instance}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=${Math.min(
     Math.max(limit, 1),
     40
   )}`
   const r = await fetch(url, {
     headers: {
-      'cache-control': 'no-cache',
+      // simpele UA; Mastodon accepteert anoniem, maar een nette UA helpt soms bij rate limiting
       'user-agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+        'SignalHubBot/1.0 (+https://signalhub.tech) Mozilla/5.0 (compatible; MastodonFetcher)',
+      'cache-control': 'no-cache',
+      accept: 'application/json',
     },
+    cache: 'no-store',
   })
-  if (!r.ok) throw new Error(`${instance} HTTP ${r.status}`)
-  return (await r.json()) as MastoStatus[]
+  if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
+  const j = (await r.json()) as MastoStatus[]
+  return Array.isArray(j) ? j : []
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const tag = String(req.query.tag || 'stocks') // voorbeeld: stocks, markets, crypto
-    const minFollowers = Number(req.query.minFollowers ?? 100000) || 100000
-    const instances = (String(req.query.instances || '').trim()
-      ? String(req.query.instances).split(',').map((s) => s.trim()).filter(Boolean)
-      : ['mastodon.social', 'mstdn.social', 'mastodon.online']) as string[]
+    // Query opties
+    const tagOne = (req.query.tag as string) || ''
+    const tagsMulti = (req.query.tags as string) || ''
+    const instance = (req.query.instance as string) || 'mastodon.social'
+    const minFollowers = Math.max(0, Number(req.query.minFollowers ?? 50000)) // default 50k
+    const limit = Math.max(1, Math.min(40, Number(req.query.limit ?? 20)))    // per-tag fetch
 
-    const all: Item[] = []
+    // Tags bepalen
+    let tags: string[] = []
+    if (tagsMulti) {
+      tags = tagsMulti
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+    } else if (tagOne) {
+      tags = [tagOne.trim()]
+    } else {
+      return res.status(400).json({ error: 'Provide ?tags=a,b,c or ?tag=x' })
+    }
 
-    // Vriendelijk parallelliseren
-    await Promise.all(
-      instances.map(async (inst) => {
+    // Cache key
+    const cacheKey = JSON.stringify({ tags, instance, minFollowers, limit })
+    const cached = getCache(cacheKey)
+    if (cached) {
+      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120')
+      return res.status(200).json(cached)
+    }
+
+    // Alle tags ophalen (parallel), fouten negeren per tag
+    const lists = await Promise.all(
+      tags.map(async (t) => {
         try {
-          const rows = await fetchTagFromInstance(inst, tag, 40)
-          for (const s of rows) {
-            const f = Number(s.account?.followers_count ?? 0)
-            if (f < minFollowers) continue
-            if (!s.url) continue
-            all.push({
-              id: `${inst}:${s.id}`,
-              url: s.url,
-              createdAt: s.created_at,
-              text: stripHtml(s.content).slice(0, 400),
-              author: {
-                handle: s.account?.acct || s.account?.username || '',
-                name: s.account?.display_name || s.account?.username || '',
-                avatar: s.account?.avatar || '',
-                followers: f,
-                profileUrl: s.account?.url || '',
-              },
-              image: s.media_attachments?.find((m) => m.type === 'image')?.preview_url ?? null,
-              source: 'mastodon',
-              instance: inst,
-              tag,
-            })
-          }
+          return await fetchTag(instance, t, limit)
         } catch {
-          /* sla fouten per instance over */
+          return [] as MastoStatus[]
         }
       })
     )
 
-    // sorteer: meest recente eerst
-    all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    // Flatten + filter op volgers + de-dup (op url/id) + sorteren op tijd
+    const seen = new Set<string>()
+    const items: Item[] = []
+    for (const arr of lists) {
+      for (const s of arr) {
+        const uid = s.url || s.id
+        if (!uid || seen.has(uid)) continue
+        if ((s.account?.followers_count ?? 0) < minFollowers) continue
 
-    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600')
-    return res.status(200).json({ items: all.slice(0, 24), meta: { tag, minFollowers, instances } })
+        seen.add(uid)
+        items.push({
+          id: s.id,
+          url: s.url,
+          author: s.account?.display_name || s.account?.username || s.account?.acct || 'Unknown',
+          handle: s.account?.acct || '',
+          avatar: s.account?.avatar || '',
+          followers: Number(s.account?.followers_count || 0),
+          createdAt: s.created_at,
+          contentHtml: s.content || '',
+          favourites: Number(s.favourites_count || 0),
+          reblogs: Number(s.reblogs_count || 0),
+          image:
+            (s.media_attachments?.[0]?.preview_url ||
+              s.media_attachments?.[0]?.url) ??
+            null,
+        })
+      }
+    }
+
+    // Sorteer recent → oud
+    items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    const payload = { items, meta: { instance, tags, minFollowers, count: items.length } }
+    putCache(cacheKey, payload, 120_000)
+
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120')
+    return res.status(200).json(payload)
   } catch (e: any) {
-    return res.status(502).json({ items: [], error: String(e?.message || e) })
+    return res.status(502).json({ error: String(e?.message || e) })
   }
 }

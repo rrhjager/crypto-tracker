@@ -1,29 +1,30 @@
 // src/components/SocialCarousel.tsx
 import React, { useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
 
 type Item = {
   id: string
   url: string
+  author: string
+  handle: string
+  avatar: string
+  followers: number
   createdAt: string
-  text: string
-  author: { handle: string; name: string; avatar: string; followers: number; profileUrl: string }
+  contentHtml: string
+  favourites: number
+  reblogs: number
   image?: string | null
-  source: 'mastodon'
-  instance: string
-  tag: string
 }
 
 export default function SocialCarousel({
-  api = '/api/social/masto?tag=stocks&minFollowers=100000',
-  title = 'Social Buzz',
+  api,
+  title = 'Social buzz',
 }: {
-  api?: string
+  api: string
   title?: string
 }) {
   const [items, setItems] = useState<Item[]>([])
   const [err, setErr] = useState<string | null>(null)
-  const scrollerRef = useRef<HTMLDivElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let aborted = false
@@ -43,74 +44,121 @@ export default function SocialCarousel({
     }
   }, [api])
 
-  const scrollBy = (dx: number) => {
-    const el = scrollerRef.current
+  const scroll = (dir: 'l' | 'r') => {
+    const el = wrapRef.current
     if (!el) return
-    el.scrollBy({ left: dx, behavior: 'smooth' })
+    const delta = Math.round(el.clientWidth * 0.85)
+    el.scrollBy({ left: dir === 'l' ? -delta : delta, behavior: 'smooth' })
+  }
+
+  if (err) {
+    return (
+      <section className="max-w-6xl mx-auto px-4 pb-10">
+        <div className="table-card p-5">
+          <div className="font-semibold mb-2">{title}</div>
+          <div className="text-sm text-white/60">Failed to load: {err}</div>
+        </div>
+      </section>
+    )
   }
 
   return (
-    <div className="table-card p-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="font-semibold text-gray-900">{title}</div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => scrollBy(-380)}
-            className="rounded-lg border px-2 py-1 text-sm text-gray-700 bg-white hover:bg-gray-50"
-          >
-            ←
-          </button>
-          <button
-            onClick={() => scrollBy(380)}
-            className="rounded-lg border px-2 py-1 text-sm text-gray-700 bg-white hover:bg-gray-50"
-          >
-            →
-          </button>
-        </div>
-      </div>
-
-      {err ? (
-        <div className="text-sm text-red-600">Failed to load: {err}</div>
-      ) : items.length === 0 ? (
-        <div className="text-sm text-gray-500">No posts found (try a different tag or lower minFollowers).</div>
-      ) : (
-        <div
-          ref={scrollerRef}
-          className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory [scrollbar-width:none]"
-          style={{ scrollbarWidth: 'none' }}
-        >
-          {items.map((it) => (
-            <article
-              key={it.id}
-              className="min-w-[340px] max-w-[340px] snap-start rounded-2xl border bg-white overflow-hidden"
+    <section className="max-w-6xl mx-auto px-4 pb-16">
+      <div className="table-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-semibold">{title}</div>
+          <div className="flex gap-1">
+            <button
+              aria-label="Scroll left"
+              onClick={() => scroll('l')}
+              className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-white/15 text-white/80 hover:text-white"
             >
-              {it.image ? (
-                <a href={it.url} target="_blank" rel="noreferrer">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={it.image} alt="" className="w-full h-[160px] object-cover" />
-                </a>
-              ) : null}
-              <div className="p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={it.author.avatar} alt="" className="w-8 h-8 rounded-full border" />
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{it.author.name || it.author.handle}</div>
-                    <div className="text-xs text-gray-500 truncate">@{it.author.handle} · {Intl.NumberFormat('en-US').format(it.author.followers)} followers</div>
-                  </div>
-                </div>
-                <p className="text-sm text-gray-800 line-clamp-5">{it.text}</p>
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>{new Date(it.createdAt).toLocaleString()}</span>
-                  <a className="text-blue-600 hover:underline" href={it.url} target="_blank" rel="noreferrer">
-                    Open
-                  </a>
-                </div>
-              </div>
-            </article>
-          ))}
+              ←
+            </button>
+            <button
+              aria-label="Scroll right"
+              onClick={() => scroll('r')}
+              className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-white/15 text-white/80 hover:text-white"
+            >
+              →
+            </button>
+          </div>
         </div>
-      )}
-    </div>
+
+        {items.length === 0 ? (
+          <div className="text-white/60 text-sm">
+            No posts found (try different tags or a lower follower threshold).
+          </div>
+        ) : (
+          <div
+            ref={wrapRef}
+            className="overflow-x-auto scrollbar-hide"
+            style={{ scrollSnapType: 'x mandatory' as any }}
+          >
+            <div className="flex gap-3 min-w-full">
+              {items.map((p) => (
+                <a
+                  key={p.id}
+                  href={p.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex-shrink-0 w-[280px] sm:w-[320px] rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition p-3"
+                  style={{ scrollSnapAlign: 'start' as any }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <img
+                      src={p.avatar}
+                      alt={p.author}
+                      className="w-8 h-8 rounded-full object-cover"
+                      loading="lazy"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold truncate">{p.author}</div>
+                      <div className="text-xs text-white/60 truncate">@{p.handle}</div>
+                    </div>
+                    <div className="ml-auto text-xs text-white/60">
+                      {Intl.NumberFormat('en-US', { notation: 'compact' }).format(p.followers)} followers
+                    </div>
+                  </div>
+
+                  {p.image && (
+                    <div className="mb-2 rounded-lg overflow-hidden border border-white/10">
+                      <img src={p.image} alt="" className="w-full h-36 object-cover" loading="lazy" />
+                    </div>
+                  )}
+
+                  <div
+                    className="text-sm text-white/90 line-clamp-5"
+                    // Mastodon geeft veilige HTML terug (links/emojis). We houden het simpel:
+                    dangerouslySetInnerHTML={{ __html: p.contentHtml }}
+                  />
+
+                  <div className="mt-3 flex items-center justify-between text-xs text-white/60">
+                    <span>
+                      ❤️ {p.favourites} · 🔁 {p.reblogs}
+                    </span>
+                    <time dateTime={p.createdAt}>
+                      {new Date(p.createdAt).toLocaleString('en-US', {
+                        month: 'short',
+                        day: '2-digit',
+                      })}
+                    </time>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <style jsx global>{`
+        .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+        }
+        .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
+    </section>
   )
 }
