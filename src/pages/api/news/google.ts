@@ -24,7 +24,6 @@ function parseRss(xml: string) {
     const pubDate = pick('pubDate')
     let source = pick('source').replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1')
 
-    // Sommige items hebben een <guid> met URL, gebruik die als link leeg is
     if (!link) {
       const guid = pick('guid').replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1')
       if (guid) link = guid
@@ -43,18 +42,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const q = String(req.query.q || '').trim()
     if (!q) return res.status(400).json({ error: 'Missing ?q=search+terms' })
 
-    // NL feed (headline language)
+    // 👉 US English feed
     const params = new URLSearchParams({
       q,
-      hl: 'nl',
-      gl: 'NL',
-      ceid: 'NL:nl',
+      hl: 'en-US',
+      gl: 'US',
+      ceid: 'US:en',
     })
     const url = `https://news.google.com/rss/search?${params.toString()}`
     const r = await fetch(url, {
       headers: {
         'cache-control': 'no-cache',
-        // Eenvoudige UA om bots te vermijden
         'user-agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
       },
