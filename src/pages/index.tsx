@@ -5,11 +5,15 @@ import Image from 'next/image'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
-import dynamic from 'next/dynamic'
+import dynamic from 'next/dynamic'                // ⬅️ TOEGEVOEGD
 import { AEX } from '@/lib/aex'
 
-// Lazy-load the carousel (no SSR)
-const SocialCarousel = dynamic(() => import('@/components/SocialCarousel'), { ssr: false })
+
+/* lazy-load de carrousel zodat hij geen SSR nodig heeft */
+const SocialCarousel = dynamic(                   // ⬅️ TOEGEVOEGD
+  () => import('@/components/SocialCarousel'),
+  { ssr: false }
+)
 
 /* ---------------- config (hero image in /public/images) ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
@@ -41,6 +45,10 @@ type EquityPick = { symbol: string; name: string; market: string; pct: number }
 const num = (v: number | null | undefined, d = 2) =>
   (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
+function classNames(...xs: (string | false | null | undefined)[]) {
+  return xs.filter(Boolean).join(' ')
+}
+
 /* Fallback voor %: gebruik change% als die er is, anders bereken uit change en price. */
 function pctFromQuote(q?: Quote): number | null {
   if (!q) return null
@@ -50,7 +58,9 @@ function pctFromQuote(q?: Quote): number | null {
   const price = Number(q.regularMarketPrice)
   if (Number.isFinite(chg) && Number.isFinite(price)) {
     const prev = price - chg
-    if (prev !== 0 && Number.isFinite(prev)) return (chg / prev) * 100
+    if (prev !== 0 && Number.isFinite(prev)) {
+      return (chg / prev) * 100
+    }
   }
   return null
 }
@@ -466,13 +476,18 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* Social carousel */}
+      {/* ⬇️ NIEUW: Social carrousel onderaan */}
       <section className="max-w-6xl mx-auto px-4 pb-16">
         <SocialCarousel
-          api="/api/social/masto?tags=stocks,investing,finance,markets,bitcoin,crypto&minFollowers=10000&limit=20"
+          api="/api/social/masto?tag=markets&minFollowers=100000"
           title="Markets — Social Buzz"
         />
       </section>
+      {/* SOCIAL — carrousel (Mastodon, meerdere tags, 50k+ followers) */}
+<SocialCarousel
+  api="/api/social/masto?tags=stocks,investing,finance,markets,bitcoin,crypto&minFollowers=50000&limit=20"
+  title="Markets — Social Buzz"
+/>
     </>
   )
 }
