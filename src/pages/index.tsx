@@ -8,7 +8,7 @@ import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 
 /* ---------------- config (hero image in /public/images) ---------------- */
-const HERO_IMG = '/images/hero-crypto-tracker.png' // <- correct pad nu het bestand in /public/images staat
+const HERO_IMG = '/images/hero-crypto-tracker.png'
 
 /* ---------------- types ---------------- */
 type Quote = {
@@ -41,7 +41,7 @@ function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(' ')
 }
 
-/** 🆕 Fallback voor %: gebruik change% als die er is, anders bereken uit change en price. */
+/* Fallback voor %: gebruik change% als die er is, anders bereken uit change en price. */
 function pctFromQuote(q?: Quote): number | null {
   if (!q) return null
   const pct = Number(q.regularMarketChangePercent)
@@ -147,7 +147,6 @@ export default function Homepage() {
         if (!aborted) mutate(key, data, { revalidate: false })
       } catch {}
     }
-    // 🆕 Forceer US-EN nieuws via query params
     const locale = 'hl=en-US&gl=US&ceid=US:en'
     ;[
       '/api/coin/top-movers',
@@ -158,7 +157,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     EQUITIES — per beurs BEST BUY/SELL (via grootste % dagstijger/daler)
+     EQUITIES — per beurs BEST BUY/SELL
      ======================= */
   const MARKET_ORDER = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex'] as const
 
@@ -180,6 +179,294 @@ export default function Homepage() {
           const r = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`, { cache: 'no-store' })
           if (!r.ok) continue
           const j: { quotes: Record<string, Quote> } = await r.json()
-          const arr = cons.map(c => {
-            const q = j.quotes?.[c.symbol]
-            const pct = pctFromQuote(q)
+          const arr = cons
+            .map((c) => {
+              const q = j.quotes?.[c.symbol]
+              const pct = pctFromQuote(q)
+              return { ...c, pct: Number.isFinite(pct as number) ? (pct as number) : NaN }
+            })
+            .filter((x) => Number.isFinite(x.pct))
+
+          if (!arr.length) continue
+          const top = [...arr].sort((a,b)=> b.pct - a.pct)[0]
+          const bot = [...arr].sort((a,b)=> a.pct - b.pct)[0]
+
+          if (top) buys.push({ symbol: top.symbol, name: top.name, market: top.market, pct: top.pct })
+          if (bot) sells.push({ symbol: bot.symbol, name: bot.name, market: bot.market, pct: bot.pct })
+        } catch {}
+      }
+
+      if (!aborted) {
+        const orderIndex = (m:string)=> MARKET_ORDER.indexOf(m as any)
+        setBestBuyPerMarket(buys.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
+        setBestSellPerMarket(sells.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
+      }
+    })()
+    return () => { aborted = true }
+  }, [])
+
+  /* -------- Crypto movers (Gainers/Losers) -------- */
+  const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
+  useEffect(()=>{
+    let aborted=false
+    ;(async()=>{
+      try{
+        const r = await fetch('/api/coin/top-movers', { cache:'no-store' })
+        if (!r.ok) return
+        const j = await r.json()
+        const gainers = (j.gainers || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
+        const losers  = (j.losers  || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
+        if (!aborted) setCryptoMovers({ gainers, losers })
+      }catch{}
+    })()
+    return ()=>{aborted=true}
+  },[])
+
+  /* -------- News (Google News RSS via /api/news/google?q=...) -------- */
+  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
+  const [newsEq, setNewsEq] = useState<NewsItem[]>([])
+  useEffect(()=>{
+    let aborted=false
+    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
+      try{
+        const query =
+          topic === 'crypto'
+            ? 'crypto OR bitcoin OR ethereum OR blockchain'
+            : 'equities OR stocks OR stock market OR aandelen OR beurs'
+        const locale = 'hl=en-US&gl=US&ceid=US:en'
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
+          title: x.title || '',
+          url: x.link,
+          source: x.source || '',
+          published: x.pubDate || '',
+          image: null,
+        }))
+        if (!aborted) setter(arr)
+      }catch{
+        if (!aborted) setter([])
+      }
+    }
+    load('crypto', setNewsCrypto)
+    load('equities', setNewsEq)
+    return ()=>{aborted=true}
+  },[])
+
+  /* -------- AEX polling (mag blijven) -------- */
+  const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
+  useEffect(() => {
+    let timer:any, aborted=false
+    async function load() {
+      try {
+        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
+        const r = await fetch(url, { cache:'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j: { quotes: Record<string, Quote> } = await r.json()
+        if (!aborted) setQuotes(j.quotes || {})
+      } catch {} finally {
+        if (!aborted) timer = setTimeout(load, 20000)
+      }
+    }
+    load()
+    return ()=> { aborted=true; if (timer) clearTimeout(timer) }
+  }, [symbols])
+
+  /* ---------------- render ---------------- */
+  return (
+    <>
+      <Head>
+        <title>SignalHub — Clarity in Markets</title>
+        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
+        <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
+        <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
+      </Head>
+
+      {/* WHY SIGNALHUB met hero-beeld rechts */}
+      <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
+        <div className="grid md:grid-cols-2 gap-8 items-center">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
+            <div className="text-white/80 mt-3 space-y-4">
+              <p>
+                <strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected
+                indicators across both crypto and global equities, we deliver a complete market overview that
+                cuts through the noise. Every asset is distilled into a clear stoplight signal: BUY, HOLD, or SELL,
+                backed by momentum, volume, sentiment, and market insights.
+              </p>
+              <p>
+                Our platform doesn’t just track prices; it highlights what truly matters. From insider trading
+                activity in U.S. Congress to market breadth and volatility regimes, SignalHub equips you with the
+                context to make smarter portfolio decisions.
+              </p>
+              <p>
+                Already trusted by thousands of investors, SignalHub is the go-to platform for anyone seeking
+                sharper insights, faster decisions, and a more confident investment journey.
+              </p>
+              <p>
+                <em>Clarity, confidence, and control. All in one clear buy, hold or sell overview.</em>
+              </p>
+            </div>
+          </div>
+
+          {/* hero image rechts */}
+          <div className="table-card overflow-hidden">
+            <Image
+              src={HERO_IMG}
+              alt="Crypto Tracker — SignalHub"
+              width={1280}
+              height={960}
+              priority
+              unoptimized
+              className="w-full h-auto"
+            />
+          </div>
+        </div>
+
+        {/* scheidingslijn */}
+        <div className="mt-8 h-px bg-white/10" />
+      </section>
+
+      {/* EQUITIES — Top BUY/SELL per beurs */}
+      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
+        {/* BUY */}
+        <div className="table-card p-5">
+          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY</h2>
+          <ul className="divide-y divide-white/10">
+            {bestBuyPerMarket.length===0 ? (
+              <li className="py-3 text-white/60">Nog geen data…</li>
+            ) : bestBuyPerMarket.map((r,i)=>(
+              <li key={`bb${i}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
+                  <div className="font-medium truncate">
+                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                  </div>
+                </div>
+                <div className="shrink-0 text-sm font-medium text-green-300 whitespace-nowrap">
+                  {num(r.pct, 2)}%
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* SELL */}
+        <div className="table-card p-5">
+          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL</h2>
+          <ul className="divide-y divide-white/10">
+            {bestSellPerMarket.length===0 ? (
+              <li className="py-3 text-white/60">Nog geen data…</li>
+            ) : bestSellPerMarket.map((r,i)=>(
+              <li key={`bs${i}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
+                  <div className="font-medium truncate">
+                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                  </div>
+                </div>
+                <div className="shrink-0 text-sm font-medium text-red-300 whitespace-nowrap">
+                  {num(r.pct, 2)}%
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      {/* BIGGEST CRYPTO MOVERS */}
+      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
+        <div className="table-card p-5">
+          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Gainers</h2>
+          <ul className="divide-y divide-white/10">
+            {cryptoMovers.gainers.length===0 ? (
+              <li className="py-3 text-white/60">Geen data…</li>
+            ) : cryptoMovers.gainers.map((m,i)=>(
+              <li key={`cg${i}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="truncate">
+                  <div className="font-medium truncate">{m.name || m.symbol}</div>
+                  <div className="text-white/60 text-xs">{m.symbol}</div>
+                </div>
+                <div className="text-green-300 text-sm font-medium">
+                  {num(m.pct ?? null, 2)}%
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 text-sm">
+            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
+          </div>
+        </div>
+
+        <div className="table-card p-5">
+          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Losers</h2>
+          <ul className="divide-y divide-white/10">
+            {cryptoMovers.losers.length===0 ? (
+              <li className="py-3 text-white/60">Geen data…</li>
+            ) : cryptoMovers.losers.map((m,i)=>(
+              <li key={`cl${i}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="truncate">
+                  <div className="font-medium truncate">{m.name || m.symbol}</div>
+                  <div className="text-white/60 text-xs">{m.symbol}</div>
+                </div>
+                <div className="text-red-300 text-sm font-medium">
+                  {num(m.pct ?? null, 2)}%
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 text-sm">
+            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
+          </div>
+        </div>
+      </section>
+
+      {/* NEWS — thumbnails verwijderd, alleen regels */}
+      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Crypto News</h2>
+            <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
+          </div>
+          <ul className="grid gap-2">
+            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
+              newsCrypto.map((n,i)=>(
+                <li key={i} className="leading-tight">
+                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                    {n.title}
+                  </a>
+                  <div className="text-xs text-white/60 mt-0.5">
+                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                  </div>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Equities News</h2>
+            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
+          </div>
+          <ul className="grid gap-2">
+            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
+              newsEq.map((n,i)=>(
+                <li key={i} className="leading-tight">
+                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                    {n.title}
+                  </a>
+                  <div className="text-xs text-white/60 mt-0.5">
+                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                  </div>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+      </section>
+    </>
+  )
+}
