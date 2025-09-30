@@ -7,7 +7,7 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import dynamic from 'next/dynamic'                // ⬅️ TOEGEVOEGD
 import { AEX } from '@/lib/aex'
-import SocialCarousel from '@/components/SocialCarousel'
+
 
 /* lazy-load de carrousel zodat hij geen SSR nodig heeft */
 const SocialCarousel = dynamic(                   // ⬅️ TOEGEVOEGD
