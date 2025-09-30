@@ -1,18 +1,25 @@
 // src/lib/kv.ts
 import { kv } from '@vercel/kv'
 
-/** Get JSON from KV (returns undefined if missing) */
+/**
+ * Haal JSON uit Vercel KV.
+ * - Geeft `undefined` terug wanneer de key ontbreekt of bij parse-fouten.
+ */
 export async function kvGetJSON<T>(key: string): Promise<T | undefined> {
   try {
     const raw = await kv.get<string>(key)
     if (!raw) return undefined
+    // Upstash KV kan strings of native types teruggeven; beide afvangen:
     return typeof raw === 'string' ? (JSON.parse(raw) as T) : ((raw as unknown) as T)
   } catch {
     return undefined
   }
 }
 
-/** Set JSON with TTL (seconds). Example: ttlSec = 300 → 5 min */
+/**
+ * Sla JSON op in Vercel KV.
+ * - Optionele TTL in seconden (ex: 300 = 5 min).
+ */
 export async function kvSetJSON(key: string, value: unknown, ttlSec?: number) {
   const payload = JSON.stringify(value)
   if (ttlSec && Number.isFinite(ttlSec)) {
@@ -22,7 +29,11 @@ export async function kvSetJSON(key: string, value: unknown, ttlSec?: number) {
   }
 }
 
-/** Simple cache wrapper: tries KV first, otherwise calls fn and stores it. */
+/**
+ * Cache wrapper:
+ * - Probeert eerst KV (indien aanwezig).
+ * - Zo niet, roept `fn()` aan, slaat het resultaat op met TTL, en geeft dat terug.
+ */
 export async function withCache<T>(
   key: string,
   ttlSec: number,

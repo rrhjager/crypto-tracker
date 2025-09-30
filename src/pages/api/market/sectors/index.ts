@@ -1,6 +1,8 @@
 // src/pages/api/market/sectors/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCache } from '@/lib/kv' // <- named import! (geen default)
 
+// Draai in Node-runtime (puppeteer/edge niet nodig hier, maar consistent)
 export const config = { runtime: 'nodejs' }
 
 /**
@@ -38,14 +40,9 @@ const MAP: Record<string, string> = {
 
 const SYMBOLS = Object.keys(MAP) // ['XLE','XLF',...]
 
-const G: any = globalThis as any
-if (!G.__SECTORS_CACHE__) {
-  // eenvoudige in-memory cache (5 min)
-  G.__SECTORS_CACHE__ = { ts: 0, data: null as null | SectorRow[] }
-}
-
 function pct(a?: number | null, b?: number | null) {
-  if (!a || !b || !isFinite(a) || !isFinite(b)) return null
+  if (a == null || b == null) return null
+  if (!isFinite(a) || !isFinite(b) || b === 0) return null
   return ((a / b) - 1) * 100
 }
 
@@ -107,33 +104,33 @@ async function buildOne(sym: string): Promise<SectorRow> {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // cache 5 min
-  const TTL = 5 * 60 * 1000
-  if (G.__SECTORS_CACHE__.data && (Date.now() - G.__SECTORS_CACHE__.ts) < TTL) {
-    return res.status(200).json({ items: G.__SECTORS_CACHE__.data, source: 'stooq-cache' })
+async function fetchAllSectors(): Promise<SectorRow[]> {
+  const out: SectorRow[] = []
+  // sequentieel + mini delay om beleefd te zijn (Stooq is snel)
+  for (const s of SYMBOLS) {
+    try {
+      out.push(await buildOne(s))
+      await new Promise(r => setTimeout(r, 120))
+    } catch {
+      out.push({ code: s, sector: MAP[s], close: null })
+    }
   }
+  // sorteer op dagrendement desc (als aanwezig)
+  out.sort((a, b) => ((b.d1 ?? -999) - (a.d1 ?? -999)))
+  return out
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // 5 minuten cache in KV (gratis tier friendly)
+  const TTL_SECONDS = 300
+  const cacheKey = 'sectors:v1:stooq'
 
   try {
-    // fetch sequentieel om rate-limits te vermijden (Stooq is snel)
-    const out: SectorRow[] = []
-    for (const s of SYMBOLS) {
-      try {
-        out.push(await buildOne(s))
-        // kleine delay om beleefd te zijn
-        await new Promise(r => setTimeout(r, 120))
-      } catch (e: any) {
-        out.push({ code: s, sector: MAP[s], close: null })
-      }
-    }
-
-    // sorteer op dagrendement desc (als aanwezig)
-    out.sort((a, b) => ( (b.d1 ?? -999) - (a.d1 ?? -999) ))
-
-    G.__SECTORS_CACHE__ = { ts: Date.now(), data: out }
+    const items = await withCache<SectorRow[]>(cacheKey, TTL_SECONDS, fetchAllSectors)
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1200')
-    return res.status(200).json({ items: out, source: 'stooq' })
+    return res.status(200).json({ items, source: 'stooq+kv' })
   } catch (e: any) {
-    return res.status(502).json({ items: [], hint: 'Sectors from Stooq failed', detail: String(e?.message || e) })
+    // Als KV of fetch faalt, val netjes terug met lege lijst
+    return res.status(200).json({ items: [], source: 'error', detail: String(e?.message || e) })
   }
 }
