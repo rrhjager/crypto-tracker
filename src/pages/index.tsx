@@ -41,6 +41,22 @@ function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(' ')
 }
 
+/** 🆕 Fallback voor %: gebruik change% als die er is, anders bereken uit change en price. */
+function pctFromQuote(q?: Quote): number | null {
+  if (!q) return null
+  const pct = Number(q.regularMarketChangePercent)
+  if (Number.isFinite(pct)) return pct
+  const chg = Number(q.regularMarketChange)
+  const price = Number(q.regularMarketPrice)
+  if (Number.isFinite(chg) && Number.isFinite(price)) {
+    const prev = price - chg
+    if (prev !== 0 && Number.isFinite(prev)) {
+      return (chg / prev) * 100
+    }
+  }
+  return null
+}
+
 /* ---------------- static fallbacks per index ---------------- */
 const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   'AEX': [],
@@ -164,8 +180,8 @@ export default function Homepage() {
           const j: { quotes: Record<string, Quote> } = await r.json()
           const arr = cons.map(c => {
             const q = j.quotes?.[c.symbol]
-            const pct = Number(q?.regularMarketChangePercent)
-            return { ...c, pct: Number.isFinite(pct) ? pct : NaN }
+            const pct = pctFromQuote(q)   // 🆕 gebruik fallback-berekening
+            return { ...c, pct: Number.isFinite(pct as number) ? (pct as number) : NaN }
           }).filter(x => Number.isFinite(x.pct))
 
           if (!arr.length) continue
