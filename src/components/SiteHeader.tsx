@@ -140,7 +140,7 @@ export default function SiteHeader() {
                   { href: '/nikkei225',  label: 'Nikkei 225' },
                   { href: '/hangseng',   label: 'Hang Seng' },
                   { href: '/sensex',     label: 'Sensex' },
-                  { href: '/etfs',       label: 'ETFs (Top 20)' }, // ✅ nieuw toegevoegd
+                  { href: '/etfs',       label: 'ETFs' }, // ✅ nieuw toegevoegd
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
@@ -233,7 +233,7 @@ export default function SiteHeader() {
               { href: '/nikkei225',  label: 'Nikkei 225' },
               { href: '/hangseng',   label: 'Hang Seng' },
               { href: '/sensex',     label: 'Sensex' },
-              { href: '/etfs',       label: 'ETFs (Top 20)' }, // ✅ nieuw toegevoegd
+              { href: '/etfs',       label: 'ETFs' }, // ✅ nieuw toegevoegd
             ].map(it => (
               <Link
                 key={it.href}

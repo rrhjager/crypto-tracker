@@ -216,7 +216,7 @@ export default function ETFsIndex() {
 
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-          <h1 className="hero">ETFs (Top 20)</h1>
+          <h1 className="hero">ETFs</h1>
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
