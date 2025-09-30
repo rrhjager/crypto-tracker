@@ -5,7 +5,14 @@ import Image from 'next/image'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
+import dynamic from 'next/dynamic'                // ⬅️ TOEGEVOEGD
 import { AEX } from '@/lib/aex'
+
+/* lazy-load de carrousel zodat hij geen SSR nodig heeft */
+const SocialCarousel = dynamic(                   // ⬅️ TOEGEVOEGD
+  () => import('@/components/SocialCarousel'),
+  { ssr: false }
+)
 
 /* ---------------- config (hero image in /public/images) ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
@@ -424,7 +431,7 @@ export default function Homepage() {
       </section>
 
       {/* NEWS — thumbnails verwijderd, alleen regels */}
-      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
+      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Crypto News</h2>
@@ -466,6 +473,14 @@ export default function Homepage() {
             }
           </ul>
         </div>
+      </section>
+
+      {/* ⬇️ NIEUW: Social carrousel onderaan */}
+      <section className="max-w-6xl mx-auto px-4 pb-16">
+        <SocialCarousel
+          api="/api/social/masto?tag=markets&minFollowers=100000"
+          title="Markets — Social Buzz"
+        />
       </section>
     </>
   )
