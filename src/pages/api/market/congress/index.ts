@@ -1,8 +1,8 @@
 // src/pages/api/market/congress/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCache, kvGetJSON, kvSetJSON } from '@/lib/kv'  // <-- zo
+import { withCache, kvGetJSON, kvSetJSON } from '@/lib/kv'
 
-// Make sure this runs in the Node runtime on Vercel
+// Draai dit expliciet in Node.js runtime (niet Edge) en geef wat speling
 export const config = { runtime: 'nodejs', maxDuration: 60 }
 
 type Item = {
@@ -17,7 +17,7 @@ type Item = {
   side: 'BUY' | 'SELL' | '—'
 }
 
-/* ---------------- utils ---------------- */
+/* ---------------- helpers ---------------- */
 const monthMap: Record<string, number> = {
   jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5,
   jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, sept:9, september:9,
@@ -64,12 +64,12 @@ function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
   return '—'
 }
 
-/* -------- headless chromium (time-limited) -------- */
+/* -------- chromium bootstrap -------- */
 async function getBrowser() {
-  // Edge envs often need sparticuz + puppeteer-core
   if (process.env.VERCEL || process.env.AWS_REGION) {
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
+
     const chr = chromium as unknown as {
       args?: string[]
       defaultViewport?: any
@@ -77,6 +77,7 @@ async function getBrowser() {
       headless?: unknown
     }
     const headlessOpt: boolean = typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
+
     const browser = await puppeteer.default.launch({
       args: chr.args ?? [],
       defaultViewport: chr.defaultViewport ?? null,
@@ -90,7 +91,7 @@ async function getBrowser() {
   }
 }
 
-// Promise timeout helper
+// Promise-timeout helper
 function withTimeout<T>(p: Promise<T>, ms: number, msg = 'timeout'): Promise<T> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(msg)), ms)
@@ -99,10 +100,10 @@ function withTimeout<T>(p: Promise<T>, ms: number, msg = 'timeout'): Promise<T> 
 }
 
 /* ---------------- scrape core ---------------- */
-async function scrape(limit: number): Promise<Item[]> {
+async function scrape(limit: number, debug = false): Promise<Item[]> {
   const browser = await withTimeout(getBrowser(), 25_000, 'browser timeout')
+  const page = await browser.newPage()
   try {
-    const page = await browser.newPage()
     await page.setViewport({ width: 1480, height: 1200, deviceScaleFactor: 1 })
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
@@ -113,7 +114,12 @@ async function scrape(limit: number): Promise<Item[]> {
 
     while (out.length < limit && pageNum <= 5) {
       const url = `https://www.capitoltrades.com/trades?page=${pageNum}&sort=-transaction_date`
-      await withTimeout(page.goto(url, { waitUntil: 'networkidle0', timeout: 45_000 }), 50_000, 'goto timeout')
+      debug && console.time(`goto:${url}`)
+      await withTimeout(page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 }), 50_000, 'goto timeout')
+      debug && console.timeEnd(`goto:${url}`)
+
+      // wacht heel even tot de tabel er staat i.p.v. networkidle0 (sneller en stabieler)
+      await page.waitForSelector('table tbody tr', { timeout: 10_000 }).catch(() => {})
 
       const rows = await page.evaluate(() => {
         const clean = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim()
@@ -121,7 +127,6 @@ async function scrape(limit: number): Promise<Item[]> {
         const headers = Array.from(document.querySelectorAll('table thead th')).map(th =>
           (th.textContent || '').trim().toLowerCase()
         )
-
         const idxPolitician = headers.findIndex(h => h.includes('politician'))
         const idxIssuer     = headers.findIndex(h => h.includes('traded issuer') || h.includes('issuer') || h.includes('stock'))
         const idxPublished  = headers.findIndex(h => h.includes('published'))
@@ -158,7 +163,7 @@ async function scrape(limit: number): Promise<Item[]> {
 
           let filedAfterDays: number | null = null
           if (idxFiledAfter >= 0) {
-            const t = getCell(tr, idxFiledAfter) // e.g. "34 days"
+            const t = getCell(tr, idxFiledAfter)
             const m = t.match(/(\d+)\s*day/i)
             filedAfterDays = m ? parseInt(m[1], 10) : null
           }
@@ -177,7 +182,6 @@ async function scrape(limit: number): Promise<Item[]> {
             priceText = m ? m[0] : t
           }
 
-          // Side/Type
           let sideRaw = ''
           if (idxType >= 0) sideRaw = getCell(tr, idxType)
           if (!sideRaw) {
@@ -202,12 +206,7 @@ async function scrape(limit: number): Promise<Item[]> {
         }
 
         const ticker = r.issuerCell || '—'
-        const side = ((): 'BUY' | 'SELL' | '—' => {
-          const t = (r.sideRaw || '').toLowerCase()
-          if (/\bbuy|purchase|acquisition|acquire|bought\b/i.test(t)) return 'BUY'
-          if (/\bsell|sale|disposal|dispose|sold\b/i.test(t)) return 'SELL'
-          return '—'
-        })()
+        const side = normalizeSide(r.sideRaw)
 
         out.push({
           publishedISO: pubISO,
@@ -232,10 +231,10 @@ async function scrape(limit: number): Promise<Item[]> {
       return tB - tA
     })
 
-    await page.close()
     return out.slice(0, limit)
   } finally {
-    try { await browser?.close() } catch {}
+    try { await page.close() } catch {}
+    try { await (await browser)?.close() } catch {}
   }
 }
 
@@ -244,35 +243,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const limitQ = Number(req.query.limit)
   const limit = Number.isFinite(limitQ) ? Math.min(Math.max(limitQ, 1), 100) : 25
   const force = String(req.query.force || '') === '1'
+  const debug = String(req.query.debug || '') === '1'
   const cacheKey = `congress:v1:${limit}`
 
-  // If force: bypass cache, but on failure return stale cache if available
-  if (force) {
-    try {
-      const fresh = await scrape(limit)
-      await kvSetJSON(cacheKey, fresh, 300) // 5 min ttl
+  try {
+    if (force) {
+      debug && console.log('[congress] FORCE refresh')
+      const fresh = await scrape(limit, debug)
+      await kvSetJSON(cacheKey, fresh, 300) // 5 min
       res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
       return res.status(200).json({ items: fresh, hint: 'Fresh scrape (force=1)' })
-    } catch (e: any) {
-      const stale = await kvGetJSON<Item[]>(cacheKey)
-      if (stale?.length) {
-        return res.status(200).json({ items: stale, hint: 'Stale cache (scrape failed with force=1)' })
-      }
-      return res.status(502).json({ items: [], hint: 'Scrape failed (force=1)', detail: String(e?.message || e) })
     }
-  }
 
-  // Normal path: try cache first, otherwise scrape + fill cache
-  try {
-    const items = await withCache<Item[]>(cacheKey, 300, async () => await scrape(limit))
+    const items = await withCache<Item[]>(cacheKey, 300, async () => await scrape(limit, debug))
     res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
     return res.status(200).json({ items, hint: 'KV cache or fresh fill' })
   } catch (e: any) {
-    // As a last resort, try stale cache
+    console.error('[congress] ERROR', e)
+    // laatste redmiddel: oude cache
     const stale = await kvGetJSON<Item[]>(cacheKey)
     if (stale?.length) {
-      return res.status(200).json({ items: stale, hint: 'Stale cache (fresh failed)' })
+      return res.status(200).json({ items: stale, hint: 'Stale cache (fresh failed)', error: String(e?.message || e) })
     }
-    return res.status(502).json({ items: [], hint: 'Headless scrape failed', detail: String(e?.message || e) })
+    return res.status(502).json({ items: [], hint: 'Headless scrape failed', error: String(e?.message || e) })
   }
 }
