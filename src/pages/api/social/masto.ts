@@ -3,158 +3,201 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 
+type MastoAccount = {
+  id: string
+  username: string
+  acct: string
+  url: string
+  followers_count?: number
+  display_name?: string
+  avatar?: string
+}
+
 type MastoStatus = {
   id: string
   url: string
   created_at: string
   content: string
-  language?: string | null
   reblogs_count: number
   favourites_count: number
-  account: {
-    id: string
-    username: string
-    acct: string
-    display_name: string
-    url: string
-    avatar: string
-    followers_count: number
-  }
-  media_attachments?: Array<{
-    preview_url?: string
-    url?: string
-    type?: string
-    description?: string | null
-  }>
+  replies_count: number
+  account: MastoAccount
+  media_attachments?: Array<{ preview_url?: string; url?: string }>
 }
 
-type Item = {
+type SocialPost = {
   id: string
   url: string
-  author: string
-  handle: string
-  avatar: string
-  followers: number
   createdAt: string
-  contentHtml: string
-  favourites: number
-  reblogs: number
+  text: string
+  author: {
+    handle: string
+    name: string
+    url: string
+    avatar?: string
+    followers?: number
+  }
+  likes: number
+  reposts: number
+  replies: number
   image?: string | null
+  source: 'mastodon'
+  tag: string
 }
 
-// ---- simpele in-memory cache (2 min) ----
-const G: any = globalThis as any
-if (!G.__MASTO_CACHE__) {
-  G.__MASTO_CACHE__ = new Map<string, { ts: number; data: any }>()
-}
-const putCache = (key: string, data: any, ttlMs = 120_000) =>
-  G.__MASTO_CACHE__.set(key, { ts: Date.now() + ttlMs, data })
-const getCache = (key: string) => {
-  const hit = G.__MASTO_CACHE__.get(key)
-  if (!hit) return null
-  if (Date.now() > hit.ts) return null
-  return hit.data
+const DEFAULT_INSTANCE = 'https://mastodon.social'
+
+// naive HTML → text cleaner
+function stripHtml(html: string) {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim()
 }
 
-async function fetchTag(instance: string, tag: string, limit: number): Promise<MastoStatus[]> {
-  const url = `https://${instance}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=${Math.min(
+async function fetchTagTimeline(instance: string, tag: string, limit = 40): Promise<MastoStatus[]> {
+  const url = `${instance}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=${Math.min(
     Math.max(limit, 1),
     40
   )}`
   const r = await fetch(url, {
     headers: {
-      // simpele UA; Mastodon accepteert anoniem, maar een nette UA helpt soms bij rate limiting
       'user-agent':
-        'SignalHubBot/1.0 (+https://signalhub.tech) Mozilla/5.0 (compatible; MastodonFetcher)',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
       'cache-control': 'no-cache',
-      accept: 'application/json',
     },
-    cache: 'no-store',
   })
-  if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
-  const j = (await r.json()) as MastoStatus[]
-  return Array.isArray(j) ? j : []
+  if (!r.ok) throw new Error(`timeline ${tag}: HTTP ${r.status}`)
+  return (await r.json()) as MastoStatus[]
+}
+
+async function fetchAccount(instance: string, id: string): Promise<MastoAccount> {
+  const r = await fetch(`${instance}/api/v1/accounts/${encodeURIComponent(id)}`, {
+    headers: { 'user-agent': 'SignalHub/1.0', 'cache-control': 'no-cache' },
+  })
+  if (!r.ok) throw new Error(`account ${id}: HTTP ${r.status}`)
+  return (await r.json()) as MastoAccount
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Query opties
-    const tagOne = (req.query.tag as string) || ''
-    const tagsMulti = (req.query.tags as string) || ''
-    const instance = (req.query.instance as string) || 'mastodon.social'
-    const minFollowers = Math.max(0, Number(req.query.minFollowers ?? 50000)) // default 50k
-    const limit = Math.max(1, Math.min(40, Number(req.query.limit ?? 20)))    // per-tag fetch
+    const {
+      tags: tagsRaw,
+      tag,
+      instance = DEFAULT_INSTANCE,
+      limit: limitRaw,
+      minFollowers: minFollowersRaw,
+    } = req.query as Record<string, string>
 
-    // Tags bepalen
-    let tags: string[] = []
-    if (tagsMulti) {
-      tags = tagsMulti
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean)
-    } else if (tagOne) {
-      tags = [tagOne.trim()]
-    } else {
-      return res.status(400).json({ error: 'Provide ?tags=a,b,c or ?tag=x' })
-    }
+    const limit = Math.max(5, Math.min(Number(limitRaw || 20), 40))
 
-    // Cache key
-    const cacheKey = JSON.stringify({ tags, instance, minFollowers, limit })
-    const cached = getCache(cacheKey)
-    if (cached) {
-      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120')
-      return res.status(200).json(cached)
-    }
+    // tags can be a comma list, plus backwards-compat single "tag"
+    const tags =
+      (tagsRaw ? tagsRaw.split(',') : []).map((t) => t.trim()).filter(Boolean) ||
+      (tag ? [tag] : [])
+    const usedTags =
+      tags.length > 0
+        ? tags
+        : ['markets', 'stocks', 'investing', 'finance', 'bitcoin', 'crypto']
 
-    // Alle tags ophalen (parallel), fouten negeren per tag
-    const lists = await Promise.all(
-      tags.map(async (t) => {
-        try {
-          return await fetchTag(instance, t, limit)
-        } catch {
-          return [] as MastoStatus[]
-        }
-      })
+    // requested floor
+    const requestedMin = Number(minFollowersRaw ?? '10000')
+    // progressive relaxation floors
+    const floors = [requestedMin, 5000, 2000, 0].filter(
+      (v, i, a) => Number.isFinite(v) && v >= 0 && a.indexOf(v) === i
     )
 
-    // Flatten + filter op volgers + de-dup (op url/id) + sorteren op tijd
-    const seen = new Set<string>()
-    const items: Item[] = []
-    for (const arr of lists) {
-      for (const s of arr) {
-        const uid = s.url || s.id
-        if (!uid || seen.has(uid)) continue
-        if ((s.account?.followers_count ?? 0) < minFollowers) continue
+    let collected: SocialPost[] = []
+    let usedFloor = floors[floors.length - 1]
 
-        seen.add(uid)
-        items.push({
+    for (const floor of floors) {
+      usedFloor = floor
+      collected = []
+      // gather across tags
+      for (const t of usedTags) {
+        let statuses: MastoStatus[] = []
+        try {
+          statuses = await fetchTagTimeline(instance, t, limit)
+        } catch {
+          continue
+        }
+
+        // fill in followers_count (some timelines omit it)
+        const enriched = await Promise.all(
+          statuses.map(async (s) => {
+            if (typeof s.account?.followers_count === 'number') return s
+            try {
+              const acc = await fetchAccount(instance, s.account.id)
+              s.account.followers_count = acc.followers_count
+              s.account.display_name = s.account.display_name || acc.display_name
+              s.account.avatar = s.account.avatar || acc.avatar
+              s.account.url = s.account.url || acc.url
+            } catch {}
+            return s
+          })
+        )
+
+        const filtered = enriched
+          .filter((s) => (s.account?.followers_count || 0) >= floor)
+          .slice(0, limit)
+
+        const mapped: SocialPost[] = filtered.map((s) => ({
           id: s.id,
           url: s.url,
-          author: s.account?.display_name || s.account?.username || s.account?.acct || 'Unknown',
-          handle: s.account?.acct || '',
-          avatar: s.account?.avatar || '',
-          followers: Number(s.account?.followers_count || 0),
           createdAt: s.created_at,
-          contentHtml: s.content || '',
-          favourites: Number(s.favourites_count || 0),
-          reblogs: Number(s.reblogs_count || 0),
-          image:
-            (s.media_attachments?.[0]?.preview_url ||
-              s.media_attachments?.[0]?.url) ??
-            null,
-        })
+          text: stripHtml(s.content),
+          author: {
+            handle: s.account?.acct || s.account?.username || '',
+            name: s.account?.display_name || s.account?.username || '',
+            url: s.account?.url || '',
+            avatar: s.account?.avatar,
+            followers: s.account?.followers_count,
+          },
+          likes: s.favourites_count ?? 0,
+          reposts: s.reblogs_count ?? 0,
+          replies: s.replies_count ?? 0,
+          image: s.media_attachments?.[0]?.preview_url || null,
+          source: 'mastodon',
+          tag: t,
+        }))
+
+        collected.push(...mapped)
       }
+
+      // stop relaxing if we found enough
+      if (collected.length >= Math.min(limit, 12)) break
     }
 
-    // Sorteer recent → oud
-    items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    // rank: likes + reblogs, then newest
+    collected.sort((a, b) => {
+      const aw = (a.likes || 0) + (a.reposts || 0)
+      const bw = (b.likes || 0) + (b.reposts || 0)
+      if (bw !== aw) return bw - aw
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    })
 
-    const payload = { items, meta: { instance, tags, minFollowers, count: items.length } }
-    putCache(cacheKey, payload, 120_000)
+    // cap output
+    const out = collected.slice(0, limit)
 
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120')
-    return res.status(200).json(payload)
+    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300')
+    return res.status(200).json({
+      items: out,
+      meta: {
+        tags: usedTags,
+        instance,
+        limit,
+        minFollowersTried: floors,
+        minFollowersUsed: usedFloor,
+        found: out.length,
+      },
+    })
   } catch (e: any) {
-    return res.status(502).json({ error: String(e?.message || e) })
+    return res.status(500).json({ error: e?.message || 'Internal error' })
   }
 }

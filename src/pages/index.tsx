@@ -469,7 +469,7 @@ export default function Homepage() {
       {/* Social carousel */}
       <section className="max-w-6xl mx-auto px-4 pb-16">
         <SocialCarousel
-          api="/api/social/masto?tags=stocks,investing,finance,markets,bitcoin,crypto&minFollowers=50000&limit=20"
+          api="/api/social/masto?tags=stocks,investing,finance,markets,bitcoin,crypto&minFollowers=10000&limit=20"
           title="Markets — Social Buzz"
         />
       </section>
