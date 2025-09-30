@@ -54,6 +54,8 @@ export default function Footer() {
               <li><Link className={a} href="/nikkei225">Nikkei 225</Link></li>
               <li><Link className={a} href="/hangseng">Hang Seng</Link></li>
               <li><Link className={a} href="/sensex">Sensex</Link></li>
+              {/* ✅ Nieuw: ETFs-pagina */}
+              <li><Link className={a} href="/etfs">ETFs (Top 20)</Link></li>
             </ul>
           </div>
 
@@ -62,7 +64,6 @@ export default function Footer() {
             <div className={head}>Disclaimer</div>
             <ul className="mt-3 space-y-2 text-sm">
               <li><Link className={a} href="/disclaimer">Read disclaimer</Link></li>
-              {/* NEW: link directly under "Read disclaimer" */}
               <li><Link className={a} href="/explanation-indicators">Explanation indicators</Link></li>
             </ul>
             <p className="mt-3 text-xs text-gray-400">

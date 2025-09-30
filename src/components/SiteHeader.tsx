@@ -40,13 +40,11 @@ function MobileMenuPortal({
 
   return createPortal(
     <>
-      {/* Overlay above everything */}
       <div
         className="fixed inset-0 z-[99998] bg-black/50"
         onClick={onClose}
         aria-hidden
       />
-      {/* Fullscreen drawer */}
       <div className="fixed inset-0 z-[99999] bg-ink text-white flex flex-col">
         {children}
       </div>
@@ -64,7 +62,6 @@ export default function SiteHeader() {
   const intelRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
 
-  // Close desktop dropdowns on outside click
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       const t = e.target as Node
@@ -75,7 +72,6 @@ export default function SiteHeader() {
     return () => document.removeEventListener('click', onDoc)
   }, [])
 
-  // Close mobile menu on route changes & Esc
   useEffect(() => {
     const close = () => setOpen(false)
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
@@ -105,7 +101,6 @@ export default function SiteHeader() {
   return (
     <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-[60]">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-        {/* Home / Logo */}
         <Link href="/" className="group font-semibold tracking-tight" onClick={() => setOpen(false)}>
           <span className={`text-black transition-all duration-300 ${rainbow}`}>
             SignalHub
@@ -145,6 +140,7 @@ export default function SiteHeader() {
                   { href: '/nikkei225',  label: 'Nikkei 225' },
                   { href: '/hangseng',   label: 'Hang Seng' },
                   { href: '/sensex',     label: 'Sensex' },
+                  { href: '/etfs',       label: 'ETFs (Top 20)' }, // ✅ nieuw toegevoegd
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
@@ -205,9 +201,8 @@ export default function SiteHeader() {
         </button>
       </div>
 
-      {/* Mobile menu rendered in a portal to break any stacking contexts */}
+      {/* Mobile menu */}
       <MobileMenuPortal open={open} onClose={() => setOpen(false)}>
-        {/* Drawer header */}
         <div className="h-14 px-4 flex items-center justify-between border-b border-white/10">
           <Link href="/" className="group font-semibold tracking-tight" onClick={onMobileLinkClick}>
             <span className={`text-black transition-all duration-300 ${rainbow}`}>SignalHub</span>
@@ -221,7 +216,6 @@ export default function SiteHeader() {
           </button>
         </div>
 
-        {/* Drawer content */}
         <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
           <Link href="/crypto" className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base" onClick={onMobileLinkClick}>
             <span className={rainbow}>Crypto tracker</span>
@@ -239,6 +233,7 @@ export default function SiteHeader() {
               { href: '/nikkei225',  label: 'Nikkei 225' },
               { href: '/hangseng',   label: 'Hang Seng' },
               { href: '/sensex',     label: 'Sensex' },
+              { href: '/etfs',       label: 'ETFs (Top 20)' }, // ✅ nieuw toegevoegd
             ].map(it => (
               <Link
                 key={it.href}
