@@ -1,165 +1,154 @@
 // src/components/CookieConsent.tsx
-import { useEffect, useState } from 'react'
-import { getConsent, setConsent } from '@/lib/consent'
+import React, { useEffect, useState } from 'react'
 
-type View = 'bar' | 'panel'
+type Prefs = {
+  necessary: true
+  analytics: boolean
+  marketing: boolean
+}
+const LS_KEY = 'cookie:prefs:v1'
+
+function readPrefs(): Prefs | null {
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    return raw ? JSON.parse(raw) as Prefs : null
+  } catch { return null }
+}
+function savePrefs(p: Prefs) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(p)) } catch {}
+  // Eventueel: hier analytics initialiseren op basis van p.analytics / p.marketing
+}
 
 export default function CookieConsent() {
-  const [visible, setVisible] = useState(false)
-  const [view, setView] = useState<View>('bar')
-  const [analytics, setAnalytics] = useState(false)
-  const [marketing, setMarketing] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [showPanel, setShowPanel] = useState(false)
+  const [prefs, setPrefs] = useState<Prefs>({ necessary: true, analytics: false, marketing: false })
 
-  // toon alleen als er nog geen keuze is
   useEffect(() => {
-    const c = getConsent()
-    if (!c) setVisible(true)
+    const existing = readPrefs()
+    if (!existing) setOpen(true)
+    else setPrefs(existing)
+
+    const onOpen = () => { setOpen(true); setShowPanel(true) }
+    window.addEventListener('cookie:open', onOpen)
+    return () => window.removeEventListener('cookie:open', onOpen)
   }, [])
 
-  // luister naar “open” event (voor “Cookie settings” in footer)
-  useEffect(() => {
-    function onOpen() {
-      const c = getConsent()
-      setAnalytics(!!c?.analytics)
-      setMarketing(!!c?.marketing)
-      setView('panel')
-      setVisible(true)
-    }
-    window.addEventListener('cookie-consent-open' as any, onOpen)
-    return () => window.removeEventListener('cookie-consent-open' as any, onOpen)
-  }, [])
+  function acceptAll() {
+    const p: Prefs = { necessary: true, analytics: true, marketing: true }
+    savePrefs(p)
+    setPrefs(p)
+    setOpen(false)
+    setShowPanel(false)
+  }
 
-  if (!visible) return null
+  function declineAll() {
+    const p: Prefs = { necessary: true, analytics: false, marketing: false }
+    savePrefs(p)
+    setPrefs(p)
+    setOpen(false)
+    setShowPanel(false)
+  }
 
-  const acceptAll = () => {
-    setConsent({ necessary: true, analytics: true, marketing: true })
-    setVisible(false)
+  function saveCurrent() {
+    savePrefs(prefs)
+    setOpen(false)
+    setShowPanel(false)
   }
-  const declineAll = () => {
-    setConsent({ necessary: true, analytics: false, marketing: false })
-    setVisible(false)
-  }
-  const saveSettings = () => {
-    setConsent({ necessary: true, analytics, marketing })
-    setVisible(false)
-  }
+
+  if (!open) return null
 
   return (
-    <div className="fixed right-3 bottom-3 z-[70]">
-      {/* container met shadow en afgeronde hoeken, smal en “omhoog” */}
-      <div className="w-[320px] max-w-[92vw] rounded-2xl border bg-white shadow-xl text-gray-900 overflow-hidden ring-1 ring-black/5"
-           style={{ transformOrigin: 'bottom right' }}>
-        {view === 'bar' ? (
-          <div className="p-3">
-            <div className="text-sm font-semibold mb-1">Cookies</div>
-            <p className="text-xs text-gray-600 mb-3">
-              We gebruiken noodzakelijke cookies en (optioneel) analytics/marketing. Kies “Accept” of “Decline”, of pas instellingen aan.
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setView('panel')}
-                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 hover:bg-gray-50"
-              >
-                Settings
-              </button>
-              <button
-                onClick={declineAll}
-                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 hover:bg-gray-50"
-              >
-                Decline
-              </button>
-              <button
-                onClick={acceptAll}
-                className="px-3 py-1.5 text-xs rounded-lg bg-gray-900 text-white hover:bg-black"
-              >
-                Accept
-              </button>
-            </div>
+    <div className="fixed z-[10000] bottom-4 right-4">
+      {/* Card */}
+      <div className="w-[320px] sm:w-[360px] rounded-2xl border shadow-xl bg-white text-gray-900">
+        <div className="p-4">
+          <div className="font-semibold mb-1">Cookies</div>
+          <p className="text-sm text-gray-600">
+            We gebruiken noodzakelijke cookies en (optioneel) analytics/marketing.
+            Kies “Accept” of “Decline”, of pas instellingen aan.
+          </p>
+
+          {/* Inline settings toggle */}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPanel(v => !v)}
+              className="px-3 py-1.5 rounded-lg text-sm border border-gray-300 bg-gray-100 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+            >
+              Settings
+            </button>
+
+            <button
+              type="button"
+              onClick={declineAll}
+              className="px-3 py-1.5 rounded-lg text-sm bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+            >
+              Decline
+            </button>
+
+            <button
+              type="button"
+              onClick={acceptAll}
+              className="ml-auto px-3 py-1.5 rounded-lg text-sm bg-blue-600 !text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              Accept
+            </button>
           </div>
-        ) : (
-          <div className="p-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-sm font-semibold">Cookie settings</div>
-              <button
-                onClick={() => setVisible(false)}
-                className="w-7 h-7 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-            <p className="text-xs text-gray-600 mb-3">
-              Noodzakelijke cookies staan altijd aan. Pas optionele categorieën hieronder aan.
-            </p>
 
-            <div className="space-y-2 mb-3">
-              <label className="flex items-start gap-2">
-                <input type="checkbox" checked disabled className="mt-0.5" />
-                <span className="text-xs">
-                  <span className="font-medium">Necessary</span><br />
-                  <span className="text-gray-600">Voor basisfunctionaliteit (bijv. je keuze opslaan).</span>
-                </span>
+          {/* Settings panel */}
+          {showPanel && (
+            <div className="mt-3 border-t pt-3 space-y-2">
+              <label className="flex items-center justify-between text-sm">
+                <span className="text-gray-700">Necessary</span>
+                <input type="checkbox" checked readOnly className="h-4 w-4 accent-gray-500" />
               </label>
-
-              <label className="flex items-start gap-2">
+              <label className="flex items-center justify-between text-sm">
+                <span className="text-gray-700">Analytics</span>
                 <input
                   type="checkbox"
-                  checked={analytics}
-                  onChange={(e) => setAnalytics(e.target.checked)}
-                  className="mt-0.5"
+                  checked={prefs.analytics}
+                  onChange={e => setPrefs(prev => ({ ...prev, analytics: e.target.checked }))}
+                  className="h-4 w-4 accent-blue-600"
                 />
-                <span className="text-xs">
-                  <span className="font-medium">Analytics</span><br />
-                  <span className="text-gray-600">Anonieme statistieken om de site te verbeteren.</span>
-                </span>
               </label>
-
-              <label className="flex items-start gap-2">
+              <label className="flex items-center justify-between text-sm">
+                <span className="text-gray-700">Marketing</span>
                 <input
                   type="checkbox"
-                  checked={marketing}
-                  onChange={(e) => setMarketing(e.target.checked)}
-                  className="mt-0.5"
+                  checked={prefs.marketing}
+                  onChange={e => setPrefs(prev => ({ ...prev, marketing: e.target.checked }))}
+                  className="h-4 w-4 accent-blue-600"
                 />
-                <span className="text-xs">
-                  <span className="font-medium">Marketing</span><br />
-                  <span className="text-gray-600">Advertentie-/remarketingtags (indien gebruikt).</span>
-                </span>
               </label>
-            </div>
 
-            <div className="flex items-center justify-between">
-              <button
-                onClick={() => setView('bar')}
-                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 hover:bg-gray-50"
-              >
-                Back
-              </button>
-              <div className="flex items-center gap-2">
+              <div className="pt-2 flex items-center gap-2">
                 <button
-                  onClick={declineAll}
-                  className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 hover:bg-gray-50"
-                >
-                  Decline all
-                </button>
-                <button
-                  onClick={acceptAll}
-                  className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-900 text-white hover:bg-black"
-                >
-                  Accept all
-                </button>
-                <button
-                  onClick={saveSettings}
-                  className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-900 text-gray-900 hover:bg-gray-50"
+                  type="button"
+                  onClick={saveCurrent}
+                  className="px-3 py-1.5 rounded-lg text-sm bg-blue-600 !text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Save
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPanel(false)}
+                  className="px-3 py-1.5 rounded-lg text-sm bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+                >
+                  Close
+                </button>
               </div>
             </div>
-
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* Dark-mode override (optioneel) */}
+      <style jsx>{`
+        @media (prefers-color-scheme: dark) {
+          .dark .cookie-card { background: #111827; color: #e5e7eb; }
+        }
+      `}</style>
     </div>
   )
 }
