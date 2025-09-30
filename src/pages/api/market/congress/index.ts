@@ -1,10 +1,9 @@
-// src/pages/api/market/congress/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCache } from '@/lib/kv'   // ⬅️ KV helper (named export)
+import withCache, { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
-// ----------------------------------------------------
-// Types
-// ----------------------------------------------------
+// Make sure this runs in the Node runtime on Vercel
+export const config = { runtime: 'nodejs', maxDuration: 60 }
+
 type Item = {
   publishedISO: string | null
   publishedLabel: string
@@ -17,11 +16,7 @@ type Item = {
   side: 'BUY' | 'SELL' | '—'
 }
 
-export const config = { runtime: 'nodejs' }
-
-// ----------------------------------------------------
-// Kleine utils
-// ----------------------------------------------------
+/* ---------------- utils ---------------- */
 const monthMap: Record<string, number> = {
   jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5,
   jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, sept:9, september:9,
@@ -68,60 +63,56 @@ function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
   return '—'
 }
 
-// ----------------------------------------------------
-// Puppeteer bootstrap (Vercel & lokaal)
-// ----------------------------------------------------
+/* -------- headless chromium (time-limited) -------- */
 async function getBrowser() {
+  // Edge envs often need sparticuz + puppeteer-core
   if (process.env.VERCEL || process.env.AWS_REGION) {
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
-
     const chr = chromium as unknown as {
       args?: string[]
       defaultViewport?: any
       executablePath: () => Promise<string>
       headless?: unknown
     }
-    const headlessOpt: boolean =
-      typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
-
+    const headlessOpt: boolean = typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
     const browser = await puppeteer.default.launch({
       args: chr.args ?? [],
       defaultViewport: chr.defaultViewport ?? null,
       executablePath: await chr.executablePath(),
       headless: headlessOpt,
     })
-    return { browser }
+    return browser
   } else {
     const { default: puppeteer } = await import('puppeteer')
-    const browser = await puppeteer.launch({ headless: true } as any)
-    return { browser }
+    return puppeteer.launch({ headless: true } as any)
   }
 }
 
-// ----------------------------------------------------
-// De daadwerkelijke scrape (los van HTTP handler)
-// We halen tot ~150 rijen op en cachen het als geheel.
-// ----------------------------------------------------
-async function scrapeCongress(maxItems: number): Promise<Item[]> {
-  const out: Item[] = []
-  let browser: any
+// Promise timeout helper
+function withTimeout<T>(p: Promise<T>, ms: number, msg = 'timeout'): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(msg)), ms)
+    p.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
+  })
+}
 
+/* ---------------- scrape core ---------------- */
+async function scrape(limit: number): Promise<Item[]> {
+  const browser = await withTimeout(getBrowser(), 25_000, 'browser timeout')
   try {
-    const { browser: b } = await getBrowser()
-    browser = b
     const page = await browser.newPage()
-
-    // Zorg dat alle kolommen zichtbaar zijn
     await page.setViewport({ width: 1480, height: 1200, deviceScaleFactor: 1 })
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
     )
 
+    const out: Item[] = []
     let pageNum = 1
-    while (out.length < maxItems && pageNum <= 6) {
+
+    while (out.length < limit && pageNum <= 5) {
       const url = `https://www.capitoltrades.com/trades?page=${pageNum}&sort=-transaction_date`
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 60_000 })
+      await withTimeout(page.goto(url, { waitUntil: 'networkidle0', timeout: 45_000 }), 50_000, 'goto timeout')
 
       const rows = await page.evaluate(() => {
         const clean = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim()
@@ -185,6 +176,7 @@ async function scrapeCongress(maxItems: number): Promise<Item[]> {
             priceText = m ? m[0] : t
           }
 
+          // Side/Type
           let sideRaw = ''
           if (idxType >= 0) sideRaw = getCell(tr, idxType)
           if (!sideRaw) {
@@ -209,7 +201,12 @@ async function scrapeCongress(maxItems: number): Promise<Item[]> {
         }
 
         const ticker = r.issuerCell || '—'
-        const side = normalizeSide(r.sideRaw)
+        const side = ((): 'BUY' | 'SELL' | '—' => {
+          const t = (r.sideRaw || '').toLowerCase()
+          if (/\bbuy|purchase|acquisition|acquire|bought\b/i.test(t)) return 'BUY'
+          if (/\bsell|sale|disposal|dispose|sold\b/i.test(t)) return 'SELL'
+          return '—'
+        })()
 
         out.push({
           publishedISO: pubISO,
@@ -222,7 +219,7 @@ async function scrapeCongress(maxItems: number): Promise<Item[]> {
           price: r.priceText || '—',
           side,
         })
-        if (out.length >= maxItems) break
+        if (out.length >= limit) break
       }
 
       pageNum++
@@ -234,45 +231,47 @@ async function scrapeCongress(maxItems: number): Promise<Item[]> {
       return tB - tA
     })
 
-    return out
+    await page.close()
+    return out.slice(0, limit)
   } finally {
     try { await browser?.close() } catch {}
   }
 }
 
-// ----------------------------------------------------
-// HTTP handler met KV-cache
-// ----------------------------------------------------
+/* ---------------- handler ---------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const limitQ = Number(req.query.limit)
   const limit = Number.isFinite(limitQ) ? Math.min(Math.max(limitQ, 1), 100) : 25
+  const force = String(req.query.force || '') === '1'
+  const cacheKey = `congress:v1:${limit}`
 
-  // Cache-sleutel en TTL
-  // We scrapen standaard tot 150 items en cachen die (client kan met ?limit=… minder opvragen).
-  const SCRAPE_BATCH = 150
-  const CACHE_KEY = `congress:v1:${SCRAPE_BATCH}`
-  const TTL_SEC = 180 // 3 minuten
+  // If force: bypass cache, but on failure return stale cache if available
+  if (force) {
+    try {
+      const fresh = await scrape(limit)
+      await kvSetJSON(cacheKey, fresh, 300) // 5 min ttl
+      res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
+      return res.status(200).json({ items: fresh, hint: 'Fresh scrape (force=1)' })
+    } catch (e: any) {
+      const stale = await kvGetJSON<Item[]>(cacheKey)
+      if (stale?.length) {
+        return res.status(200).json({ items: stale, hint: 'Stale cache (scrape failed with force=1)' })
+      }
+      return res.status(502).json({ items: [], hint: 'Scrape failed (force=1)', detail: String(e?.message || e) })
+    }
+  }
 
-  const force = (String(req.query.force || '').toLowerCase() === '1')
-
+  // Normal path: try cache first, otherwise scrape + fill cache
   try {
-    // Optioneel: force bypass cache
-    const data = force
-      ? await scrapeCongress(SCRAPE_BATCH)
-      : await withCache<Item[]>(CACHE_KEY, TTL_SEC, () => scrapeCongress(SCRAPE_BATCH))
-
+    const items = await withCache<Item[]>(cacheKey, 300, async () => await scrape(limit))
     res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
-    return res.status(200).json({
-      items: data.slice(0, limit),
-      hint: force
-        ? 'Fresh scrape (force=1)'
-        : `KV cached (${TTL_SEC}s) – fresh on miss`,
-    })
+    return res.status(200).json({ items, hint: 'KV cache or fresh fill' })
   } catch (e: any) {
-    return res.status(502).json({
-      items: [],
-      hint: 'Congress scrape failed',
-      detail: String(e?.message || e),
-    })
+    // As a last resort, try stale cache
+    const stale = await kvGetJSON<Item[]>(cacheKey)
+    if (stale?.length) {
+      return res.status(200).json({ items: stale, hint: 'Stale cache (fresh failed)' })
+    }
+    return res.status(502).json({ items: [], hint: 'Headless scrape failed', detail: String(e?.message || e) })
   }
 }
