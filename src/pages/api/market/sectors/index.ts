@@ -1,6 +1,6 @@
 // src/pages/api/market/sectors/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import withCache, { kvGetJSON, kvSetJSON } from '@/lib/kv'
+import { withCache, kvGetJSON, kvSetJSON } from '@/lib/kv'  // <-- named import
 
 export const config = { runtime: 'nodejs' }
 
