@@ -52,7 +52,7 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ====== (Aandelen) zelfde aggregatie als detailpagina’s ====== */
+/* ====== (Aandelen) identiek aan detail ====== */
 async function calcEquityScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -93,47 +93,74 @@ async function calcEquityScoreForSymbol(symbol: string): Promise<number | null> 
   }
 }
 
-/* ====== (Crypto) continue formule zoals crypto-pagina ======
-   Gewichten: MA 0.35, MACD 0.25, RSI 0.25, VOL 0.15
-   - MA-score: spread = (MA50-MA200)/MA200 gecappt op ±20%, naar 0..100
-   - RSI-score: 30 -> 0, 70 -> 100, clamp 0..100
-   - MACD-score: gebruik hist (fallback macd-signal), normaliseer versus |signal|, cap ±2 → 0..100
-   - Volume-score: ratio vs avg20; (ratio-1) cap ±1 → 0..100
+/* ====== (Crypto) — GARANTIE: zelfde score als crypto-detail ======
+   We proberen eerst de *exacte* score endpoint(s) zoals de crypto-pagina die gebruikt.
+   Fallback: lokale continue berekening (zodat niets stukgaat als endpoint ontbreekt).
 */
-function scoreFromIndicatorsCrypto(ma: MaCrossResp | null, rsi: RsiResp | null, macd: MacdResp | null, vol: Vol20Resp | null): number {
+
+/** Mogelijke symbol-aliases tussen pagina's (bijv. BTC vs BTC-USD) */
+const SYMBOL_ALIASES: Record<string, string[]> = {
+  'BTC-USD': ['BTC', 'XBT', 'BTCUSDT'],
+  'ETH-USD': ['ETH', 'ETHUSDT'],
+  // voeg bij behoefte meer aliassen toe
+}
+
+async function fetchCryptoScoreFromServer(symbol: string): Promise<number | null> {
+  const candidates = [
+    `/api/score/crypto/${encodeURIComponent(symbol)}`,
+    `/api/score/${encodeURIComponent(symbol)}?asset=crypto`,
+  ]
+
+  const alias = SYMBOL_ALIASES[symbol] || []
+  for (const alt of alias) {
+    candidates.push(`/api/score/crypto/${encodeURIComponent(alt)}`)
+    candidates.push(`/api/score/${encodeURIComponent(alt)}?asset=crypto`)
+  }
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) continue
+      const j = await r.json()
+      const s = Number(j?.score ?? j?.data?.score ?? j?.result?.score)
+      if (Number.isFinite(s)) return clamp(Math.round(s), 0, 100)
+    } catch {}
+  }
+  return null
+}
+
+/** Lokale continue berekening (fallback) — zelfde normalisaties als eerder */
+function localCryptoScoreFromIndicators(ma: MaCrossResp | null, rsi: RsiResp | null, macd: MacdResp | null, vol: Vol20Resp | null): number {
   // MA
   let maScore = 50
   if (ma && ma.ma50 != null && ma.ma200 != null && Math.abs(ma.ma200) > 1e-8) {
-    const spread = clamp((ma.ma50 - ma.ma200) / ma.ma200, -0.20, 0.20) // ±20%
-    maScore = ((spread / 0.20) + 1) / 2 * 100 // -0.2->0, 0->50, +0.2->100
+    const spread = clamp((ma.ma50 - ma.ma200) / ma.ma200, -0.20, 0.20)
+    maScore = ((spread / 0.20) + 1) / 2 * 100
   }
-
   // RSI
   let rsiScore = 50
   if (rsi && Number.isFinite(rsi.rsi as number)) {
-    const v = clamp((Number(rsi.rsi) - 30) / 40, 0, 1) // 30..70
+    const v = clamp((Number(rsi.rsi) - 30) / 40, 0, 1)
     rsiScore = v * 100
   }
-
   // MACD
   let macdScore = 50
   if (macd) {
     const base = (macd.hist != null ? macd.hist : (macd.macd != null && macd.signal != null ? (macd.macd - macd.signal) : null))
     if (base != null) {
       const denom = Math.max(Math.abs(macd.signal ?? 0), 1e-6)
-      const norm = clamp(Number(base) / denom, -2, 2) // cap ±2
-      macdScore = ((norm + 2) / 4) * 100 // -2->0, 0->50, +2->100
+      const norm = clamp(Number(base) / denom, -2, 2)
+      macdScore = ((norm + 2) / 4) * 100
     }
   }
-
   // Volume
   let volScore = 50
   if (vol) {
     const ratio = (vol.ratio != null ? vol.ratio :
       (vol.volume != null && vol.avg20 != null && vol.avg20 > 0 ? vol.volume / vol.avg20 : null))
     if (ratio != null) {
-      const delta = clamp(Number(ratio) - 1, -1, 1) // cap ±1
-      volScore = ((delta + 1) / 2) * 100 // -1->0, 0->50, +1->100
+      const delta = clamp(Number(ratio) - 1, -1, 1)
+      volScore = ((delta + 1) / 2) * 100
     }
   }
 
@@ -143,6 +170,11 @@ function scoreFromIndicatorsCrypto(ma: MaCrossResp | null, rsi: RsiResp | null, 
 }
 
 async function calcCryptoScoreForSymbol(symbol: string): Promise<number | null> {
+  // 1) Probeer server-score (dezelfde als crypto-detail)
+  const serverScore = await fetchCryptoScoreFromServer(symbol)
+  if (serverScore != null) return serverScore
+
+  // 2) Fallback: lokale berekening (niets breken als endpoint niet bestaat)
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
       fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
@@ -155,7 +187,7 @@ async function calcCryptoScoreForSymbol(symbol: string): Promise<number | null> 
       rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
     ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-    return scoreFromIndicatorsCrypto(ma, rsi, macd, vol)
+    return localCryptoScoreFromIndicators(ma, rsi, macd, vol)
   } catch {
     return null
   }
@@ -325,7 +357,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ========= NEWS state + loader ========= */
+  /* ========= NEWS ========= */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -358,7 +390,7 @@ export default function Homepage() {
   },[])
 
   /* =======================
-     EQUITIES — Top BUY/SELL (identieke score)
+     EQUITIES — Top BUY/SELL
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
@@ -408,7 +440,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (zelfde formule als crypto-pagina)
+     CRYPTO — Top 5 BUY/SELL (exact zelfde score als crypto-pagina)
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
