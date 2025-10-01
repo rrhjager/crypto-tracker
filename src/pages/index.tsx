@@ -52,8 +52,8 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ---- EXACT dezelfde aggregatie als op detailpagina’s ---- */
-async function calcScoreForSymbol(symbol: string): Promise<number | null> {
+/* ====== (Aandelen) zelfde aggregatie als detailpagina’s ====== */
+async function calcEquityScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
       fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
@@ -88,6 +88,74 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
     const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
     const pct = clamp(Math.round(agg * 100), 0, 100)
     return pct
+  } catch {
+    return null
+  }
+}
+
+/* ====== (Crypto) continue formule zoals crypto-pagina ======
+   Gewichten: MA 0.35, MACD 0.25, RSI 0.25, VOL 0.15
+   - MA-score: spread = (MA50-MA200)/MA200 gecappt op ±20%, naar 0..100
+   - RSI-score: 30 -> 0, 70 -> 100, clamp 0..100
+   - MACD-score: gebruik hist (fallback macd-signal), normaliseer versus |signal|, cap ±2 → 0..100
+   - Volume-score: ratio vs avg20; (ratio-1) cap ±1 → 0..100
+*/
+function scoreFromIndicatorsCrypto(ma: MaCrossResp | null, rsi: RsiResp | null, macd: MacdResp | null, vol: Vol20Resp | null): number {
+  // MA
+  let maScore = 50
+  if (ma && ma.ma50 != null && ma.ma200 != null && Math.abs(ma.ma200) > 1e-8) {
+    const spread = clamp((ma.ma50 - ma.ma200) / ma.ma200, -0.20, 0.20) // ±20%
+    maScore = ((spread / 0.20) + 1) / 2 * 100 // -0.2->0, 0->50, +0.2->100
+  }
+
+  // RSI
+  let rsiScore = 50
+  if (rsi && Number.isFinite(rsi.rsi as number)) {
+    const v = clamp((Number(rsi.rsi) - 30) / 40, 0, 1) // 30..70
+    rsiScore = v * 100
+  }
+
+  // MACD
+  let macdScore = 50
+  if (macd) {
+    const base = (macd.hist != null ? macd.hist : (macd.macd != null && macd.signal != null ? (macd.macd - macd.signal) : null))
+    if (base != null) {
+      const denom = Math.max(Math.abs(macd.signal ?? 0), 1e-6)
+      const norm = clamp(Number(base) / denom, -2, 2) // cap ±2
+      macdScore = ((norm + 2) / 4) * 100 // -2->0, 0->50, +2->100
+    }
+  }
+
+  // Volume
+  let volScore = 50
+  if (vol) {
+    const ratio = (vol.ratio != null ? vol.ratio :
+      (vol.volume != null && vol.avg20 != null && vol.avg20 > 0 ? vol.volume / vol.avg20 : null))
+    if (ratio != null) {
+      const delta = clamp(Number(ratio) - 1, -1, 1) // cap ±1
+      volScore = ((delta + 1) / 2) * 100 // -1->0, 0->50, +1->100
+    }
+  }
+
+  const W_MA = 0.35, W_MACD = 0.25, W_RSI = 0.25, W_VOL = 0.15
+  const agg = W_MA*maScore + W_MACD*macdScore + W_RSI*rsiScore + W_VOL*volScore
+  return clamp(Math.round(agg), 0, 100)
+}
+
+async function calcCryptoScoreForSymbol(symbol: string): Promise<number | null> {
+  try {
+    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+    ])
+    if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
+    const [ma, rsi, macd, vol] = await Promise.all([
+      rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
+    ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
+
+    return scoreFromIndicatorsCrypto(ma, rsi, macd, vol)
   } catch {
     return null
   }
@@ -257,7 +325,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ========= NEWS state + loader (hersteld) ========= */
+  /* ========= NEWS state + loader ========= */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -312,7 +380,7 @@ export default function Homepage() {
 
           const scores = await pool(symbols, 4, async (sym, idx) => {
             if (idx) await sleep(60)
-            return await calcScoreForSymbol(sym)
+            return await calcEquityScoreForSymbol(sym)
           })
 
           const rows = cons.map((c, i) => ({
@@ -340,7 +408,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (zelfde score, TOP 50 universum)
+     CRYPTO — Top 5 BUY/SELL (zelfde formule als crypto-pagina)
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -354,7 +422,7 @@ export default function Homepage() {
         const list = COINS
         const scores = await pool(list, 8, async (row, idx) => {
           if (idx) await sleep(35)
-          return await calcScoreForSymbol(row.symbol)
+          return await calcCryptoScoreForSymbol(row.symbol)
         })
         const rows = list
           .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
@@ -363,7 +431,6 @@ export default function Homepage() {
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
 
-        // Top 5 BUY en Top 5 SELL uit dezelfde TOP-50 lijst
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
 
@@ -457,7 +524,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
+      {/* CRYPTO — Top 5 BUY/SELL */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
@@ -506,7 +573,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS (hersteld) */}
+      {/* NEWS */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
