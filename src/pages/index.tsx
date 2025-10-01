@@ -93,6 +93,21 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   }
 }
 
+/* --------------- pool helper (ontbrekende functie) --------------- */
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
 /* ---------------- constituents per markt ---------------- */
 const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
   'AEX': [],
@@ -331,13 +346,11 @@ export default function Homepage() {
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
   const [coinErr, setCoinErr] = useState<string | null>(null)
 
-  // Haal de score op UITSLUITEND via /api/crypto-light/indicators (zelfde als detailpagina)
   async function fetchCoinScoreUsingCryptoLight(ticker: string): Promise<number | null> {
     try {
       const r = await fetch(`/api/crypto-light/indicators?symbol=${encodeURIComponent(ticker)}`, { cache: 'no-store' })
       if (!r.ok) return null
       const j = await r.json() as any
-      // De detailpagina gebruikt dezelfde payload. Gebruik direct het score-veld als dat er is.
       const candidates = [
         j?.score, j?.overallScore, j?.overall, j?.taScore, j?.totalScore, j?.ta?.score
       ].filter((v:any)=> Number.isFinite(Number(v))) as number[]
@@ -345,7 +358,6 @@ export default function Homepage() {
         const s = Math.round(Number(candidates[0]))
         return clamp(s, 0, 100)
       }
-      // Geen expliciete score terug? Dan niets forceren: null => wordt uitgesloten uit top/bottom.
       return null
     } catch {
       return null
