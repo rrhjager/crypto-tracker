@@ -7,8 +7,8 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 
-/* ---------------- config (hero image in /public/images) ---------------- */
-const HERO_IMG = '/images/hero-crypto-tracker.png' // <- correct pad nu het bestand in /public/images staat
+/* ---------------- config ---------------- */
+const HERO_IMG = '/images/hero-crypto-tracker.png'
 
 /* ---------------- types ---------------- */
 type Quote = {
@@ -29,19 +29,67 @@ type NewsItem = {
   image?: string | null
 }
 
-// Multi-market types
-type EquityCon = { symbol: string; name: string; market: string }
-type EquityPick = { symbol: string; name: string; market: string; pct: number }
+/* ==== Indicator types & scoring (IDENTIEK AAN DETAILPAGINA) ==== */
+type Advice = 'BUY' | 'HOLD' | 'SELL'
+type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
+type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
+type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
+type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
-/* ---------------- utils ---------------- */
+function scoreToPct(s: number) { return Math.max(0, Math.min(100, Math.round(s))) }
+function statusFromScore(score: number): Advice {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
+}
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+const toPts = (status?: Advice, pts?: number | null) => {
+  if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
+  if (status === 'BUY') return 2
+  if (status === 'SELL') return -2
+  return 0
+}
+// Weights EXACT zoals op de detailpagina
+const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+
+async function calcCompositeScore(symbol: string): Promise<number | null> {
+  try {
+    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+    ])
+    if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
+
+    const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
+
+    const pMA   = toPts(ma?.status,   ma?.points)
+    const pMACD = toPts(macd?.status, macd?.points)
+    const pRSI  = toPts(rsi?.status,  rsi?.points)
+    const pVOL  = toPts(vol?.status,  vol?.points)
+
+    const nMA   = (pMA   + 2) / 4
+    const nMACD = (pMACD + 2) / 4
+    const nRSI  = (pRSI  + 2) / 4
+    const nVOL  = (pVOL  + 2) / 4
+
+    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
+    return scoreToPct(agg * 100)
+  } catch {
+    return null
+  }
+}
+
+/* ---------------- helpers ---------------- */
 const num = (v: number | null | undefined, d = 2) =>
   (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
-function classNames(...xs: (string | false | null | undefined)[]) {
-  return xs.filter(Boolean).join(' ')
-}
-
 /* ---------------- static fallbacks per index ---------------- */
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
 const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   'AEX': [],
   'S&P 500': [
@@ -102,12 +150,11 @@ const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   ],
 }
 
-function constituentsForMarket(label: string): EquityCon[] {
+function constituentsForMarket(label: MarketLabel) {
   if (label === 'AEX') {
-    return AEX.map(x => ({ symbol: x.symbol, name: x.name, market: 'AEX' }))
+    return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
   }
-  const rows = STATIC_CONS[label] || []
-  return rows.map(r => ({ ...r, market: label }))
+  return STATIC_CONS[label] || []
 }
 
 /* ---------------- page ---------------- */
@@ -131,62 +178,86 @@ export default function Homepage() {
         if (!aborted) mutate(key, data, { revalidate: false })
       } catch {}
     }
+    const locale = 'hl=en-US&gl=US&ceid=US:en'
     ;[
       '/api/coin/top-movers',
-      '/api/news/google?q=crypto',
-      '/api/news/google?q=equities',
+      `/api/news/google?q=crypto&${locale}`,
+      `/api/news/google?q=equities&${locale}`,
     ].forEach(prime)
     return () => { aborted = true }
   }, [])
 
   /* =======================
-     EQUITIES — per beurs BEST BUY/SELL (via grootste % dagstijger/daler)
+     EQUITIES — Per markt hoogste (BUY) en laagste (SELL) op basis van indicator-score
+     (zelfde calls/weging als op detailpagina's)
      ======================= */
-  const MARKET_ORDER = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex'] as const
-
-  const [bestBuyPerMarket, setBestBuyPerMarket]   = useState<EquityPick[]>([])
-  const [bestSellPerMarket, setBestSellPerMarket] = useState<EquityPick[]>([])
+  type PickRow = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
+  const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+  const [topBuy, setTopBuy]   = useState<PickRow[]>([])
+  const [topSell, setTopSell] = useState<PickRow[]>([])
 
   useEffect(() => {
     let aborted = false
-    ;(async () => {
-      const buys: EquityPick[] = []
-      const sells: EquityPick[] = []
 
-      for (const label of MARKET_ORDER) {
-        const cons = constituentsForMarket(label)
+    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+      const out: R[] = new Array(arr.length) as any
+      let i = 0
+      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+        while (true) {
+          const idx = i++
+          if (idx >= arr.length) break
+          out[idx] = await fn(arr[idx], idx)
+        }
+      })
+      await Promise.all(workers)
+      return out
+    }
+
+    ;(async () => {
+      const buyRows: PickRow[] = []
+      const sellRows: PickRow[] = []
+
+      for (const market of MARKET_ORDER) {
+        const cons = constituentsForMarket(market)
         if (!cons.length) continue
 
-        const symbols = cons.map(c => c.symbol).join(',')
-        try {
-          const r = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`, { cache: 'no-store' })
-          if (!r.ok) continue
-          const j: { quotes: Record<string, Quote> } = await r.json()
-          const arr = cons.map(c => {
-            const q = j.quotes?.[c.symbol]
-            const pct = Number(q?.regularMarketChangePercent)
-            return { ...c, pct: Number.isFinite(pct) ? pct : NaN }
-          }).filter(x => Number.isFinite(x.pct))
+        // Bereken scores met beperkte paralleliteit
+        const results = await pool(cons, 4, async (c) => {
+          const s = await calcCompositeScore(c.symbol)
+          return Number.isFinite(s as number) ? { ...c, score: s as number } : null
+        })
 
-          if (!arr.length) continue
-          const top = [...arr].sort((a,b)=> b.pct - a.pct)[0]
-          const bot = [...arr].sort((a,b)=> a.pct - b.pct)[0]
+        const rows = results.filter(Boolean) as Array<{ symbol: string; name: string; score: number }>
+        if (!rows.length) continue
 
-          if (top) buys.push({ symbol: top.symbol, name: top.name, market: top.market, pct: top.pct })
-          if (bot) sells.push({ symbol: bot.symbol, name: bot.name, market: bot.market, pct: bot.pct })
-        } catch {}
+        const top = [...rows].sort((a,b)=> b.score - a.score)[0]
+        const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
+
+        if (top) {
+          buyRows.push({
+            symbol: top.symbol, name: top.name, market,
+            score: top.score, signal: statusFromScore(top.score)
+          })
+        }
+        if (bot) {
+          sellRows.push({
+            symbol: bot.symbol, name: bot.name, market,
+            score: bot.score, signal: statusFromScore(bot.score)
+          })
+        }
       }
 
       if (!aborted) {
-        const orderIndex = (m:string)=> MARKET_ORDER.indexOf(m as any)
-        setBestBuyPerMarket(buys.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
-        setBestSellPerMarket(sells.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
+        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+        setTopBuy(buyRows.sort((a,b)=> order(a.market)-order(b.market)))
+        setTopSell(sellRows.sort((a,b)=> order(a.market)-order(b.market)))
       }
     })()
+
     return () => { aborted = true }
   }, [])
 
-  /* -------- Crypto movers (Gainers/Losers) -------- */
+  /* -------- Crypto movers -------- */
   const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
   useEffect(()=>{
     let aborted=false
@@ -203,7 +274,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- News (Google News RSS via /api/news/google?q=...) -------- */
+  /* -------- News -------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -214,12 +285,13 @@ export default function Homepage() {
           topic === 'crypto'
             ? 'crypto OR bitcoin OR ethereum OR blockchain'
             : 'equities OR stocks OR stock market OR aandelen OR beurs'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}`, { cache:'no-store' })
+        const locale = 'hl=en-US&gl=US&ceid=US:en'
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
           title: x.title || '',
-          url: x.link,                // API returns `link`
+          url: x.link,
           source: x.source || '',
           published: x.pubDate || '',
           image: null,
@@ -234,7 +306,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- AEX polling (mag blijven) -------- */
+  /* -------- AEX polling (bestaand) -------- */
   const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   useEffect(() => {
@@ -264,7 +336,7 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-      {/* WHY SIGNALHUB met hero-beeld rechts */}
+      {/* WHY SIGNALHUB */}
       <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
         <div className="grid md:grid-cols-2 gap-8 items-center">
           <div>
@@ -291,7 +363,7 @@ export default function Homepage() {
             </div>
           </div>
 
-          {/* hero image rechts */}
+          {/* hero */}
           <div className="table-card overflow-hidden">
             <Image
               src={HERO_IMG}
@@ -305,19 +377,19 @@ export default function Homepage() {
           </div>
         </div>
 
-        {/* scheidingslijn */}
+        {/* line */}
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL per beurs */}
+      {/* EQUITIES — Top BUY/SELL (zelfde scorelogica) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY */}
         <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY</h2>
+          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY (by Signal Score)</h2>
           <ul className="divide-y divide-white/10">
-            {bestBuyPerMarket.length===0 ? (
-              <li className="py-3 text-white/60">Nog geen data…</li>
-            ) : bestBuyPerMarket.map((r,i)=>(
+            {topBuy.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : topBuy.map((r,i)=>(
               <li key={`bb${i}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
@@ -326,7 +398,7 @@ export default function Homepage() {
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-green-300 whitespace-nowrap">
-                  {num(r.pct, 2)}%
+                  {r.signal} · {num(r.score, 0)}
                 </div>
               </li>
             ))}
@@ -335,11 +407,11 @@ export default function Homepage() {
 
         {/* SELL */}
         <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL</h2>
+          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL (by Signal Score)</h2>
           <ul className="divide-y divide-white/10">
-            {bestSellPerMarket.length===0 ? (
-              <li className="py-3 text-white/60">Nog geen data…</li>
-            ) : bestSellPerMarket.map((r,i)=>(
+            {topSell.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : topSell.map((r,i)=>(
               <li key={`bs${i}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
@@ -348,7 +420,7 @@ export default function Homepage() {
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-red-300 whitespace-nowrap">
-                  {num(r.pct, 2)}%
+                  {r.signal} · {num(r.score, 0)}
                 </div>
               </li>
             ))}
@@ -403,7 +475,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS — thumbnails verwijderd, alleen regels */}
+      {/* NEWS */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
@@ -411,7 +483,7 @@ export default function Homepage() {
             <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
           <ul className="grid gap-2">
-            {newsCrypto.length===0 ? <li className="text-white/60">Geen nieuws…</li> :
+            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
               newsCrypto.map((n,i)=>(
                 <li key={i} className="leading-tight">
                   <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
@@ -431,8 +503,8 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Equities News</h2>
             <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
           </div>
-        <ul className="grid gap-2">
-            {newsEq.length===0 ? <li className="text-white/60">Geen nieuws…</li> :
+          <ul className="grid gap-2">
+            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
               newsEq.map((n,i)=>(
                 <li key={i} className="leading-tight">
                   <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
