@@ -52,7 +52,7 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ---- EXACT dezelfde aggregatie als op aandelen-detail (alleen voor equities) ---- */
+/* ---- EXACT dezelfde aggregatie als op detailpagina’s (fallback) ---- */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -93,7 +93,38 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   }
 }
 
-/* --------------- pool helper (ontbrekende functie) --------------- */
+/* ---- COIN score 1:1 via detail-endpoint (Optie A) ----
+   We proberen een reeks mogelijke composite endpoints (één ervan gebruik je op de coin detailpagina).
+   Zodra er één true hit geeft (score 0..100), gebruiken we die. Anders fallback: calcScoreForSymbol() */
+async function calcCoinScoreFromDetail(symbol: string): Promise<number | null> {
+  const candidates = [
+    // voeg hier gerust nog een variant toe als jullie detailpagina een andere route gebruikt
+    `/api/coins/score/${encodeURIComponent(symbol)}`,
+    `/api/coin/score/${encodeURIComponent(symbol)}`,
+    `/api/crypto/score/${encodeURIComponent(symbol)}`,
+    `/api/indicators/total-score/${encodeURIComponent(symbol)}?asset=coin`,
+  ]
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) continue
+      const j = await r.json() as any
+      // accepteer generieke vormen: {score}, {totalScore}, {data:{score}}
+      const raw =
+        (typeof j?.score === 'number' ? j.score :
+        typeof j?.totalScore === 'number' ? j.totalScore :
+        typeof j?.data?.score === 'number' ? j.data.score :
+        null)
+      if (Number.isFinite(raw) && raw >= 0 && raw <= 100) {
+        return Math.round(raw) // exact zoals badge toont
+      }
+    } catch {}
+  }
+  // fallback naar exact dezelfde 4-indicator-aggregatie
+  return await calcScoreForSymbol(symbol)
+}
+
+/* pool helper */
 async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(arr.length) as any
   let i = 0
@@ -340,42 +371,23 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (scores 1:1 uit crypto-detail endpoint)
+     CRYPTO — Top 5 BUY/SELL (Optie A: composite endpoint) 
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
   const [coinErr, setCoinErr] = useState<string | null>(null)
-
-  async function fetchCoinScoreUsingCryptoLight(ticker: string): Promise<number | null> {
-    try {
-      const r = await fetch(`/api/crypto-light/indicators?symbol=${encodeURIComponent(ticker)}`, { cache: 'no-store' })
-      if (!r.ok) return null
-      const j = await r.json() as any
-      const candidates = [
-        j?.score, j?.overallScore, j?.overall, j?.taScore, j?.totalScore, j?.ta?.score
-      ].filter((v:any)=> Number.isFinite(Number(v))) as number[]
-      if (candidates.length) {
-        const s = Math.round(Number(candidates[0]))
-        return clamp(s, 0, 100)
-      }
-      return null
-    } catch {
-      return null
-    }
-  }
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
         setCoinErr(null)
-
-        const scores = await pool(COINS, 8, async (row, idx) => {
+        const list = COINS
+        const scores = await pool(list, 8, async (row, idx) => {
           if (idx) await sleep(35)
-          return await fetchCoinScoreUsingCryptoLight(row.symbol)
+          return await calcCoinScoreFromDetail(row.symbol)   // <-- HIER: 1:1 dezelfde bron als coin detail
         })
-
-        const rows = COINS
+        const rows = list
           .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
           .filter(r => Number.isFinite(r.score as number)) as ScoredCoin[]
 
@@ -475,7 +487,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum, score direct uit crypto-detail endpoint) */}
+      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
