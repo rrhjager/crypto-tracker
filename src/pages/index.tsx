@@ -153,12 +153,8 @@ export default function Homepage() {
         if (!r.ok) return
         const j: ScreenerResp = await r.json()
         const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-        const buys = j.markets
-          .map(x => x.topBuy)
-          .filter(Boolean) as Scored[]
-        const sells = j.markets
-          .map(x => x.topSell)
-          .filter(Boolean) as Scored[]
+        const buys = j.markets.map(x => x.topBuy).filter(Boolean) as Scored[]
+        const sells = j.markets.map(x => x.topSell).filter(Boolean) as Scored[]
         if (!aborted) {
           setTopBuy(buys.sort((a,b)=> order(a.market)-order(b.market)))
           setTopSell(sells.sort((a,b)=> order(a.market)-order(b.market)))
