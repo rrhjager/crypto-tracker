@@ -5,12 +5,25 @@ import Image from 'next/image'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
+
+// === lists per market
 import { AEX } from '@/lib/aex'
+import { SP500 } from '@/lib/sp500'
+import { NASDAQ100 } from '@/lib/nasdaq'
+import { DOWJONES } from '@/lib/dowjones'
+import { DAX } from '@/lib/dax'
+import { FTSE100 } from '@/lib/ftse100'
+import { NIKKEI225 } from '@/lib/nikkei225'
+import { HANGSENG } from '@/lib/hangseng'
+import { SENSEX } from '@/lib/sensex'
+
+// === SAME scoring as detail pages
+import { combineScores, statusFromScore, type Advice } from '@/lib/scoring'
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
 
-/* ---------------- types ---------------- */
+/* ---------------- small types (existing) ---------------- */
 type Quote = {
   symbol: string
   regularMarketPrice: number | null
@@ -18,143 +31,88 @@ type Quote = {
   regularMarketChangePercent: number | null
   currency?: string
 }
-
 type CryptoRow = { symbol: string; name?: string; pct?: number }
+type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
 
-type NewsItem = {
-  title: string
-  url: string
-  source?: string
-  published?: string
-  image?: string | null
+/* ---------------- helper utils ---------------- */
+const num = (v: number | null | undefined, d = 2) =>
+  (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
+
+/* ---------------- market config ---------------- */
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
+type StockMeta = { symbol: string; name: string }
+const MARKETS: { label: MarketLabel; list: StockMeta[]; basePath: string }[] = [
+  { label: 'AEX',        list: AEX,        basePath: '/stocks' },     // your AEX page
+  { label: 'S&P 500',    list: SP500,      basePath: '/sp500' },
+  { label: 'NASDAQ',     list: NASDAQ100,  basePath: '/nasdaq' },
+  { label: 'Dow Jones',  list: DOWJONES,   basePath: '/dow' },
+  { label: 'DAX',        list: DAX,        basePath: '/dax' },
+  { label: 'FTSE 100',   list: FTSE100,    basePath: '/ftse' },
+  { label: 'Nikkei 225', list: NIKKEI225,  basePath: '/nikkei' },
+  { label: 'Hang Seng',  list: HANGSENG,   basePath: '/hangseng' },
+  { label: 'Sensex',     list: SENSEX,     basePath: '/sensex' },
+]
+
+/* ---------------- indicator API response types (same as detail pages) ---------------- */
+type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number | null }
+type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number | null }
+type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number | null }
+type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number | null }
+
+type ScoredRow = {
+  symbol: string
+  name: string
+  market: MarketLabel
+  score: number     // 0..100 (combineScores)
+  signal: Advice    // derived via statusFromScore(score)
 }
 
-/* ==== Indicator types & scoring (IDENTIEK AAN DETAILPAGINA) ==== */
-type Advice = 'BUY' | 'HOLD' | 'SELL'
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
+/* ---------------- small helpers ---------------- */
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-function scoreToPct(s: number) { return Math.max(0, Math.min(100, Math.round(s))) }
-function statusFromScore(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-const toPts = (status?: Advice, pts?: number | null) => {
-  if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-  if (status === 'BUY') return 2
-  if (status === 'SELL') return -2
-  return 0
-}
-// Weights EXACT zoals op de detailpagina
-const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-
-async function calcCompositeScore(symbol: string): Promise<number | null> {
+async function fetchScoreForSymbol(sym: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(sym)}`,                  { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(sym)}?period=14`,            { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(sym)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(sym)}?period=20`,          { cache: 'no-store' }),
     ])
     if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
 
-    const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
+    const [ma, rsi, macd, vol] = await Promise.all([
+      rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
+    ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-    const pMA   = toPts(ma?.status,   ma?.points)
-    const pMACD = toPts(macd?.status, macd?.points)
-    const pRSI  = toPts(rsi?.status,  rsi?.points)
-    const pVOL  = toPts(vol?.status,  vol?.points)
-
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    return scoreToPct(agg * 100)
+    // EXACT SAME AGGREGATION as detail pages: combineScores()
+    const score = combineScores({
+      maCross: { status: ma?.status,   points: ma?.points },
+      rsi:     { status: rsi?.status,  points: rsi?.points },
+      macd:    { status: macd?.status, points: macd?.points },
+      vol20:   { status: vol?.status,  points: vol?.points },
+    })
+    return Number.isFinite(score) ? score : null
   } catch {
     return null
   }
 }
 
-/* ---------------- helpers ---------------- */
-const num = (v: number | null | undefined, d = 2) =>
-  (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
-
-/* ---------------- static fallbacks per index ---------------- */
-type MarketLabel =
-  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
-  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
-
-const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
-  'AEX': [],
-  'S&P 500': [
-    { symbol: 'AAPL',  name: 'Apple' },
-    { symbol: 'MSFT',  name: 'Microsoft' },
-    { symbol: 'NVDA',  name: 'NVIDIA' },
-    { symbol: 'AMZN',  name: 'Amazon' },
-    { symbol: 'META',  name: 'Meta Platforms' },
-  ],
-  'NASDAQ': [
-    { symbol: 'GOOGL', name: 'Alphabet' },
-    { symbol: 'TSLA',  name: 'Tesla' },
-    { symbol: 'AVGO',  name: 'Broadcom' },
-    { symbol: 'AMD',   name: 'Advanced Micro Devices' },
-    { symbol: 'ADBE',  name: 'Adobe' },
-  ],
-  'Dow Jones': [
-    { symbol: 'UNH', name: 'UnitedHealth' },
-    { symbol: 'JPM', name: 'JPMorgan Chase' },
-    { symbol: 'MRK', name: 'Merck' },
-    { symbol: 'V',   name: 'Visa' },
-    { symbol: 'PG',  name: 'Procter & Gamble' },
-  ],
-  'DAX': [
-    { symbol: 'SAP.DE',  name: 'SAP' },
-    { symbol: 'SIE.DE',  name: 'Siemens' },
-    { symbol: 'MBG.DE',  name: 'Mercedes-Benz Group' },
-    { symbol: 'BAS.DE',  name: 'BASF' },
-    { symbol: 'BMW.DE',  name: 'BMW' },
-  ],
-  'FTSE 100': [
-    { symbol: 'AZN.L',   name: 'AstraZeneca' },
-    { symbol: 'SHEL.L',  name: 'Shell' },
-    { symbol: 'HSBA.L',  name: 'HSBC' },
-    { symbol: 'ULVR.L',  name: 'Unilever' },
-    { symbol: 'BATS.L',  name: 'BAT' },
-  ],
-  'Nikkei 225': [
-    { symbol: '7203.T',  name: 'Toyota' },
-    { symbol: '6758.T',  name: 'Sony' },
-    { symbol: '9984.T',  name: 'SoftBank Group' },
-    { symbol: '8035.T',  name: 'Tokyo Electron' },
-    { symbol: '4063.T',  name: 'Shin-Etsu Chemical' },
-  ],
-  'Hang Seng': [
-    { symbol: '0700.HK', name: 'Tencent' },
-    { symbol: '0939.HK', name: 'China Construction Bank' },
-    { symbol: '2318.HK', name: 'Ping An' },
-    { symbol: '1299.HK', name: 'AIA Group' },
-    { symbol: '0005.HK', name: 'HSBC Holdings' },
-  ],
-  'Sensex': [
-    { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
-    { symbol: 'TCS.NS',      name: 'TCS' },
-    { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
-    { symbol: 'INFY.NS',     name: 'Infosys' },
-    { symbol: 'ICICIBANK.NS',name: 'ICICI Bank' },
-  ],
-}
-
-function constituentsForMarket(label: MarketLabel) {
-  if (label === 'AEX') {
-    return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
-  }
-  return STATIC_CONS[label] || []
+// simple concurrency pool
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 /* ---------------- page ---------------- */
@@ -167,7 +125,7 @@ export default function Homepage() {
     router.prefetch('/index').catch(()=>{})
   }, [router])
 
-  // SWR warm-up
+  // SWR warm-up (unchanged + add indicator endpoints to get caches hot)
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -183,342 +141,37 @@ export default function Homepage() {
       '/api/coin/top-movers',
       `/api/news/google?q=crypto&${locale}`,
       `/api/news/google?q=equities&${locale}`,
+      // touch a handful of indicator endpoints so caches are warm
+      `/api/indicators/rsi/AAPL?period=14`,
+      `/api/indicators/macd/AAPL?fast=12&slow=26&signal=9`,
+      `/api/indicators/ma-cross/AAPL`,
+      `/api/indicators/vol20/AAPL?period=20`,
     ].forEach(prime)
     return () => { aborted = true }
   }, [])
 
   /* =======================
-     EQUITIES — Per markt hoogste (BUY) en laagste (SELL) op basis van indicator-score
-     (zelfde calls/weging als op detailpagina's)
+     EQUITIES — highest BUY & lowest SELL per market
      ======================= */
-  type PickRow = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-  const [topBuy, setTopBuy]   = useState<PickRow[]>([])
-  const [topSell, setTopSell] = useState<PickRow[]>([])
+  const [topBuy,  setTopBuy]  = useState<ScoredRow[]>([])
+  const [topSell, setTopSell] = useState<ScoredRow[]>([])
 
   useEffect(() => {
     let aborted = false
 
-    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-      const out: R[] = new Array(arr.length) as any
-      let i = 0
-      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= arr.length) break
-          out[idx] = await fn(arr[idx], idx)
-        }
-      })
-      await Promise.all(workers)
-      return out
-    }
-
     ;(async () => {
-      const buyRows: PickRow[] = []
-      const sellRows: PickRow[] = []
+      // compute for each market using SAME scoring as detail pages
+      const perMarketResults: Array<{ market: MarketLabel; best: ScoredRow | null; worst: ScoredRow | null }> = []
 
-      for (const market of MARKET_ORDER) {
-        const cons = constituentsForMarket(market)
-        if (!cons.length) continue
-
-        // Bereken scores met beperkte paralleliteit
-        const results = await pool(cons, 4, async (c) => {
-          const s = await calcCompositeScore(c.symbol)
-          return Number.isFinite(s as number) ? { ...c, score: s as number } : null
-        })
-
-        const rows = results.filter(Boolean) as Array<{ symbol: string; name: string; score: number }>
-        if (!rows.length) continue
-
-        const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-        const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-
-        if (top) {
-          buyRows.push({
-            symbol: top.symbol, name: top.name, market,
-            score: top.score, signal: statusFromScore(top.score)
-          })
+      for (const m of MARKET_ORDER) {
+        const cfg = MARKETS.find(x => x.label === m)
+        if (!cfg || !cfg.list || cfg.list.length === 0) {
+          perMarketResults.push({ market: m, best: null, worst: null })
+          continue
         }
-        if (bot) {
-          sellRows.push({
-            symbol: bot.symbol, name: bot.name, market,
-            score: bot.score, signal: statusFromScore(bot.score)
-          })
-        }
-      }
 
-      if (!aborted) {
-        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-        setTopBuy(buyRows.sort((a,b)=> order(a.market)-order(b.market)))
-        setTopSell(sellRows.sort((a,b)=> order(a.market)-order(b.market)))
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
-  /* -------- Crypto movers -------- */
-  const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
-  useEffect(()=>{
-    let aborted=false
-    ;(async()=>{
-      try{
-        const r = await fetch('/api/coin/top-movers', { cache:'no-store' })
-        if (!r.ok) return
-        const j = await r.json()
-        const gainers = (j.gainers || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
-        const losers  = (j.losers  || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
-        if (!aborted) setCryptoMovers({ gainers, losers })
-      }catch{}
-    })()
-    return ()=>{aborted=true}
-  },[])
-
-  /* -------- News -------- */
-  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
-  const [newsEq, setNewsEq] = useState<NewsItem[]>([])
-  useEffect(()=>{
-    let aborted=false
-    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
-      try{
-        const query =
-          topic === 'crypto'
-            ? 'crypto OR bitcoin OR ethereum OR blockchain'
-            : 'equities OR stocks OR stock market OR aandelen OR beurs'
-        const locale = 'hl=en-US&gl=US&ceid=US:en'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
-          title: x.title || '',
-          url: x.link,
-          source: x.source || '',
-          published: x.pubDate || '',
-          image: null,
-        }))
-        if (!aborted) setter(arr)
-      }catch{
-        if (!aborted) setter([])
-      }
-    }
-    load('crypto', setNewsCrypto)
-    load('equities', setNewsEq)
-    return ()=>{aborted=true}
-  },[])
-
-  /* -------- AEX polling (bestaand) -------- */
-  const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
-  useEffect(() => {
-    let timer:any, aborted=false
-    async function load() {
-      try {
-        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache:'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j: { quotes: Record<string, Quote> } = await r.json()
-        if (!aborted) setQuotes(j.quotes || {})
-      } catch {} finally {
-        if (!aborted) timer = setTimeout(load, 20000)
-      }
-    }
-    load()
-    return ()=> { aborted=true; if (timer) clearTimeout(timer) }
-  }, [symbols])
-
-  /* ---------------- render ---------------- */
-  return (
-    <>
-      <Head>
-        <title>SignalHub — Clarity in Markets</title>
-        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
-        <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
-        <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
-      </Head>
-
-      {/* WHY SIGNALHUB */}
-      <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-        <div className="grid md:grid-cols-2 gap-8 items-center">
-          <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
-            <div className="text-white/80 mt-3 space-y-4">
-              <p>
-                <strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected
-                indicators across both crypto and global equities, we deliver a complete market overview that
-                cuts through the noise. Every asset is distilled into a clear stoplight signal: BUY, HOLD, or SELL,
-                backed by momentum, volume, sentiment, and market insights.
-              </p>
-              <p>
-                Our platform doesn’t just track prices; it highlights what truly matters. From insider trading
-                activity in U.S. Congress to market breadth and volatility regimes, SignalHub equips you with the
-                context to make smarter portfolio decisions.
-              </p>
-              <p>
-                Already trusted by thousands of investors, SignalHub is the go-to platform for anyone seeking
-                sharper insights, faster decisions, and a more confident investment journey.
-              </p>
-              <p>
-                <em>Clarity, confidence, and control. All in one clear buy, hold or sell overview.</em>
-              </p>
-            </div>
-          </div>
-
-          {/* hero */}
-          <div className="table-card overflow-hidden">
-            <Image
-              src={HERO_IMG}
-              alt="Crypto Tracker — SignalHub"
-              width={1280}
-              height={960}
-              priority
-              unoptimized
-              className="w-full h-auto"
-            />
-          </div>
-        </div>
-
-        {/* line */}
-        <div className="mt-8 h-px bg-white/10" />
-      </section>
-
-      {/* EQUITIES — Top BUY/SELL (zelfde scorelogica) */}
-      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
-        {/* BUY */}
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY (by Signal Score)</h2>
-          <ul className="divide-y divide-white/10">
-            {topBuy.length===0 ? (
-              <li className="py-3 text-white/60">No data yet…</li>
-            ) : topBuy.map((r,i)=>(
-              <li key={`bb${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate">
-                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
-                  </div>
-                </div>
-                <div className="shrink-0 text-sm font-medium text-green-300 whitespace-nowrap">
-                  {r.signal} · {num(r.score, 0)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* SELL */}
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL (by Signal Score)</h2>
-          <ul className="divide-y divide-white/10">
-            {topSell.length===0 ? (
-              <li className="py-3 text-white/60">No data yet…</li>
-            ) : topSell.map((r,i)=>(
-              <li key={`bs${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate">
-                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
-                  </div>
-                </div>
-                <div className="shrink-0 text-sm font-medium text-red-300 whitespace-nowrap">
-                  {r.signal} · {num(r.score, 0)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      {/* BIGGEST CRYPTO MOVERS */}
-      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Gainers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.gainers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.gainers.map((m,i)=>(
-              <li key={`cg${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-green-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 text-sm">
-            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-        </div>
-
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Losers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.losers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.losers.map((m,i)=>(
-              <li key={`cl${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-red-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 text-sm">
-            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-        </div>
-      </section>
-
-      {/* NEWS */}
-      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
-        <div className="table-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Crypto News</h2>
-            <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-          <ul className="grid gap-2">
-            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
-              newsCrypto.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-
-        <div className="table-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Equities News</h2>
-            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
-          </div>
-          <ul className="grid gap-2">
-            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
-              newsEq.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-      </section>
-    </>
-  )
-}
+        const list = cfg.list.slice() // symbols + names
+        // Limit concurrency so we don’t explode the browser/network.
+        // (If you have background ISR caching this will still be snappy.)
+        const results = await pool(list, |oai:code-citation|
