@@ -29,22 +29,19 @@ type NewsItem = {
   image?: string | null
 }
 
-// Screener API types
+// Screener API types (moeten overeenkomen met /api/screener/market-scores)
 type MarketLabel =
   | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
   | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
 type Signal = 'BUY' | 'HOLD' | 'SELL'
 type Scored = { symbol: string; name: string; market: MarketLabel; score: number; signal: Signal }
+type ScreenerResp = { markets: Array<{ market: MarketLabel; topBuy: Scored | null; topSell: Scored | null }> }
 
 /* ---------------- utils ---------------- */
 const num = (v: number | null | undefined, d = 2) =>
   (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
-function classNames(...xs: (string | false | null | undefined)[]) {
-  return xs.filter(Boolean).join(' ')
-}
-
-/* ---------------- static fallbacks per index ---------------- */
+/* ---------------- static fallbacks per index (ongewijzigd) ---------------- */
 const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   'AEX': [],
   'S&P 500': [
@@ -131,17 +128,15 @@ export default function Homepage() {
       '/api/coin/top-movers',
       `/api/news/google?q=crypto&${locale}`,
       `/api/news/google?q=equities&${locale}`,
-      `/api/screener/top-signals`, // ⬅️ nieuw
+      `/api/screener/market-scores`, // ⬅️ gebruikt dezelfde logica als detailpagina's
     ].forEach(prime)
     return () => { aborted = true }
   }, [])
 
   /* =======================
-     EQUITIES — Top BUY/SELL op basis van indicator-score
+     EQUITIES — Top BUY/SELL (zelfde scorelogica als detailpagina)
      ======================= */
-  type ScreenerResp = { markets: Array<{ market: MarketLabel; topBuy: Scored | null; topSell: Scored | null }> }
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-
   const [topBuy, setTopBuy]   = useState<Scored[]>([])
   const [topSell, setTopSell] = useState<Scored[]>([])
 
@@ -149,12 +144,14 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
-        const r = await fetch(`/api/screener/top-signals`, { cache: 'no-store' })
+        const r = await fetch(`/api/screener/market-scores`, { cache: 'no-store' })
         if (!r.ok) return
         const j: ScreenerResp = await r.json()
         const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+
         const buys = j.markets.map(x => x.topBuy).filter(Boolean) as Scored[]
         const sells = j.markets.map(x => x.topSell).filter(Boolean) as Scored[]
+
         if (!aborted) {
           setTopBuy(buys.sort((a,b)=> order(a.market)-order(b.market)))
           setTopSell(sells.sort((a,b)=> order(a.market)-order(b.market)))
@@ -288,7 +285,7 @@ export default function Homepage() {
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL (op score) */}
+      {/* EQUITIES — Top BUY/SELL (op score; identiek aan detailberekening) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY */}
         <div className="table-card p-5">
@@ -389,7 +386,7 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Crypto News</h2>
             <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
-          <ul className="grid gap-2">
+        <ul className="grid gap-2">
             {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
               newsCrypto.map((n,i)=>(
                 <li key={i} className="leading-tight">
