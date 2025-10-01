@@ -10,6 +10,7 @@ import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
+const DEBUG = false // zet tijdelijk op true als je wil zien welke endpoint/symbool hit
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -52,14 +53,14 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ---- EXACT dezelfde aggregatie als op detailpagina’s (fallback) ---- */
+/* ---------- (fallback) identieke 4-indicator aggregatie — niet meer gebruikt voor crypto homepage ---------- */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}?ts=${Date.now()}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14&ts=${Date.now()}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9&ts=${Date.now()}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20&ts=${Date.now()}`, { cache: 'no-store' }),
     ])
     if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
 
@@ -93,35 +94,58 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   }
 }
 
-/* ---- COIN score 1:1 via detail-endpoint (Optie A) ----
-   We proberen een reeks mogelijke composite endpoints (één ervan gebruik je op de coin detailpagina).
-   Zodra er één true hit geeft (score 0..100), gebruiken we die. Anders fallback: calcScoreForSymbol() */
-async function calcCoinScoreFromDetail(symbol: string): Promise<number | null> {
-  const candidates = [
-    // voeg hier gerust nog een variant toe als jullie detailpagina een andere route gebruikt
-    `/api/coins/score/${encodeURIComponent(symbol)}`,
-    `/api/coin/score/${encodeURIComponent(symbol)}`,
-    `/api/crypto/score/${encodeURIComponent(symbol)}`,
-    `/api/indicators/total-score/${encodeURIComponent(symbol)}?asset=coin`,
+/* ---------- STRICT: coin score 1:1 uit composite detail-endpoint(s), geen fallback ---------- */
+async function fetchCompositeScore(url: string) {
+  const withTs = url + (url.includes('?') ? '&' : '?') + `ts=${Date.now()}`
+  const r = await fetch(withTs, { cache: 'no-store' })
+  if (!r.ok) return { ok: false as const, score: null as number | null, payload: null as any }
+  const j = await r.json() as any
+  const raw =
+    (typeof j?.score === 'number' ? j.score :
+     typeof j?.totalScore === 'number' ? j.totalScore :
+     typeof j?.data?.score === 'number' ? j.data.score :
+     null)
+  return { ok: Number.isFinite(raw), score: Number.isFinite(raw) ? Math.round(raw) : null, payload: j }
+}
+
+function coinSymbolVariants(sym: string): string[] {
+  if (!sym) return []
+  const base = sym.replace(/-USD$/i, '')
+  // volgorde: origineel, zonder -USD, USDT-variant
+  const out = [sym]
+  if (base !== sym) out.push(base)
+  out.push(base + 'USDT')
+  return Array.from(new Set(out))
+}
+
+async function calcCoinScoreStrict(symbol: string): Promise<{ score: number | null, source?: string, usedSymbol?: string, payload?: any }> {
+  const paths = (sym: string) => [
+    `/api/coins/score/${encodeURIComponent(sym)}`,
+    `/api/coin/score/${encodeURIComponent(sym)}`,
+    `/api/crypto/score/${encodeURIComponent(sym)}`,
+    `/api/indicators/total-score/${encodeURIComponent(sym)}?asset=coin`,
+    `/api/score/${encodeURIComponent(sym)}?asset=coin`,
   ]
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) continue
-      const j = await r.json() as any
-      // accepteer generieke vormen: {score}, {totalScore}, {data:{score}}
-      const raw =
-        (typeof j?.score === 'number' ? j.score :
-        typeof j?.totalScore === 'number' ? j.totalScore :
-        typeof j?.data?.score === 'number' ? j.data.score :
-        null)
-      if (Number.isFinite(raw) && raw >= 0 && raw <= 100) {
-        return Math.round(raw) // exact zoals badge toont
-      }
-    } catch {}
+  for (const variant of coinSymbolVariants(symbol)) {
+    for (const p of paths(variant)) {
+      try {
+        const { ok, score, payload } = await fetchCompositeScore(p)
+        if (ok && score !== null) {
+          if (DEBUG && (variant === 'BTC-USD' || variant === 'BTC')) {
+            // eslint-disable-next-line no-console
+            console.debug('[coin-score]', { symbol, usedVariant: variant, endpoint: p, score, payload })
+          }
+          return { score, source: p, usedSymbol: variant, payload }
+        }
+      } catch {}
+    }
   }
-  // fallback naar exact dezelfde 4-indicator-aggregatie
-  return await calcScoreForSymbol(symbol)
+  // geen fallback hier om inconsistentie te voorkomen
+  if (DEBUG && (symbol === 'BTC-USD' || symbol === 'BTC')) {
+    // eslint-disable-next-line no-console
+    console.debug('[coin-score] NO MATCHED ENDPOINT for', symbol)
+  }
+  return { score: null }
 }
 
 /* pool helper */
@@ -269,7 +293,7 @@ export default function Homepage() {
     router.prefetch('/index').catch(()=>{})
   }, [router])
 
-  // SWR warm-up
+  // SWR warm-up (alleen news)
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -300,7 +324,7 @@ export default function Homepage() {
             ? 'crypto OR bitcoin OR ethereum OR blockchain'
             : 'equities OR stocks OR stock market OR aandelen OR beurs'
         const locale = 'hl=en-US&gl=US&ceid=US:en'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}&ts=${Date.now()}`, { cache:'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
@@ -371,7 +395,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (Optie A: composite endpoint) 
+     CRYPTO — Top 5 BUY/SELL (alleen composite detail-bron, geen fallback)
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -383,13 +407,20 @@ export default function Homepage() {
       try {
         setCoinErr(null)
         const list = COINS
-        const scores = await pool(list, 8, async (row, idx) => {
+        const results = await pool(list, 8, async (row, idx) => {
           if (idx) await sleep(35)
-          return await calcCoinScoreFromDetail(row.symbol)   // <-- HIER: 1:1 dezelfde bron als coin detail
+          const { score, source, usedSymbol } = await calcCoinScoreStrict(row.symbol)
+          if (DEBUG && (row.symbol === 'BTC-USD' || row.symbol === 'BTC')) {
+            // eslint-disable-next-line no-console
+            console.debug('[coin-score:result]', { requested: row.symbol, usedSymbol, source, score })
+          }
+          return { name: row.name, symbol: row.symbol, score }
         })
-        const rows = list
-          .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
-          .filter(r => Number.isFinite(r.score as number)) as ScoredCoin[]
+
+        // neem alleen coins met geldige score (we prefereren consistentie over "vullen")
+        const rows = results
+          .filter(x => Number.isFinite(x.score as number))
+          .map(x => ({ symbol: x.symbol, name: x.name, score: x.score as number }))
 
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
@@ -487,7 +518,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
+      {/* CRYPTO — Top 5 BUY/SELL (TOP 50) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
