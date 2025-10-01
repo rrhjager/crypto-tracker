@@ -7,7 +7,7 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 
-/* ---------------- config (hero image in /public/images) ---------------- */
+/* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
 
 /* ---------------- types ---------------- */
@@ -29,9 +29,12 @@ type NewsItem = {
   image?: string | null
 }
 
-// Multi-market types
-type EquityCon = { symbol: string; name: string; market: string }
-type EquityPick = { symbol: string; name: string; market: string; pct: number }
+// Screener API types
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+type Signal = 'BUY' | 'HOLD' | 'SELL'
+type Scored = { symbol: string; name: string; market: MarketLabel; score: number; signal: Signal }
 
 /* ---------------- utils ---------------- */
 const num = (v: number | null | undefined, d = 2) =>
@@ -39,22 +42,6 @@ const num = (v: number | null | undefined, d = 2) =>
 
 function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(' ')
-}
-
-/* Fallback voor %: gebruik change% als die er is, anders bereken uit change en price. */
-function pctFromQuote(q?: Quote): number | null {
-  if (!q) return null
-  const pct = Number(q.regularMarketChangePercent)
-  if (Number.isFinite(pct)) return pct
-  const chg = Number(q.regularMarketChange)
-  const price = Number(q.regularMarketPrice)
-  if (Number.isFinite(chg) && Number.isFinite(price)) {
-    const prev = price - chg
-    if (prev !== 0 && Number.isFinite(prev)) {
-      return (chg / prev) * 100
-    }
-  }
-  return null
 }
 
 /* ---------------- static fallbacks per index ---------------- */
@@ -118,14 +105,6 @@ const STATIC_CONS: Record<string, { symbol: string; name: string }[]> = {
   ],
 }
 
-function constituentsForMarket(label: string): EquityCon[] {
-  if (label === 'AEX') {
-    return AEX.map(x => ({ symbol: x.symbol, name: x.name, market: 'AEX' }))
-  }
-  const rows = STATIC_CONS[label] || []
-  return rows.map(r => ({ ...r, market: label }))
-}
-
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -152,60 +131,44 @@ export default function Homepage() {
       '/api/coin/top-movers',
       `/api/news/google?q=crypto&${locale}`,
       `/api/news/google?q=equities&${locale}`,
+      `/api/screener/top-signals`, // ⬅️ nieuw
     ].forEach(prime)
     return () => { aborted = true }
   }, [])
 
   /* =======================
-     EQUITIES — per beurs BEST BUY/SELL
+     EQUITIES — Top BUY/SELL op basis van indicator-score
      ======================= */
-  const MARKET_ORDER = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex'] as const
+  type ScreenerResp = { markets: Array<{ market: MarketLabel; topBuy: Scored | null; topSell: Scored | null }> }
+  const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  const [bestBuyPerMarket, setBestBuyPerMarket]   = useState<EquityPick[]>([])
-  const [bestSellPerMarket, setBestSellPerMarket] = useState<EquityPick[]>([])
+  const [topBuy, setTopBuy]   = useState<Scored[]>([])
+  const [topSell, setTopSell] = useState<Scored[]>([])
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
-      const buys: EquityPick[] = []
-      const sells: EquityPick[] = []
-
-      for (const label of MARKET_ORDER) {
-        const cons = constituentsForMarket(label)
-        if (!cons.length) continue
-
-        const symbols = cons.map(c => c.symbol).join(',')
-        try {
-          const r = await fetch(`/api/quotes?symbols=${encodeURIComponent(symbols)}`, { cache: 'no-store' })
-          if (!r.ok) continue
-          const j: { quotes: Record<string, Quote> } = await r.json()
-          const arr = cons
-            .map((c) => {
-              const q = j.quotes?.[c.symbol]
-              const pct = pctFromQuote(q)
-              return { ...c, pct: Number.isFinite(pct as number) ? (pct as number) : NaN }
-            })
-            .filter((x) => Number.isFinite(x.pct))
-
-          if (!arr.length) continue
-          const top = [...arr].sort((a,b)=> b.pct - a.pct)[0]
-          const bot = [...arr].sort((a,b)=> a.pct - b.pct)[0]
-
-          if (top) buys.push({ symbol: top.symbol, name: top.name, market: top.market, pct: top.pct })
-          if (bot) sells.push({ symbol: bot.symbol, name: bot.name, market: bot.market, pct: bot.pct })
-        } catch {}
-      }
-
-      if (!aborted) {
-        const orderIndex = (m:string)=> MARKET_ORDER.indexOf(m as any)
-        setBestBuyPerMarket(buys.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
-        setBestSellPerMarket(sells.sort((a,b)=> orderIndex(a.market)-orderIndex(b.market)))
-      }
+      try {
+        const r = await fetch(`/api/screener/top-signals`, { cache: 'no-store' })
+        if (!r.ok) return
+        const j: ScreenerResp = await r.json()
+        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+        const buys = j.markets
+          .map(x => x.topBuy)
+          .filter(Boolean) as Scored[]
+        const sells = j.markets
+          .map(x => x.topSell)
+          .filter(Boolean) as Scored[]
+        if (!aborted) {
+          setTopBuy(buys.sort((a,b)=> order(a.market)-order(b.market)))
+          setTopSell(sells.sort((a,b)=> order(a.market)-order(b.market)))
+        }
+      } catch {}
     })()
     return () => { aborted = true }
   }, [])
 
-  /* -------- Crypto movers (Gainers/Losers) -------- */
+  /* -------- Crypto movers -------- */
   const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
   useEffect(()=>{
     let aborted=false
@@ -222,7 +185,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- News (Google News RSS via /api/news/google?q=...) -------- */
+  /* -------- News -------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -254,7 +217,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- AEX polling (mag blijven) -------- */
+  /* -------- AEX polling (bestaand) -------- */
   const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   useEffect(() => {
@@ -284,7 +247,7 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-      {/* WHY SIGNALHUB met hero-beeld rechts */}
+      {/* WHY SIGNALHUB */}
       <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
         <div className="grid md:grid-cols-2 gap-8 items-center">
           <div>
@@ -311,7 +274,7 @@ export default function Homepage() {
             </div>
           </div>
 
-          {/* hero image rechts */}
+          {/* hero */}
           <div className="table-card overflow-hidden">
             <Image
               src={HERO_IMG}
@@ -325,19 +288,19 @@ export default function Homepage() {
           </div>
         </div>
 
-        {/* scheidingslijn */}
+        {/* line */}
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL per beurs */}
+      {/* EQUITIES — Top BUY/SELL (op score) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY */}
         <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY</h2>
+          <h2 className="text-lg font-semibold mb-3">Equities — Top BUY (by Signal Score)</h2>
           <ul className="divide-y divide-white/10">
-            {bestBuyPerMarket.length===0 ? (
-              <li className="py-3 text-white/60">Nog geen data…</li>
-            ) : bestBuyPerMarket.map((r,i)=>(
+            {topBuy.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : topBuy.map((r,i)=>(
               <li key={`bb${i}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
@@ -346,7 +309,7 @@ export default function Homepage() {
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-green-300 whitespace-nowrap">
-                  {num(r.pct, 2)}%
+                  {r.signal} · {num(r.score, 0)}
                 </div>
               </li>
             ))}
@@ -355,11 +318,11 @@ export default function Homepage() {
 
         {/* SELL */}
         <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL</h2>
+          <h2 className="text-lg font-semibold mb-3">Equities — Top SELL (by Signal Score)</h2>
           <ul className="divide-y divide-white/10">
-            {bestSellPerMarket.length===0 ? (
-              <li className="py-3 text-white/60">Nog geen data…</li>
-            ) : bestSellPerMarket.map((r,i)=>(
+            {topSell.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : topSell.map((r,i)=>(
               <li key={`bs${i}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
@@ -368,7 +331,7 @@ export default function Homepage() {
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-medium text-red-300 whitespace-nowrap">
-                  {num(r.pct, 2)}%
+                  {r.signal} · {num(r.score, 0)}
                 </div>
               </li>
             ))}
@@ -423,7 +386,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS — thumbnails verwijderd, alleen regels */}
+      {/* NEWS */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
