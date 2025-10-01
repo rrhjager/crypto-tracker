@@ -52,8 +52,8 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ====== (Aandelen) identiek aan detail ====== */
-async function calcEquityScoreForSymbol(symbol: string): Promise<number | null> {
+/* ---- EXACT dezelfde aggregatie als op detailpagina’s (fallback) ---- */
+async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
       fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
@@ -93,104 +93,35 @@ async function calcEquityScoreForSymbol(symbol: string): Promise<number | null> 
   }
 }
 
-/* ====== (Crypto) — GARANTIE: zelfde score als crypto-detail ======
-   We proberen eerst de *exacte* score endpoint(s) zoals de crypto-pagina die gebruikt.
-   Fallback: lokale continue berekening (zodat niets stukgaat als endpoint ontbreekt).
-*/
-
-/** Mogelijke symbol-aliases tussen pagina's (bijv. BTC vs BTC-USD) */
-const SYMBOL_ALIASES: Record<string, string[]> = {
-  'BTC-USD': ['BTC', 'XBT', 'BTCUSDT'],
-  'ETH-USD': ['ETH', 'ETHUSDT'],
-  // voeg bij behoefte meer aliassen toe
-}
-
-async function fetchCryptoScoreFromServer(symbol: string): Promise<number | null> {
+/* ---- COIN score 1:1 via detail-endpoint (Optie A) ----
+   We proberen een reeks mogelijke composite endpoints (één ervan gebruik je op de coin detailpagina).
+   Zodra er één true hit geeft (score 0..100), gebruiken we die. Anders fallback: calcScoreForSymbol() */
+async function calcCoinScoreFromDetail(symbol: string): Promise<number | null> {
   const candidates = [
-    `/api/score/crypto/${encodeURIComponent(symbol)}`,
-    `/api/score/${encodeURIComponent(symbol)}?asset=crypto`,
+    // voeg hier gerust nog een variant toe als jullie detailpagina een andere route gebruikt
+    `/api/coins/score/${encodeURIComponent(symbol)}`,
+    `/api/coin/score/${encodeURIComponent(symbol)}`,
+    `/api/crypto/score/${encodeURIComponent(symbol)}`,
+    `/api/indicators/total-score/${encodeURIComponent(symbol)}?asset=coin`,
   ]
-
-  const alias = SYMBOL_ALIASES[symbol] || []
-  for (const alt of alias) {
-    candidates.push(`/api/score/crypto/${encodeURIComponent(alt)}`)
-    candidates.push(`/api/score/${encodeURIComponent(alt)}?asset=crypto`)
-  }
-
   for (const url of candidates) {
     try {
       const r = await fetch(url, { cache: 'no-store' })
       if (!r.ok) continue
-      const j = await r.json()
-      const s = Number(j?.score ?? j?.data?.score ?? j?.result?.score)
-      if (Number.isFinite(s)) return clamp(Math.round(s), 0, 100)
+      const j = await r.json() as any
+      // accepteer generieke vormen: {score}, {totalScore}, {data:{score}}
+      const raw =
+        (typeof j?.score === 'number' ? j.score :
+        typeof j?.totalScore === 'number' ? j.totalScore :
+        typeof j?.data?.score === 'number' ? j.data.score :
+        null)
+      if (Number.isFinite(raw) && raw >= 0 && raw <= 100) {
+        return Math.round(raw) // exact zoals badge toont
+      }
     } catch {}
   }
-  return null
-}
-
-/** Lokale continue berekening (fallback) — zelfde normalisaties als eerder */
-function localCryptoScoreFromIndicators(ma: MaCrossResp | null, rsi: RsiResp | null, macd: MacdResp | null, vol: Vol20Resp | null): number {
-  // MA
-  let maScore = 50
-  if (ma && ma.ma50 != null && ma.ma200 != null && Math.abs(ma.ma200) > 1e-8) {
-    const spread = clamp((ma.ma50 - ma.ma200) / ma.ma200, -0.20, 0.20)
-    maScore = ((spread / 0.20) + 1) / 2 * 100
-  }
-  // RSI
-  let rsiScore = 50
-  if (rsi && Number.isFinite(rsi.rsi as number)) {
-    const v = clamp((Number(rsi.rsi) - 30) / 40, 0, 1)
-    rsiScore = v * 100
-  }
-  // MACD
-  let macdScore = 50
-  if (macd) {
-    const base = (macd.hist != null ? macd.hist : (macd.macd != null && macd.signal != null ? (macd.macd - macd.signal) : null))
-    if (base != null) {
-      const denom = Math.max(Math.abs(macd.signal ?? 0), 1e-6)
-      const norm = clamp(Number(base) / denom, -2, 2)
-      macdScore = ((norm + 2) / 4) * 100
-    }
-  }
-  // Volume
-  let volScore = 50
-  if (vol) {
-    const ratio = (vol.ratio != null ? vol.ratio :
-      (vol.volume != null && vol.avg20 != null && vol.avg20 > 0 ? vol.volume / vol.avg20 : null))
-    if (ratio != null) {
-      const delta = clamp(Number(ratio) - 1, -1, 1)
-      volScore = ((delta + 1) / 2) * 100
-    }
-  }
-
-  const W_MA = 0.35, W_MACD = 0.25, W_RSI = 0.25, W_VOL = 0.15
-  const agg = W_MA*maScore + W_MACD*macdScore + W_RSI*rsiScore + W_VOL*volScore
-  return clamp(Math.round(agg), 0, 100)
-}
-
-async function calcCryptoScoreForSymbol(symbol: string): Promise<number | null> {
-  // 1) Probeer server-score (dezelfde als crypto-detail)
-  const serverScore = await fetchCryptoScoreFromServer(symbol)
-  if (serverScore != null) return serverScore
-
-  // 2) Fallback: lokale berekening (niets breken als endpoint niet bestaat)
-  try {
-    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-    ])
-    if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-    const [ma, rsi, macd, vol] = await Promise.all([
-      rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-    ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-    return localCryptoScoreFromIndicators(ma, rsi, macd, vol)
-  } catch {
-    return null
-  }
+  // fallback naar exact dezelfde 4-indicator-aggregatie
+  return await calcScoreForSymbol(symbol)
 }
 
 /* pool helper */
@@ -357,7 +288,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ========= NEWS ========= */
+  /* ========= NEWS state + loader ========= */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -390,7 +321,7 @@ export default function Homepage() {
   },[])
 
   /* =======================
-     EQUITIES — Top BUY/SELL
+     EQUITIES — Top BUY/SELL (identieke score)
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
@@ -412,7 +343,7 @@ export default function Homepage() {
 
           const scores = await pool(symbols, 4, async (sym, idx) => {
             if (idx) await sleep(60)
-            return await calcEquityScoreForSymbol(sym)
+            return await calcScoreForSymbol(sym)
           })
 
           const rows = cons.map((c, i) => ({
@@ -440,7 +371,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (exact zelfde score als crypto-pagina)
+     CRYPTO — Top 5 BUY/SELL (Optie A: composite endpoint) 
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -454,7 +385,7 @@ export default function Homepage() {
         const list = COINS
         const scores = await pool(list, 8, async (row, idx) => {
           if (idx) await sleep(35)
-          return await calcCryptoScoreForSymbol(row.symbol)
+          return await calcCoinScoreFromDetail(row.symbol)   // <-- HIER: 1:1 dezelfde bron als coin detail
         })
         const rows = list
           .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
@@ -556,7 +487,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL */}
+      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
