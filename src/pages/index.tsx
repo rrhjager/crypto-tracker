@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
+import ScoreBadge from '@/components/ScoreBadge'  // ⬅️ use the same badge as list/detail pages
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
@@ -54,7 +55,7 @@ function statusFromScore(score: number): Advice {
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-/* ---- EXACT dezelfde score-aggregatie als op detailpagina's ---- */
+/* ---- EXACT same aggregation as detail pages ---- */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -95,7 +96,7 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   }
 }
 
-/* pool helper voor gelimiteerde concurrency */
+/* pool helper */
 async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(arr.length) as any
   let i = 0
@@ -110,9 +111,7 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
   return out
 }
 
-/* ---------------- simpele constituenten per index ----------------
-   AEX komt uit /lib/aex. Voor de rest is dit een compacte subset.
-   (Als je volledige universes wilt, vervang deze lijsten door je echte sets.) */
+/* ---------------- simple constituents per index ---------------- */
 const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
   'AEX': [],
   'S&P 500': [
@@ -209,7 +208,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     EQUITIES — Top BUY/SELL (exactzelfde berekening)
+     EQUITIES — Top BUY/SELL (identical scoring)
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<Scored[]>([])
@@ -221,31 +220,22 @@ export default function Homepage() {
     ;(async () => {
       try {
         setScoreErr(null)
-
-        // Bereken scores per markt (concurrency beperkt zodat API niet overspoeld wordt)
-        const markets = MARKET_ORDER
         const outBuy: Scored[] = []
         const outSell: Scored[] = []
 
-        for (const market of markets) {
+        for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
-
           const symbols = cons.map(c => c.symbol)
 
           const scores = await pool(symbols, 4, async (sym, idx) => {
             if (idx) await sleep(60)
-            const score = await calcScoreForSymbol(sym)
-            return score
+            return await calcScoreForSymbol(sym)
           })
 
-          // kies hoogste BUY en laagste (sterkste) SELL o.b.v. score
           const rows = cons.map((c, i) => ({
-            symbol: c.symbol,
-            name: c.name,
-            market,
-            score: scores[i] ?? null as unknown as number
-          })).filter(r => Number.isFinite(r.score as number)) as Array<{symbol:string;name:string;market:MarketLabel;score:number}>
+            symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
+          })).filter(r => Number.isFinite(r.score as number)) as Array<Scored>
 
           if (rows.length) {
             const top = [...rows].sort((a,b)=> b.score - a.score)[0]
@@ -316,7 +306,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- AEX polling (bestaand) -------- */
+  /* -------- AEX polling (existing) -------- */
   const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   useEffect(() => {
@@ -352,46 +342,20 @@ export default function Homepage() {
           <div>
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
             <div className="text-white/80 mt-3 space-y-4">
-              <p>
-                <strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected
-                indicators across both crypto and global equities, we deliver a complete market overview that
-                cuts through the noise. Every asset is distilled into a clear stoplight signal: BUY, HOLD, or SELL,
-                backed by momentum, volume, sentiment, and market insights.
-              </p>
-              <p>
-                Our platform doesn’t just track prices; it highlights what truly matters. From insider trading
-                activity in U.S. Congress to market breadth and volatility regimes, SignalHub equips you with the
-                context to make smarter portfolio decisions.
-              </p>
-              <p>
-                Already trusted by thousands of investors, SignalHub is the go-to platform for anyone seeking
-                sharper insights, faster decisions, and a more confident investment journey.
-              </p>
-              <p>
-                <em>Clarity, confidence, and control. All in one clear buy, hold or sell overview.</em>
-              </p>
+              <p><strong>SignalHub is where complexity turns into clarity.</strong> …</p>
+              <p>Our platform doesn’t just track prices; it highlights what truly matters…</p>
+              <p>Already trusted by thousands of investors…</p>
+              <p><em>Clarity, confidence, and control…</em></p>
             </div>
           </div>
-
-          {/* hero */}
           <div className="table-card overflow-hidden">
-            <Image
-              src={HERO_IMG}
-              alt="Crypto Tracker — SignalHub"
-              width={1280}
-              height={960}
-              priority
-              unoptimized
-              className="w-full h-auto"
-            />
+            <Image src={HERO_IMG} alt="Crypto Tracker — SignalHub" width={1280} height={960} priority unoptimized className="w-full h-auto" />
           </div>
         </div>
-
-        {/* line */}
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL (identiek aan detail-scores) */}
+      {/* EQUITIES — Top BUY/SELL with the same badge UI */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY */}
         <div className="table-card p-5">
@@ -410,8 +374,8 @@ export default function Homepage() {
                     {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                   </div>
                 </div>
-                <div className="shrink-0 text-sm font-semibold text-green-300 whitespace-nowrap">
-                  {r.signal} · {num(r.score, 0)}
+                <div className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
                 </div>
               </li>
             ))}
@@ -435,8 +399,8 @@ export default function Homepage() {
                     {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                   </div>
                 </div>
-                <div className="shrink-0 text-sm font-semibold text-red-300 whitespace-nowrap">
-                  {r.signal} · {num(r.score, 0)}
+                <div className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
                 </div>
               </li>
             ))}
