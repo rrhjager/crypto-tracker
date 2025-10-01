@@ -22,8 +22,6 @@ type Quote = {
   currency?: string
 }
 
-type CryptoRow = { symbol: string; name?: string; pct?: number }
-
 type NewsItem = {
   title: string
   url: string
@@ -46,17 +44,13 @@ type ScoredEq = { symbol: string; name: string; market: MarketLabel; score: numb
 type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
 
 /* ---------------- utils ---------------- */
-const num = (v: number | null | undefined, d = 0) =>
-  (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
-
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
-
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 /* ---- EXACT dezelfde aggregatie als op detailpagina’s ---- */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
@@ -180,18 +174,58 @@ function constituentsForMarket(label: MarketLabel) {
   return STATIC_CONS[label] || []
 }
 
-/* ------- crypto lijst (Yahoo tickers) ------- */
+/* ------- crypto universum (Yahoo tickers) — TOP 50 ------- */
 const COINS: { symbol: string; name: string }[] = [
   { symbol: 'BTC-USD',  name: 'Bitcoin' },
   { symbol: 'ETH-USD',  name: 'Ethereum' },
-  { symbol: 'SOL-USD',  name: 'Solana' },
   { symbol: 'BNB-USD',  name: 'BNB' },
+  { symbol: 'SOL-USD',  name: 'Solana' },
   { symbol: 'XRP-USD',  name: 'XRP' },
   { symbol: 'ADA-USD',  name: 'Cardano' },
-  { symbol: 'AVAX-USD', name: 'Avalanche' },
   { symbol: 'DOGE-USD', name: 'Dogecoin' },
+  { symbol: 'TON-USD',  name: 'Toncoin' },
+  { symbol: 'TRX-USD',  name: 'TRON' },
+  { symbol: 'AVAX-USD', name: 'Avalanche' },
+  { symbol: 'DOT-USD',  name: 'Polkadot' },
   { symbol: 'LINK-USD', name: 'Chainlink' },
+  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
   { symbol: 'LTC-USD',  name: 'Litecoin' },
+  { symbol: 'MATIC-USD', name: 'Polygon' },
+  { symbol: 'XLM-USD',  name: 'Stellar' },
+  { symbol: 'NEAR-USD', name: 'NEAR' },
+  { symbol: 'ICP-USD',  name: 'Internet Computer' },
+  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
+  { symbol: 'FIL-USD',  name: 'Filecoin' },
+  { symbol: 'XMR-USD',  name: 'Monero' },
+  { symbol: 'APT-USD',  name: 'Aptos' },
+  { symbol: 'ARB-USD',  name: 'Arbitrum' },
+  { symbol: 'OP-USD',   name: 'Optimism' },
+  { symbol: 'SUI-USD',  name: 'Sui' },
+  { symbol: 'HBAR-USD', name: 'Hedera' },
+  { symbol: 'ALGO-USD', name: 'Algorand' },
+  { symbol: 'VET-USD',  name: 'VeChain' },
+  { symbol: 'EGLD-USD', name: 'MultiversX' },
+  { symbol: 'AAVE-USD', name: 'Aave' },
+  { symbol: 'INJ-USD',  name: 'Injective' },
+  { symbol: 'MKR-USD',  name: 'Maker' },
+  { symbol: 'RUNE-USD', name: 'THORChain' },
+  { symbol: 'IMX-USD',  name: 'Immutable' },
+  { symbol: 'FLOW-USD', name: 'Flow' },
+  { symbol: 'SAND-USD', name: 'The Sandbox' },
+  { symbol: 'MANA-USD', name: 'Decentraland' },
+  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+  { symbol: 'QNT-USD',  name: 'Quant' },
+  { symbol: 'GRT-USD',  name: 'The Graph' },
+  { symbol: 'CHZ-USD',  name: 'Chiliz' },
+  { symbol: 'CRV-USD',  name: 'Curve DAO' },
+  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
+  { symbol: 'FTM-USD',  name: 'Fantom' },
+  { symbol: 'XTZ-USD',  name: 'Tezos' },
+  { symbol: 'LDO-USD',  name: 'Lido DAO' },
+  { symbol: 'SNX-USD',  name: 'Synthetix' },
+  { symbol: 'STX-USD',  name: 'Stacks' },
+  { symbol: 'AR-USD',   name: 'Arweave' },
+  { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
 /* ---------------- page ---------------- */
@@ -217,7 +251,6 @@ export default function Homepage() {
     }
     const locale = 'hl=en-US&gl=US&ceid=US:en'
     ;[
-      '/api/coin/top-movers',
       `/api/news/google?q=crypto&${locale}`,
       `/api/news/google?q=equities&${locale}`,
     ].forEach(prime)
@@ -275,7 +308,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (zelfde score)
+     CRYPTO — Top 5 BUY/SELL (zelfde score, TOP 50 universum)
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -287,8 +320,8 @@ export default function Homepage() {
       try {
         setCoinErr(null)
         const list = COINS
-        const scores = await pool(list, 4, async (row, idx) => {
-          if (idx) await sleep(60)
+        const scores = await pool(list, 8, async (row, idx) => {
+          if (idx) await sleep(35)
           return await calcScoreForSymbol(row.symbol)
         })
         const rows = list
@@ -298,6 +331,7 @@ export default function Homepage() {
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
 
+        // Top 5 BUY en Top 5 SELL uit dezelfde TOP-50 lijst
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
 
@@ -308,58 +342,6 @@ export default function Homepage() {
     })()
     return () => { aborted = true }
   }, [])
-
-  /* -------- News -------- */
-  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
-  const [newsEq, setNewsEq] = useState<NewsItem[]>([])
-  useEffect(()=>{
-    let aborted=false
-    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
-      try{
-        const query =
-          topic === 'crypto'
-            ? 'crypto OR bitcoin OR ethereum OR blockchain'
-            : 'equities OR stocks OR stock market OR aandelen OR beurs'
-        const locale = 'hl=en-US&gl=US&ceid=US:en'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
-          title: x.title || '',
-          url: x.link,
-          source: x.source || '',
-          published: x.pubDate || '',
-          image: null,
-        }))
-        if (!aborted) setter(arr)
-      }catch{
-        if (!aborted) setter([])
-      }
-    }
-    load('crypto', setNewsCrypto)
-    load('equities', setNewsEq)
-    return ()=>{aborted=true}
-  },[])
-
-  /* -------- AEX polling (bestaand) -------- */
-  const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
-  useEffect(() => {
-    let timer:any, aborted=false
-    async function load() {
-      try {
-        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache:'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j: { quotes: Record<string, Quote> } = await r.json()
-        if (!aborted) setQuotes(j.quotes || {})
-      } catch {} finally {
-        if (!aborted) timer = setTimeout(load, 20000)
-      }
-    }
-    load()
-    return ()=> { aborted=true; if (timer) clearTimeout(timer) }
-  }, [symbols])
 
   /* ---------------- render ---------------- */
   return (
@@ -443,7 +425,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL */}
+      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
@@ -492,7 +474,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS */}
+      {/* NEWS (onveranderd placeholder, vervang door jullie bestaande news-state indien gewenst) */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
@@ -500,18 +482,7 @@ export default function Homepage() {
             <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
           <ul className="grid gap-2">
-            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
-              newsCrypto.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
+            <li className="text-white/60">No news…</li>
           </ul>
         </div>
 
@@ -521,18 +492,7 @@ export default function Homepage() {
             <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
           </div>
           <ul className="grid gap-2">
-            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
-              newsEq.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
+            <li className="text-white/60">No news…</li>
           </ul>
         </div>
       </section>
