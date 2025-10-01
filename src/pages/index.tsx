@@ -257,6 +257,38 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
+  /* ========= NEWS state + loader (hersteld) ========= */
+  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
+  const [newsEq, setNewsEq] = useState<NewsItem[]>([])
+  useEffect(()=>{
+    let aborted=false
+    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
+      try{
+        const query =
+          topic === 'crypto'
+            ? 'crypto OR bitcoin OR ethereum OR blockchain'
+            : 'equities OR stocks OR stock market OR aandelen OR beurs'
+        const locale = 'hl=en-US&gl=US&ceid=US:en'
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
+          title: x.title || '',
+          url: x.link,
+          source: x.source || '',
+          published: x.pubDate || '',
+          image: null,
+        }))
+        if (!aborted) setter(arr)
+      }catch{
+        if (!aborted) setter([])
+      }
+    }
+    load('crypto', setNewsCrypto)
+    load('equities', setNewsEq)
+    return ()=>{aborted=true}
+  },[])
+
   /* =======================
      EQUITIES — Top BUY/SELL (identieke score)
      ======================= */
@@ -474,7 +506,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS (onveranderd placeholder, vervang door jullie bestaande news-state indien gewenst) */}
+      {/* NEWS (hersteld) */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
@@ -482,7 +514,18 @@ export default function Homepage() {
             <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
           <ul className="grid gap-2">
-            <li className="text-white/60">No news…</li>
+            {newsCrypto.length===0 ? (
+              <li className="text-white/60">No news…</li>
+            ) : newsCrypto.map((n,i)=>(
+              <li key={`nC${i}`} className="leading-tight">
+                <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                  {n.title}
+                </a>
+                <div className="text-xs text-white/60 mt-0.5">
+                  {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                </div>
+              </li>
+            ))}
           </ul>
         </div>
 
@@ -492,7 +535,18 @@ export default function Homepage() {
             <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
           </div>
           <ul className="grid gap-2">
-            <li className="text-white/60">No news…</li>
+            {newsEq.length===0 ? (
+              <li className="text-white/60">No news…</li>
+            ) : newsEq.map((n,i)=>(
+              <li key={`nE${i}`} className="leading-tight">
+                <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                  {n.title}
+                </a>
+                <div className="text-xs text-white/60 mt-0.5">
+                  {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                </div>
+              </li>
+            ))}
           </ul>
         </div>
       </section>
