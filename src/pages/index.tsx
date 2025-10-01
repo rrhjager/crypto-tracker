@@ -309,23 +309,6 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* -------- Crypto movers (oude blok blijft) -------- */
-  const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
-  useEffect(()=>{
-    let aborted=false
-    ;(async()=>{
-      try{
-        const r = await fetch('/api/coin/top-movers', { cache:'no-store' })
-        if (!r.ok) return
-        const j = await r.json()
-        const gainers = (j.gainers || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
-        const losers  = (j.losers  || []).slice(0,5).map((x:any)=>({ symbol:x.symbol, name:x.name, pct: Number(x.pct) }))
-        if (!aborted) setCryptoMovers({ gainers, losers })
-      }catch{}
-    })()
-    return ()=>{aborted=true}
-  },[])
-
   /* -------- News -------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
@@ -394,10 +377,10 @@ export default function Homepage() {
           <div>
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
             <div className="text-white/80 mt-3 space-y-4">
-              <p><strong>SignalHub is where complexity turns into clarity.</strong> …</p>
-              <p>Our platform doesn’t just track prices; it highlights what truly matters…</p>
-              <p>Already trusted by thousands of investors…</p>
-              <p><em>Clarity, confidence, and control…</em></p>
+              <p><strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected indicators across both crypto and global equities, we deliver a complete market overview that cuts through the noise.</p>
+              <p>Our platform highlights what truly matters — momentum, volume, sentiment, and market context.</p>
+              <p>Already trusted by thousands of investors.</p>
+              <p><em>Clarity, confidence, and control. All in one clear buy/hold/sell overview.</em></p>
             </div>
           </div>
           <div className="table-card overflow-hidden">
@@ -460,4 +443,99 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/
+      {/* CRYPTO — Top 5 BUY/SELL */}
+      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
+        {/* BUY top 5 */}
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Crypto — Top 5 BUY (by Signal Score)</h2>
+            {coinErr && <span className="text-xs text-red-300">Error: {coinErr}</span>}
+          </div>
+          <ul className="divide-y divide-white/10">
+            {coinTopBuy.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : coinTopBuy.map((r)=>(
+              <li key={`cb-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="truncate">
+                  <div className="font-medium truncate">{r.name}</div>
+                  <div className="text-white/60 text-xs">{r.symbol}</div>
+                </div>
+                <div className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* SELL top 5 */}
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Crypto — Top 5 SELL (by Signal Score)</h2>
+            {coinErr && <span className="text-xs text-red-300">Error: {coinErr}</span>}
+          </div>
+          <ul className="divide-y divide-white/10">
+            {coinTopSell.length===0 ? (
+              <li className="py-3 text-white/60">No data yet…</li>
+            ) : coinTopSell.map((r)=>(
+              <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <div className="truncate">
+                  <div className="font-medium truncate">{r.name}</div>
+                  <div className="text-white/60 text-xs">{r.symbol}</div>
+                </div>
+                <div className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      {/* NEWS */}
+      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Crypto News</h2>
+            <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
+          </div>
+          <ul className="grid gap-2">
+            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
+              newsCrypto.map((n,i)=>(
+                <li key={i} className="leading-tight">
+                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                    {n.title}
+                  </a>
+                  <div className="text-xs text-white/60 mt-0.5">
+                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                  </div>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Equities News</h2>
+            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
+          </div>
+          <ul className="grid gap-2">
+            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
+              newsEq.map((n,i)=>(
+                <li key={i} className="leading-tight">
+                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
+                    {n.title}
+                  </a>
+                  <div className="text-xs text-white/60 mt-0.5">
+                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
+                  </div>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+      </section>
+    </>
+  )
+}
