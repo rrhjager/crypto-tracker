@@ -6,12 +6,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
-import ScoreBadge from '@/components/ScoreBadge'  // ⬅️ use the same badge as list/detail pages
+import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
 
 /* ---------------- types ---------------- */
+type Advice = 'BUY' | 'HOLD' | 'SELL'
+
 type Quote = {
   symbol: string
   regularMarketPrice: number | null
@@ -30,17 +32,18 @@ type NewsItem = {
   image?: string | null
 }
 
-type Advice = 'BUY' | 'HOLD' | 'SELL'
 type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number | null }
 type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number | null }
 type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number | null }
 type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number | null }
 
+/* ---- markten ---- */
 type MarketLabel =
   | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
   | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
 
-type Scored = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
+type ScoredEq = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
+type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
 
 /* ---------------- utils ---------------- */
 const num = (v: number | null | undefined, d = 0) =>
@@ -55,7 +58,7 @@ function statusFromScore(score: number): Advice {
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-/* ---- EXACT same aggregation as detail pages ---- */
+/* ---- EXACT dezelfde aggregatie als op detailpagina’s ---- */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -111,7 +114,7 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
   return out
 }
 
-/* ---------------- simple constituents per index ---------------- */
+/* ---------------- constituents per markt ---------------- */
 const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
   'AEX': [],
   'S&P 500': [
@@ -177,6 +180,20 @@ function constituentsForMarket(label: MarketLabel) {
   return STATIC_CONS[label] || []
 }
 
+/* ------- crypto lijst (Yahoo tickers) ------- */
+const COINS: { symbol: string; name: string }[] = [
+  { symbol: 'BTC-USD',  name: 'Bitcoin' },
+  { symbol: 'ETH-USD',  name: 'Ethereum' },
+  { symbol: 'SOL-USD',  name: 'Solana' },
+  { symbol: 'BNB-USD',  name: 'BNB' },
+  { symbol: 'XRP-USD',  name: 'XRP' },
+  { symbol: 'ADA-USD',  name: 'Cardano' },
+  { symbol: 'AVAX-USD', name: 'Avalanche' },
+  { symbol: 'DOGE-USD', name: 'Dogecoin' },
+  { symbol: 'LINK-USD', name: 'Chainlink' },
+  { symbol: 'LTC-USD',  name: 'Litecoin' },
+]
+
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -208,11 +225,11 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     EQUITIES — Top BUY/SELL (identical scoring)
+     EQUITIES — Top BUY/SELL (identieke score)
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-  const [topBuy, setTopBuy]   = useState<Scored[]>([])
-  const [topSell, setTopSell] = useState<Scored[]>([])
+  const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
+  const [topSell, setTopSell] = useState<ScoredEq[]>([])
   const [scoreErr, setScoreErr] = useState<string | null>(null)
 
   useEffect(() => {
@@ -220,8 +237,8 @@ export default function Homepage() {
     ;(async () => {
       try {
         setScoreErr(null)
-        const outBuy: Scored[] = []
-        const outSell: Scored[] = []
+        const outBuy: ScoredEq[] = []
+        const outSell: ScoredEq[] = []
 
         for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
@@ -235,7 +252,7 @@ export default function Homepage() {
 
           const rows = cons.map((c, i) => ({
             symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
-          })).filter(r => Number.isFinite(r.score as number)) as Array<Scored>
+          })).filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
 
           if (rows.length) {
             const top = [...rows].sort((a,b)=> b.score - a.score)[0]
@@ -257,7 +274,42 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* -------- Crypto movers -------- */
+  /* =======================
+     CRYPTO — Top 5 BUY/SELL (zelfde score)
+     ======================= */
+  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
+  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
+  const [coinErr, setCoinErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let aborted = false
+    ;(async () => {
+      try {
+        setCoinErr(null)
+        const list = COINS
+        const scores = await pool(list, 4, async (row, idx) => {
+          if (idx) await sleep(60)
+          return await calcScoreForSymbol(row.symbol)
+        })
+        const rows = list
+          .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
+          .filter(r => Number.isFinite(r.score as number)) as ScoredCoin[]
+
+        const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
+        const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
+
+        const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+        const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+        if (!aborted) { setCoinTopBuy(buys); setCoinTopSell(sells) }
+      } catch (e:any) {
+        if (!aborted) setCoinErr(String(e?.message || e))
+      }
+    })()
+    return () => { aborted = true }
+  }, [])
+
+  /* -------- Crypto movers (oude blok blijft) -------- */
   const [cryptoMovers, setCryptoMovers] = useState<{gainers:CryptoRow[]; losers:CryptoRow[]}>({gainers:[], losers:[]})
   useEffect(()=>{
     let aborted=false
@@ -306,7 +358,7 @@ export default function Homepage() {
     return ()=>{aborted=true}
   },[])
 
-  /* -------- AEX polling (existing) -------- */
+  /* -------- AEX polling (bestaand) -------- */
   const symbols = useMemo(()=> AEX.map(a=>a.symbol), [])
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   useEffect(() => {
@@ -355,7 +407,7 @@ export default function Homepage() {
         <div className="mt-8 h-px bg-white/10" />
       </section>
 
-      {/* EQUITIES — Top BUY/SELL with the same badge UI */}
+      {/* EQUITIES — Top BUY/SELL */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY */}
         <div className="table-card p-5">
@@ -408,97 +460,4 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* BIGGEST CRYPTO MOVERS */}
-      <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Gainers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.gainers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.gainers.map((m,i)=>(
-              <li key={`cg${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-green-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 text-sm">
-            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-        </div>
-
-        <div className="table-card p-5">
-          <h2 className="text-lg font-semibold mb-3">Crypto — Biggest Losers</h2>
-          <ul className="divide-y divide-white/10">
-            {cryptoMovers.losers.length===0 ? (
-              <li className="py-3 text-white/60">Geen data…</li>
-            ) : cryptoMovers.losers.map((m,i)=>(
-              <li key={`cl${i}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{m.name || m.symbol}</div>
-                  <div className="text-white/60 text-xs">{m.symbol}</div>
-                </div>
-                <div className="text-red-300 text-sm font-medium">
-                  {num(m.pct ?? null, 2)}%
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 text-sm">
-            <Link href="/index" className="text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-        </div>
-      </section>
-
-      {/* NEWS */}
-      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
-        <div className="table-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Crypto News</h2>
-            <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
-          </div>
-          <ul className="grid gap-2">
-            {newsCrypto.length===0 ? <li className="text-white/60">No news…</li> :
-              newsCrypto.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-
-        <div className="table-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Equities News</h2>
-            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
-          </div>
-          <ul className="grid gap-2">
-            {newsEq.length===0 ? <li className="text-white/60">No news…</li> :
-              newsEq.map((n,i)=>(
-                <li key={i} className="leading-tight">
-                  <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                    {n.title}
-                  </a>
-                  <div className="text-xs text-white/60 mt-0.5">
-                    {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
-        </div>
-      </section>
-    </>
-  )
-}
+      {/* CRYPTO — Top 5 BUY/
