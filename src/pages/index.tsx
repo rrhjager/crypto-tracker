@@ -106,9 +106,6 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
 
 /* =======================
    CRYPTO — EXACT ZELFDE BRON & FORMULE ALS DETAILPAGINA
-   - we gebruiken /api/crypto-light/indicators?symbols=BINANCE:PAIR
-   - zelfde overallScore() als in [slug].tsx
-   - zelfde BINANCE pair-afleiding als op detail (SYMBOL -> SYMBOLUSDT, stablecoins uitgesloten)
    ======================= */
 type IndResp = {
   symbol: string
@@ -414,11 +411,11 @@ export default function Homepage() {
         setCoinErr(null)
 
         // Bouw BINANCE pairs voor het hele universum
-        const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) })) // 'VET-USD' -> 'VET' -> 'VETUSDT'
-          .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) })) // fallback defensief
+        const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
+          .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
           .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-        // LocalStorage quick-path (als je al detailpagina’s open had)
+        // LocalStorage quick-path
         const lsScores: Record<string, number> = {}
         try {
           if (typeof window !== 'undefined') {
@@ -432,7 +429,7 @@ export default function Homepage() {
           }
         } catch {}
 
-        // Haal voor alle pairs de indicators op (zoals detailpagina)
+        // Indicators ophalen (zoals detailpagina)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
@@ -443,7 +440,6 @@ export default function Homepage() {
             const { score } = overallScore(ind)
             return { symbol: c.symbol, name: c.name, score }
           } catch {
-            // fallback: als LS iets had, gebruik dat; anders null
             const sLS = lsScores[pair]
             return { symbol: c.symbol, name: c.name, score: Number.isFinite(sLS) ? sLS : (null as any) }
           }
@@ -466,6 +462,49 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
+  /* ---- helper: compacte nieuws-lijst met favicon ---- */
+  const renderNews = (items: NewsItem[], keyPrefix: string) => (
+    <ul className="grid gap-2">
+      {items.length === 0 ? (
+        <li className="text-white/60">No news…</li>
+      ) : items.map((n, i) => {
+        let domain = ''
+        try {
+          domain = new URL(n.url).hostname.replace(/^www\./, '')
+        } catch {}
+        const favicon = domain ? `https://www.google.com/s2/favicons?sz=64&domain=${domain}` : ''
+        return (
+          <li
+            key={`${keyPrefix}${i}`}
+            className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
+          >
+            {/* klein bronlogo; <img> i.p.v. <Image> zodat je geen remote patterns hoeft whitelisten */}
+            {favicon ? (
+              <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
+            ) : (
+              <div className="w-4 h-4 mt-1 rounded-sm bg-white/10" />
+            )}
+            <div className="min-w-0 flex-1">
+              <a
+                href={n.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block font-medium text-white hover:underline truncate"
+                title={n.title}
+              >
+                {n.title}
+              </a>
+              <div className="text-xs text-white/60 mt-0.5 truncate">
+                {(n.source || domain || '').trim()}
+                {n.published ? ` • ${new Date(n.published).toLocaleString('nl-NL')}` : ''}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ul>
+  )
+
   /* ---------------- render ---------------- */
   return (
     <>
@@ -476,56 +515,54 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-{/* INTRO / WHY SIGNALHUB */}
-<section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-  <div className="grid md:grid-cols-2 gap-8 items-center">
-    <div>
-      <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">
-        Cut the noise. Catch the signal.
-      </h1>
+      {/* INTRO / WHY SIGNALHUB */}
+      <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
+        <div className="grid md:grid-cols-2 gap-8 items-center">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">
+              Cut the noise. Catch the signal.
+            </h1>
 
-      <div className="text-white/80 mt-3 space-y-4">
-        <h2 className="text-xl font-semibold text-white">Why SignalHub?</h2>
+            <div className="text-white/80 mt-3 space-y-4">
+              <h2 className="text-xl font-semibold text-white">Why SignalHub?</h2>
 
-        <p>
-          SignalHub is where complexity turns into clarity. We cut through the endless
-          stream of charts, news, and hype to give you a clean, actionable view of the
-          markets. Whether you’re trading crypto, ETFs, or global equities, our platform
-          highlights exactly what matters most: momentum, volume, sentiment, and context.
-        </p>
+              <p>
+                SignalHub is where complexity turns into clarity. We cut through the endless
+                stream of charts, news, and hype to give you a clean, actionable view of the
+                markets. Whether you’re trading crypto, ETFs, or global equities, our platform
+                highlights exactly what matters most: momentum, volume, sentiment, and context.
+              </p>
 
-        <p><strong>No guesswork. No noise. Just signals you can actually use.</strong></p>
+              <p><strong>No guesswork. No noise. Just signals you can actually use.</strong></p>
 
-        <p>
-          Already trusted by thousands of investors worldwide, SignalHub turns uncertainty
-          into confidence. With our intuitive buy/hold/sell insights, you’ll know where the
-          market stands, and where it’s headed.
-        </p>
+              <p>
+                Already trusted by thousands of investors worldwide, SignalHub turns uncertainty
+                into confidence. With our intuitive buy/hold/sell insights, you’ll know where the
+                market stands, and where it’s headed.
+              </p>
 
-        <p>
-          <strong>Clarity. Confidence. Control.</strong><br />
-          <span className="text-white/70">That’s SignalHub. Your edge in every market.</span>
-        </p>
-      </div>
-    </div>
+              <p>
+                <strong>Clarity. Confidence. Control.</strong><br />
+                <span className="text-white/70">That’s SignalHub. Your edge in every market.</span>
+              </p>
+            </div>
+          </div>
 
-    {/* hero image blijft hetzelfde */}
-    <div className="table-card overflow-hidden">
-      <Image
-        src={HERO_IMG}
-        alt="Crypto Tracker — SignalHub"
-        width={1280}
-        height={960}
-        priority
-        unoptimized
-        className="w-full h-auto"
-      />
-    </div>
-  </div>
+          <div className="table-card overflow-hidden">
+            <Image
+              src={HERO_IMG}
+              alt="Crypto Tracker — SignalHub"
+              width={1280}
+              height={960}
+              priority
+              unoptimized
+              className="w-full h-auto"
+            />
+          </div>
+        </div>
 
-  {/* line */}
-  <div className="mt-8 h-px bg-white/10" />
-</section>
+        <div className="mt-8 h-px bg-white/10" />
+      </section>
 
       {/* EQUITIES — Top BUY/SELL */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
@@ -629,27 +666,14 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS */}
+      {/* NEWS — compact met favicon/bronlogo */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Crypto News</h2>
             <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
           </div>
-          <ul className="grid gap-2">
-            {newsCrypto.length===0 ? (
-              <li className="text-white/60">No news…</li>
-            ) : newsCrypto.map((n,i)=>(
-              <li key={`nC${i}`} className="leading-tight">
-                <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                  {n.title}
-                </a>
-                <div className="text-xs text-white/60 mt-0.5">
-                  {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {renderNews(newsCrypto, 'nC')}
         </div>
 
         <div className="table-card p-5">
@@ -657,20 +681,7 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Equities News</h2>
             <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
           </div>
-          <ul className="grid gap-2">
-            {newsEq.length===0 ? (
-              <li className="text-white/60">No news…</li>
-            ) : newsEq.map((n,i)=>(
-              <li key={`nE${i}`} className="leading-tight">
-                <a href={n.url} target="_blank" rel="noreferrer" className="hover:underline">
-                  {n.title}
-                </a>
-                <div className="text-xs text-white/60 mt-0.5">
-                  {n.source || ''}{n.published ? ` • ${n.published}` : ''}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {renderNews(newsEq, 'nE')}
         </div>
       </section>
     </>
