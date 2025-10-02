@@ -286,48 +286,6 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
-/* ---------------- NEWS UI helper (favicon) ---------------- */
-const renderNews = (items: NewsItem[], keyPrefix: string) => (
-  <ul className="grid gap-2">
-    {items.length === 0 ? (
-      <li className="text-white/60">No news…</li>
-    ) : items.map((n, i) => {
-      let domain = ''
-      try {
-        domain = new URL(n.url).hostname.replace(/^www\./, '')
-      } catch {}
-      const favicon = domain ? `https://www.google.com/s2/favicons?sz=64&domain=${domain}` : ''
-      return (
-        <li
-          key={`${keyPrefix}${i}`}
-          className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
-        >
-          {favicon ? (
-            <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
-          ) : (
-            <div className="w-4 h-4 mt-1 rounded-sm bg-white/10" />
-          )}
-          <div className="min-w-0 flex-1">
-            <a
-              href={n.url}
-              target="_blank"
-              rel="noreferrer"
-              className="block font-medium text-white hover:underline truncate"
-              title={n.title}
-            >
-              {n.title}
-            </a>
-            <div className="text-xs text-white/60 mt-0.5 truncate">
-              {(n.source || domain || '').trim()}
-              {n.published ? ` • ${new Date(n.published).toLocaleString('nl-NL')}` : ''}
-            </div>
-          </div>
-        </li>
-      )
-    })}
-  </ul>
-)
-
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -452,10 +410,12 @@ export default function Homepage() {
       try {
         setCoinErr(null)
 
+        // Bouw BINANCE pairs voor het hele universum
         const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
           .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
           .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
+        // LocalStorage quick-path
         const lsScores: Record<string, number> = {}
         try {
           if (typeof window !== 'undefined') {
@@ -469,6 +429,7 @@ export default function Homepage() {
           }
         } catch {}
 
+        // Indicators ophalen (zoals detailpagina)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
@@ -500,6 +461,73 @@ export default function Homepage() {
     })()
     return () => { aborted = true }
   }, [])
+
+  /* ---- NIEUW: helpers voor nieuws (favicon + decode) ---- */
+  function decodeHtml(s: string) {
+    return (s || '')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+  }
+
+  function realDomainFromUrl(raw: string): { domain: string; favicon: string } {
+    try {
+      const u = new URL(raw)
+      if (u.hostname.endsWith('news.google.com')) {
+        const orig = u.searchParams.get('url')
+        if (orig) {
+          const ou = new URL(orig)
+          const d = ou.hostname.replace(/^www\./, '')
+          return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
+        }
+      }
+      const d = u.hostname.replace(/^www\./, '')
+      return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
+    } catch {
+      return { domain: '', favicon: '' }
+    }
+  }
+
+  /* ---- helper: compacte nieuws-lijst met favicon ---- */
+  const renderNews = (items: NewsItem[], keyPrefix: string) => (
+    <ul className="grid gap-2">
+      {items.length === 0 ? (
+        <li className="text-white/60">No news…</li>
+      ) : items.map((n, i) => {
+        const { domain, favicon } = realDomainFromUrl(n.url)
+        const title = decodeHtml(n.title || '')
+        return (
+          <li
+            key={`${keyPrefix}${i}`}
+            className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
+          >
+            {favicon ? (
+              <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
+            ) : (
+              <div className="w-4 h-4 mt-1 rounded-sm bg-white/10" />
+            )}
+            <div className="min-w-0 flex-1">
+              <a
+                href={n.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block font-medium text-white hover:underline truncate"
+                title={title}
+              >
+                {title}
+              </a>
+              <div className="text-xs text-white/60 mt-0.5 truncate">
+                {(n.source || domain || '').trim()}
+                {n.published ? ` • ${new Date(n.published).toLocaleString('nl-NL')}` : ''}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ul>
+  )
 
   /* ---------------- render ---------------- */
   return (
