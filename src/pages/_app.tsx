@@ -71,14 +71,6 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
         },
       }}
     >
-      <>
-        {/* AdSense library (alleen laden; geen Auto Ads geactiveerd) */}
-        <Script
-          id="adsense-lib"
-          strategy="afterInteractive"
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4777751645956730"
-          crossOrigin="anonymous"
-        />
 
         {page}
         <Footer />
