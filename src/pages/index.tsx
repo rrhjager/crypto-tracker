@@ -476,24 +476,56 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-      {/* WHY SIGNALHUB */}
-      <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-        <div className="grid md:grid-cols-2 gap-8 items-center">
-          <div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Why SignalHub?</h1>
-            <div className="text-white/80 mt-3 space-y-4">
-              <p><strong>SignalHub is where complexity turns into clarity.</strong> By combining carefully selected indicators across both crypto and global equities, we deliver a complete market overview that cuts through the noise.</p>
-              <p>Our platform highlights what truly matters — momentum, volume, sentiment, and market context.</p>
-              <p>Already trusted by thousands of investors.</p>
-              <p><em>Clarity, confidence, and control. All in one clear buy/hold/sell overview.</em></p>
-            </div>
-          </div>
-          <div className="table-card overflow-hidden">
-            <Image src={HERO_IMG} alt="Crypto Tracker — SignalHub" width={1280} height={960} priority unoptimized className="w-full h-auto" />
-          </div>
-        </div>
-        <div className="mt-8 h-px bg-white/10" />
-      </section>
+{/* INTRO / WHY SIGNALHUB */}
+<section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
+  <div className="grid md:grid-cols-2 gap-8 items-center">
+    <div>
+      <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">
+        Cut the noise. Catch the signal.
+      </h1>
+
+      <div className="text-white/80 mt-3 space-y-4">
+        <h2 className="text-xl font-semibold text-white">Why SignalHub?</h2>
+
+        <p>
+          SignalHub is where complexity turns into clarity. We cut through the endless
+          stream of charts, news, and hype to give you a clean, actionable view of the
+          markets. Whether you’re trading crypto, ETFs, or global equities, our platform
+          highlights exactly what matters most: momentum, volume, sentiment, and context.
+        </p>
+
+        <p><strong>No guesswork. No noise. Just signals you can actually use.</strong></p>
+
+        <p>
+          Already trusted by thousands of investors worldwide, SignalHub turns uncertainty
+          into confidence. With our intuitive buy/hold/sell insights, you’ll know where the
+          market stands — and where it’s headed.
+        </p>
+
+        <p>
+          <strong>Clarity. Confidence. Control.</strong><br />
+          <span className="text-white/70">That’s SignalHub. Your edge in every market.</span>
+        </p>
+      </div>
+    </div>
+
+    {/* hero image blijft hetzelfde */}
+    <div className="table-card overflow-hidden">
+      <Image
+        src={HERO_IMG}
+        alt="Crypto Tracker — SignalHub"
+        width={1280}
+        height={960}
+        priority
+        unoptimized
+        className="w-full h-auto"
+      />
+    </div>
+  </div>
+
+  {/* line */}
+  <div className="mt-8 h-px bg-white/10" />
+</section>
 
       {/* EQUITIES — Top BUY/SELL */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
