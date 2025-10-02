@@ -7,23 +7,12 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
-import { computeCompositeScore } from '@/lib/score'  // ⬅️ exact dezelfde aggregatie als detailpagina
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
-// <<< PAS DIT AAN NAAR JULLIE CRYPTO-DETAIL ENDPOINT ALS DIE ANDERS HEET >>>
-const CRYPTO_SCORE_API = '/api/crypto/score' // bv. '/api/crypto/score' of '/api/coin/score'
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-
-type Quote = {
-  symbol: string
-  regularMarketPrice: number | null
-  regularMarketChange: number | null
-  regularMarketChangePercent: number | null
-  currency?: string
-}
 
 type NewsItem = {
   title: string
@@ -33,17 +22,12 @@ type NewsItem = {
   image?: string | null
 }
 
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number | null }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number | null }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number | null }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number | null }
-
 /* ---- markten ---- */
 type MarketLabel =
   | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
   | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
 
-type ScoredEq = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
+type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
 type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
 
 /* ---------------- utils ---------------- */
@@ -73,6 +57,11 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 /* =======================
    AANDELEN — aggregatie (zoals individuele aandelenpagina)
    ======================= */
+type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice | string; points: number | string | null }
+type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice | string; points: number | string | null }
+type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice | string; points: number | string | null }
+type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice | string; points: number | string | null }
+
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -87,10 +76,12 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
       rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
     ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
+    const toPts = (status?: Advice | string, pts?: number | string | null) => {
+      const n = typeof pts === 'string' ? Number(pts) : pts
+      if (Number.isFinite(n as number)) return clamp(Number(n), -2, 2)
+      const s = String(status || '').toUpperCase()
+      if (s === 'BUY')  return  2
+      if (s === 'SELL') return -2
       return 0
     }
 
@@ -114,124 +105,68 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
 }
 
 /* =======================
-   CRYPTO — cache helpers (zelfde key als crypto-detailpagina)
+   CRYPTO — EXACT ZELFDE BRON & FORMULE ALS DETAILPAGINA
+   - we gebruiken /api/crypto-light/indicators?symbols=BINANCE:PAIR
+   - zelfde overallScore() als in [slug].tsx
+   - zelfde BINANCE pair-afleiding als op detail (SYMBOL -> SYMBOLUSDT, stablecoins uitgesloten)
    ======================= */
-const LS_KEY = (sym: string) => `TA:INDICATORS:${sym}`
-type CachedTA = {
-  ma?: any; macd?: any; rsi?: any; vol?: any;
-  score?: number;
-  updatedAt?: number; ts?: number;
+type IndResp = {
+  symbol: string
+  ma?: { ma50: number|null; ma200: number|null; cross?: string }
+  rsi?: number|null
+  macd?: { macd: number|null; signal: number|null; hist: number|null }
+  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  error?: string
 }
 
-function readCachedComposite(sym: string): { score: number } | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(LS_KEY(sym))
-    if (!raw) return null
-    const obj: CachedTA = JSON.parse(raw)
-
-    const ma   = obj?.ma ?? null
-    const macd = obj?.macd ?? null
-    const rsi  = obj?.rsi ?? null
-    const vol  = obj?.vol ?? null
-
-    let score = Number(obj?.score)
-    if (!Number.isFinite(score)) {
-      const computed = computeCompositeScore(ma, macd, rsi, vol)
-      if (Number.isFinite(computed)) score = Math.round(computed)
-    }
-    if (!Number.isFinite(score)) return null
-    const pct = clamp(Math.round(Number(score)), 0, 100)
-    return { score: pct }
-  } catch {
-    return null
-  }
+function statusFromOverall(score: number): Advice {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
 }
 
-function writeCachedComposite(sym: string, payload: {
-  ma: any; macd: any; rsi: any; vol: any; score: number
-}) {
-  if (typeof window === 'undefined') return
-  try {
-    const prev: CachedTA = JSON.parse(localStorage.getItem(LS_KEY(sym) || 'null') || 'null') || {}
-    const next: CachedTA = {
-      ...prev,
-      ...payload,
-      score: payload.score,
-      updatedAt: Date.now(),
-    }
-    localStorage.setItem(LS_KEY(sym), JSON.stringify(next))
-  } catch {}
-}
+// Zelfde totaal-score als de crypto-detailpagina
+function overallScore(ind?: IndResp): { score: number, status: Advice } {
+  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
 
-/* =======================
-   CRYPTO — BRON VAN DE WAARHEID (identiek aan crypto-detail)
-   Volgorde:
-   1) cache (zelfde key)
-   2) CRYPTO_SCORE_API
-   3) 4 indicatoren + computeCompositeScore  (en schrijf daarna terug in cache)
-   ======================= */
-async function getCryptoScore(symbol: string): Promise<number | null> {
-  // 1) cache-first
-  const cached = readCachedComposite(symbol)
-  if (cached?.score !== undefined && Number.isFinite(cached.score)) return cached.score
-
-  // 2) detail-endpoint
-  try {
-    const r1 = await fetch(`${CRYPTO_SCORE_API}?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' })
-    if (r1.ok) {
-      const j = await r1.json()
-      // Probeer direct de score
-      const scoreDirect = j?.score ?? j?.overallScore ?? j?.taScore ?? j?.value
-      if (Number.isFinite(scoreDirect)) {
-        const pct = clamp(Math.round(Number(scoreDirect)), 0, 100)
-        // Indien indicators aanwezig zijn, schrijf alles terug in cache
-        const ma = j?.ma ?? j?.maCross ?? null
-        const macd = j?.macd ?? null
-        const rsi = j?.rsi ?? null
-        const vol = j?.vol ?? j?.vol20 ?? null
-        if (ma || macd || rsi || vol) {
-          writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
-        }
-        return pct
-      }
-      // Of bereken indien losse indicatoren terugkomen
-      if (j && (j.ma || j.maCross || j.macd || j.rsi || j.vol || j.vol20)) {
-        const ma = j?.ma ?? j?.maCross ?? null
-        const macd = j?.macd ?? null
-        const rsi = j?.rsi ?? null
-        const vol = j?.vol ?? j?.vol20 ?? null
-        const computed = computeCompositeScore(ma, macd, rsi, vol)
-        if (Number.isFinite(computed)) {
-          const pct = clamp(Math.round(Number(computed)), 0, 100)
-          writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
-          return pct
-        }
-      }
+  // MA
+  let maScore = 50
+  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
+    if (ind.ma.ma50 > ind.ma.ma200) {
+      const spread = Math.max(0, Math.min(0.2, ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1))
+      maScore = 60 + (spread / 0.2) * 40
+    } else if (ind.ma.ma50 < ind.ma.ma200) {
+      const spread = Math.max(0, Math.min(0.2, ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1))
+      maScore = 40 - (spread / 0.2) * 40
     }
-  } catch {
-    // doorgaan naar fallback
   }
 
-  // 3) fallback: 4 indicatoren + aggregatie, en naar cache schrijven
-  try {
-    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-    ])
-    if (rMa.ok && rRsi.ok && rMacd.ok && rVol.ok) {
-      const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()])
-      const computed = computeCompositeScore(ma, macd, rsi, vol)
-      if (Number.isFinite(computed)) {
-        const pct = clamp(Math.round(Number(computed)), 0, 100)
-        writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
-        return pct
-      }
-    }
-  } catch {}
-  return null
+  // RSI
+  let rsiScore = 50
+  if (typeof ind.rsi === 'number') {
+    rsiScore = Math.max(0, Math.min(100, ((ind.rsi - 30) / 40) * 100))
+  }
+
+  // MACD
+  let macdScore = 50
+  const hist = ind.macd?.hist
+  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
+
+  // Volume
+  let volScore = 50
+  const ratio = ind.volume?.ratio
+  if (typeof ratio === 'number') volScore = Math.max(0, Math.min(100, (ratio / 2) * 100))
+
+  const score = Math.round(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore)
+  return { score, status: statusFromOverall(score) }
+}
+
+// SYM → SYMUSDT (stablecoins overslaan)
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
 }
 
 /* ---------------- constituents per markt ---------------- */
@@ -364,7 +299,7 @@ export default function Homepage() {
     router.prefetch('/index').catch(()=>{})
   }, [router])
 
-  // SWR warm-up
+  // SWR warm-up (news)
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -477,17 +412,45 @@ export default function Homepage() {
     ;(async () => {
       try {
         setCoinErr(null)
-        const list = COINS
 
-        const scores = await pool(list, 8, async (row, idx) => {
-          if (idx) await sleep(35)
-          const s = await getCryptoScore(row.symbol)
-          return s
+        // Bouw BINANCE pairs voor het hele universum
+        const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) })) // 'VET-USD' -> 'VET' -> 'VETUSDT'
+          .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) })) // fallback defensief
+          .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
+
+        // LocalStorage quick-path (als je al detailpagina’s open had)
+        const lsScores: Record<string, number> = {}
+        try {
+          if (typeof window !== 'undefined') {
+            pairs.forEach(({ pair }) => {
+              const raw = localStorage.getItem(`ta:${pair}`)
+              if (raw) {
+                const j = JSON.parse(raw) as { score?: number; ts?: number }
+                if (Number.isFinite(j?.score)) lsScores[pair] = Math.round(Number(j.score))
+              }
+            })
+          }
+        } catch {}
+
+        // Haal voor alle pairs de indicators op (zoals detailpagina)
+        const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
+          try {
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
+            const r = await fetch(url, { cache: 'no-store' })
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const j = await r.json() as { results?: IndResp[] }
+            const ind = (j.results || [])[0]
+            const { score } = overallScore(ind)
+            return { symbol: c.symbol, name: c.name, score }
+          } catch {
+            // fallback: als LS iets had, gebruik dat; anders null
+            const sLS = lsScores[pair]
+            return { symbol: c.symbol, name: c.name, score: Number.isFinite(sLS) ? sLS : (null as any) }
+          }
         })
 
-        const rows = list
-          .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
-          .filter(r => Number.isFinite(r.score as number)) as ScoredCoin[]
+        const rows = batchScores
+          .filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
 
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
@@ -585,7 +548,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (bron = crypto-detail endpoint) */}
+      {/* CRYPTO — Top 5 BUY/SELL (zelfde bron & formule als detail) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
