@@ -6,10 +6,13 @@ import { SWRConfig } from 'swr'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import React from 'react'
-import Script from 'next/script' // ⬅️ AdSense script loader
+import Script from 'next/script'
 
-// ⬇️ Nieuw: compacte cookie-keuze rechtsonder
+// Compacte cookie-keuze rechtsonder
 import CookieConsent from '@/components/CookieConsent'
+
+// Advertentie-popup linksonder
+import AdPopup from '@/components/AdPopup'
 
 type NextPageWithLayout = NextPage & {
   getLayout?: (page: React.ReactElement) => React.ReactNode
@@ -76,10 +79,15 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
           src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4777751645956730"
           crossOrigin="anonymous"
         />
+
         {page}
         <Footer />
-        {/* Rechtsonder, klein en onopvallend */}
+
+        {/* Rechtsonder cookie consent */}
         <CookieConsent />
+
+        {/* Linksonder advertentie-popup (subtiel, wegklikbaar, keert na 3 min terug) */}
+        <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />
       </>
     </SWRConfig>
   )

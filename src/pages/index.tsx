@@ -499,7 +499,7 @@ export default function Homepage() {
         <p>
           Already trusted by thousands of investors worldwide, SignalHub turns uncertainty
           into confidence. With our intuitive buy/hold/sell insights, you’ll know where the
-          market stands — and where it’s headed.
+          market stands, and where it’s headed.
         </p>
 
         <p>
