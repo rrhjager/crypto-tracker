@@ -6,12 +6,11 @@ import { SWRConfig } from 'swr'
 import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import React from 'react'
-import Script from 'next/script'
 
 // Compacte cookie-keuze rechtsonder
 import CookieConsent from '@/components/CookieConsent'
 
-// Advertentie-popup linksonder
+// Linksonder subtiele advertentie-popup (wegklikbaar, keert terug)
 import AdPopup from '@/components/AdPopup'
 
 type NextPageWithLayout = NextPage & {
@@ -71,16 +70,14 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
         },
       }}
     >
-
+      <React.Fragment>
         {page}
         <Footer />
-
         {/* Rechtsonder cookie consent */}
         <CookieConsent />
-
         {/* Linksonder advertentie-popup (subtiel, wegklikbaar, keert na 3 min terug) */}
         <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />
-      </>
+      </React.Fragment>
     </SWRConfig>
   )
 }
