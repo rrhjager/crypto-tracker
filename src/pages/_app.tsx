@@ -44,6 +44,9 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
 
   const page = getLayout(<Component {...pageProps} />)
 
+  // Flag uit .env: NEXT_PUBLIC_ADS_ENABLED=true om de popup te tonen
+  const ADS_ENABLED = process.env.NEXT_PUBLIC_ADS_ENABLED === 'true'
+
   return (
     <SWRConfig
       value={{
@@ -75,8 +78,10 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
         <Footer />
         {/* Rechtsonder cookie consent */}
         <CookieConsent />
-        {/* Linksonder advertentie-popup (subtiel, wegklikbaar, keert na 3 min terug) */}
-        <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />
+        {/* Linksonder advertentie-popup (alleen tonen als env-flag true is) */}
+        {ADS_ENABLED && (
+          <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />
+        )}
       </React.Fragment>
     </SWRConfig>
   )
