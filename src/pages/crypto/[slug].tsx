@@ -7,28 +7,28 @@ import { useMemo, useEffect } from 'react'
 import { COINS } from '@/lib/coins'
 import TradingViewChart from '@/components/TradingViewChart' // TV widget
 
-// >>> importeer de gedeelde score-tooling (bron van de waarheid)
+// >>> Belangrijk: zelfde types + scorefunctie als de homepage <<<
 import {
   computeCompositeScore,
-  statusFromScore as sharedStatusFromScore,
-  MaCrossResp,
-  MacdResp,
-  RsiResp,
-  Vol20Resp,
+  statusFromScore,
+  type Advice,
+  type MaCrossResp,
+  type RsiResp,
+  type MacdResp,
+  type Vol20Resp,
 } from '@/lib/score'
 
-type IndResp = {
-  symbol: string
-  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
-  rsi?: number|null
-  macd?: { macd: number|null; signal: number|null; hist: number|null }
-  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+type IndHeavy = {
+  ma: MaCrossResp | null
+  rsi: RsiResp | null
+  macd: MacdResp | null
+  vol: Vol20Resp | null
   error?: string
 }
 
 const fetcher = (u: string) => fetch(u).then(r => r.json())
 
-type Status = 'BUY'|'HOLD'|'SELL'
+type Status = Advice
 const pill = (s: Status) =>
   s === 'BUY'  ? 'badge-buy'  :
   s === 'SELL' ? 'badge-sell' : 'badge-hold'
@@ -39,7 +39,62 @@ const lightPill =
   "bg-white/10 text-white/80 ring-1 ring-white/15 " +
   "hover:bg-white/15 hover:text-white transition";
 
-// ==== Status helpers (identiek aan wat je al had) ====
+function fmtNum(n: number | null | undefined, d = 2) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toFixed(d)
+}
+function formatFiat(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  const v = Number(n)
+  if (v >= 1000) return v.toLocaleString('nl-NL', { maximumFractionDigits: 0 })
+  if (v >= 1)    return v.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
+  return v.toLocaleString('nl-NL', { maximumFractionDigits: 6 })
+}
+function fmtInt(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return Math.round(n).toLocaleString('nl-NL')
+}
+
+/* === Helpers identiek aan overzicht === */
+// Binance-pair fallback: SYMBOL → SYMBOLUSDT (behalve stablecoins)
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
+}
+
+// Save TA naar localStorage zodat /crypto (overzicht) het kan oppakken
+function saveLocalTA(symUSDT: string, score: number, status: Status) {
+  try {
+    localStorage.setItem(`ta:${symUSDT}`, JSON.stringify({ score, status, ts: Date.now() }))
+    // event sturen zodat open tabbladen meteen refreshen
+    window.dispatchEvent(new StorageEvent('storage', { key: `ta:${symUSDT}`, newValue: localStorage.getItem(`ta:${symUSDT}`) }))
+  } catch {}
+}
+
+/* =============== HEAVY INDICATORS (zelfde bron als homepage) =============== */
+/** Haal de 4 indicator endpoints op voor een Yahoo-style symbool (bv 'VET-USD') */
+async function fetchHeavyIndicators(symbol: string): Promise<IndHeavy> {
+  try {
+    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+    ])
+
+    const ma  = rMa.ok  ? await rMa.json()  as MaCrossResp : null
+    const rsi = rRsi.ok ? await rRsi.json() as RsiResp    : null
+    const macd= rMacd.ok? await rMacd.json()as MacdResp   : null
+    const vol = rVol.ok ? await rVol.json() as Vol20Resp  : null
+
+    return { ma, rsi, macd, vol }
+  } catch (e:any) {
+    return { ma: null, rsi: null, macd: null, vol: null, error: String(e?.message || e) }
+  }
+}
+
 function statusMA(ma50?: number|null, ma200?: number|null): Status {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
@@ -65,41 +120,6 @@ function statusVolume(ratio?: number|null): Status {
   return 'HOLD'
 }
 
-// Weergave helpers
-function fmtNum(n: number | null | undefined, d = 2) {
-  if (n == null || !Number.isFinite(n)) return '—'
-  return n.toFixed(d)
-}
-function formatFiat(n: number | null | undefined) {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
-  const v = Number(n)
-  if (v >= 1000) return v.toLocaleString('nl-NL', { maximumFractionDigits: 0 })
-  if (v >= 1)    return v.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
-  return v.toLocaleString('nl-NL', { maximumFractionDigits: 6 })
-}
-function fmtInt(n: number | null | undefined) {
-  if (n == null || !Number.isFinite(n)) return '—'
-  return Math.round(n).toLocaleString('nl-NL')
-}
-
-/* === Zelfde helpers als lijstpagina === */
-// Binance-pair fallback: SYMBOL → SYMBOLUSDT (behalve stablecoins)
-const toBinancePair = (symbol: string) => {
-  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-  if (!s || skip.has(s)) return null
-  return `${s}USDT`
-}
-
-// Save TA naar localStorage zodat /crypto (overzicht) het kan oppakken
-function saveLocalTA(symUSDT: string, score: number, status: Status) {
-  try {
-    localStorage.setItem(`ta:${symUSDT}`, JSON.stringify({ score, status, ts: Date.now() }))
-    // event sturen zodat open tabbladen meteen refreshen
-    window.dispatchEvent(new StorageEvent('storage', { key: `ta:${symUSDT}`, newValue: localStorage.getItem(`ta:${symUSDT}`) }))
-  } catch {}
-}
-
 function PageInner() {
   const { query } = useRouter()
   const slug = String(query.slug || '')
@@ -109,7 +129,7 @@ function PageInner() {
     return COINS.find(c => c.symbol.toLowerCase() === slug.toLowerCase())
   }, [slug])
 
-  // Binance symbool (identiek aan overzicht) voor storage-sleutel
+  // Binance symbool voor TV en storage-sleutel
   const binanceFromList = (coin as any)?.pairUSD?.binance || null
   const binance = binanceFromList || (coin ? toBinancePair(coin.symbol) : null)
 
@@ -121,76 +141,24 @@ function PageInner() {
     return 'BINANCE:BTCUSDT'
   }, [coin, binance])
 
-  // Indicators (light endpoint)
-  const { data } = useSWR<{ results: IndResp[] }>(
-    binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}` : null,
-    fetcher,
+  /* --------- INDICATORS: ZELFDE BRON ALS HOMEPAGE --------- */
+  // Let op: we gebruiken HIER het Yahoo-style symbool (bv 'VET-USD'), net als de homepage.
+  const yahooSymbol = coin?.symbol || null
+
+  const { data: heavy, error: heavyErr } = useSWR<IndHeavy>(
+    yahooSymbol ? ['heavy-ind', yahooSymbol] : null,
+    () => fetchHeavyIndicators(yahooSymbol as string),
     { revalidateOnFocus: false, refreshInterval: 120_000 }
   )
-  const ind: IndResp | undefined = (data?.results || [])[0]
 
-  // >>> BEREKEN SCORE EXACT ALS LIB/score.ts (zelfde als homepage)
-  const overall = useMemo(() => {
-    // Als er geen data is, gedraag neutraal
-    if (!ind || ind.error) {
-      return { score: 50, status: 'HOLD' as Status }
-    }
+  // Totaalscore: exact dezelfde functie als homepage
+  const overallScore = useMemo(() => {
+    if (!heavy) return { score: 50, status: 'HOLD' as Status }
+    const score = computeCompositeScore(heavy.ma, heavy.macd, heavy.rsi, heavy.vol)
+    return { score, status: statusFromScore(score) }
+  }, [heavy])
 
-    // 1) Zet de light-indicators om naar de “lib/score” inputtypes
-    const maObj: MaCrossResp | null = ind.ma
-      ? {
-          symbol: coin?.symbol || '',
-          ma50: ind.ma.ma50 ?? null,
-          ma200: ind.ma.ma200 ?? null,
-          status: statusMA(ind.ma.ma50 ?? null, ind.ma.ma200 ?? null), // BUY/HOLD/SELL
-          points: null, // laat lib/score status → pts doen
-        }
-      : null
-
-    const macdObj: MacdResp | null = ind.macd
-      ? {
-          symbol: coin?.symbol || '',
-          fast: 12,
-          slow: 26,
-          signalPeriod: 9,
-          macd: ind.macd.macd ?? null,
-          signal: ind.macd.signal ?? null,
-          hist: ind.macd.hist ?? null,
-          status: statusMACD(ind.macd.hist ?? null),
-          points: null,
-        }
-      : null
-
-    const rsiObj: RsiResp | null =
-      typeof ind.rsi === 'number'
-        ? {
-            symbol: coin?.symbol || '',
-            period: 14,
-            rsi: ind.rsi,
-            status: statusRSI(ind.rsi),
-            points: null,
-          }
-        : null
-
-    const volObj: Vol20Resp | null = ind.volume
-      ? {
-          symbol: coin?.symbol || '',
-          period: 20,
-          volume: ind.volume.volume ?? null,
-          avg20: ind.volume.avg20d ?? null, // let op: light endpoint = avg20d
-          ratio: ind.volume.ratio ?? null,
-          status: statusVolume(ind.volume.ratio ?? null),
-          points: null,
-        }
-      : null
-
-    // 2) Laat lib/score de composiet-score berekenen (zelfde als homepage)
-    const score = computeCompositeScore(maObj, macdObj, rsiObj, volObj)
-    const status = sharedStatusFromScore(score) as Status
-    return { score, status }
-  }, [ind, coin?.symbol])
-
-  // Prijs (uit Light prices-endpoint)
+  /* --------- PRIJS (ongewijzigd: light endpoint) --------- */
   const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
     binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}` : null,
     fetcher,
@@ -198,35 +166,23 @@ function PageInner() {
   )
   const price = pxData?.results?.[0]?.price ?? null
 
-  // === Nieuws (Google News RSS via eigen API) ===
+  /* --------- Nieuws (ongewijzigd) --------- */
   const newsQuery = useMemo(() => {
     if (!coin) return null
     return `${coin.name} ${coin.symbol} crypto`
   }, [coin])
 
   const { data: newsData } = useSWR<{ items: { title: string; link: string; source?: string; pubDate?: string }[] }>(
-    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}&hl=nl&gl=NL&ceid=NL:nl` : null,
+    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}` : null,
     fetcher,
-    { revalidateOnFocus: false, refreshInterval: 300_000 } // 5 min
+    { revalidateOnFocus: false, refreshInterval: 300_000 }
   )
 
-  // Schrijf score/status naar localStorage (voor de overzichtspagina)
+  // Schrijf score/status naar localStorage (voor de overzichtspagina /crypto)
   useEffect(() => {
     if (!binance) return
-    try {
-      localStorage.setItem(
-        `ta:${binance}`,
-        JSON.stringify({ score: overall.score, status: overall.status, ts: Date.now() })
-      )
-      // event zodat open tabbladen direct kunnen reageren
-      window.dispatchEvent(
-        new StorageEvent('storage', {
-          key: `ta:${binance}`,
-          newValue: localStorage.getItem(`ta:${binance}`),
-        })
-      )
-    } catch {}
-  }, [binance, overall.score, overall.status])
+    saveLocalTA(binance, overallScore.score, overallScore.status)
+  }, [binance, overallScore.score, overallScore.status])
 
   if (!coin) {
     return (
@@ -238,39 +194,53 @@ function PageInner() {
     )
   }
 
+  // Uitpakken voor de detailkaarten
+  const ma50   = heavy?.ma?.ma50 ?? null
+  const ma200  = heavy?.ma?.ma200 ?? null
+  const rsi    = heavy?.rsi?.rsi ?? null
+  const hist   = heavy?.macd?.hist ?? null
+  const vol    = heavy?.vol?.volume ?? null
+  const avg20d = heavy?.vol?.avg20 ?? null
+  const ratio  = heavy?.vol?.ratio ?? null
+
   return (
     <main className="max-w-5xl mx-auto p-6">
       {/* Titel + symbol + PRIJS */}
       <h1 className="text-4xl font-extrabold tracking-tight text-white">{coin.name}</h1>
-      <div className="text-white/70 text-lg">
-        {coin.symbol}
-      </div>
+      <div className="text-white/70 text-lg">{coin.symbol}</div>
       <div className="mt-1 text-white/80">
         <span className="text-sm">Prijs:</span>{' '}
         <span className="font-semibold">{formatFiat(price)} </span>
         <span className="text-white/60 text-sm">(USD)</span>
       </div>
 
-      {/* Totaal advies */}
+      {/* Totaal advies — zelfde berekening als homepage */}
       <section className="mt-6 mb-6">
         <div className="table-card p-4 flex items-center justify-between">
           <div className="font-semibold">Totaal advies</div>
-          <span className={`${pill(overall.status)} text-sm`}>{overall.status} · {overall.score}</span>
+          <span className={`${pill(overallScore.status)} text-sm`}>
+            {overallScore.status} · {overallScore.score}
+          </span>
         </div>
+        {heavyErr && (
+          <div className="text-xs text-red-300 mt-2">
+            Fout bij laden van indicatoren: {String(heavyErr)}
+          </div>
+        )}
       </section>
 
-      {/* 2 x 2 grid met kaarten */}
+      {/* 2 x 2 grid met kaarten (weergave gelijk gehouden) */}
       <section className="grid md:grid-cols-2 gap-4">
         {/* MA */}
         <div className="table-card p-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="font-semibold">MA50 vs MA200 (Golden/Death Cross)</h3>
-            <span className={pill(statusMA(ind?.ma?.ma50 ?? null, ind?.ma?.ma200 ?? null))}>
-              {statusMA(ind?.ma?.ma50 ?? null, ind?.ma?.ma200 ?? null)}
+            <span className={pill(statusMA(ma50, ma200))}>
+              {statusMA(ma50, ma200)}
             </span>
           </div>
           <div className="text-white/80 text-sm">
-            MA50: {fmtNum(ind?.ma?.ma50, 2)} — MA200: {fmtNum(ind?.ma?.ma200, 2)}
+            MA50: {fmtNum(ma50, 6)} — MA200: {fmtNum(ma200, 6)}
           </div>
         </div>
 
@@ -278,12 +248,12 @@ function PageInner() {
         <div className="table-card p-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="font-semibold">RSI (14)</h3>
-            <span className={pill(statusRSI(ind?.rsi ?? null))}>
-              {statusRSI(ind?.rsi ?? null)}
+            <span className={pill(statusRSI(rsi))}>
+              {statusRSI(rsi)}
             </span>
           </div>
           <div className="text-white/80 text-sm">
-            RSI: {fmtNum(ind?.rsi ?? null, 2)}
+            RSI: {fmtNum(rsi, 2)}
           </div>
         </div>
 
@@ -291,12 +261,12 @@ function PageInner() {
         <div className="table-card p-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="font-semibold">MACD (12/26/9)</h3>
-            <span className={pill(statusMACD(ind?.macd?.hist ?? null))}>
-              {statusMACD(ind?.macd?.hist ?? null)}
+            <span className={pill(statusMACD(hist))}>
+              {statusMACD(hist)}
             </span>
           </div>
           <div className="text-white/80 text-sm">
-            MACD: {fmtNum(ind?.macd?.macd ?? null, 4)} — Signaal: {fmtNum(ind?.macd?.signal ?? null, 4)} — Hist: {fmtNum(ind?.macd?.hist ?? null, 4)}
+            MACD: {fmtNum(heavy?.macd?.macd ?? null, 6)} — Signaal: {fmtNum(heavy?.macd?.signal ?? null, 6)} — Hist: {fmtNum(hist ?? null, 6)}
           </div>
         </div>
 
@@ -304,12 +274,12 @@ function PageInner() {
         <div className="table-card p-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="font-semibold">Volume vs 20d gemiddelde</h3>
-            <span className={pill(statusVolume(ind?.volume?.ratio ?? null))}>
-              {statusVolume(ind?.volume?.ratio ?? null)}
+            <span className={pill(statusVolume(ratio))}>
+              {statusVolume(ratio)}
             </span>
           </div>
           <div className="text-white/80 text-sm">
-            Volume: {fmtInt(ind?.volume?.volume ?? null)} — Gem.20d: {fmtInt(ind?.volume?.avg20d ?? null)} — Ratio: {fmtNum(ind?.volume?.ratio ?? null, 2)}
+            Volume: {fmtInt(vol)} — Gem.20d: {fmtInt(avg20d)} — Ratio: {fmtNum(ratio, 2)}
           </div>
         </div>
       </section>
