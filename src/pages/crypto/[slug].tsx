@@ -7,6 +7,16 @@ import { useMemo, useEffect } from 'react'
 import { COINS } from '@/lib/coins'
 import TradingViewChart from '@/components/TradingViewChart' // TV widget
 
+// >>> importeer de gedeelde score-tooling (bron van de waarheid)
+import {
+  computeCompositeScore,
+  statusFromScore as sharedStatusFromScore,
+  MaCrossResp,
+  MacdResp,
+  RsiResp,
+  Vol20Resp,
+} from '@/lib/score'
+
 type IndResp = {
   symbol: string
   ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
@@ -29,51 +39,7 @@ const lightPill =
   "bg-white/10 text-white/80 ring-1 ring-white/15 " +
   "hover:bg-white/15 hover:text-white transition";
 
-function statusFromOverall(score: number): Status {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-
-// Zelfde scoring als lijstpagina
-function overallScore(ind?: IndResp): { score: number, status: Status } {
-  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-  const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
-
-  // MA
-  let maScore = 50
-  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    if (ind.ma.ma50 > ind.ma.ma200) {
-      const spread = Math.max(0, Math.min(0.2, ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1))
-      maScore = 60 + (spread / 0.2) * 40
-    } else if (ind.ma.ma50 < ind.ma.ma200) {
-      const spread = Math.max(0, Math.min(0.2, ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1))
-      maScore = 40 - (spread / 0.2) * 40
-    }
-  }
-
-  // RSI
-  let rsiScore = 50
-  if (typeof ind.rsi === 'number') {
-    rsiScore = Math.max(0, Math.min(100, ((ind.rsi - 30) / 40) * 100))
-  }
-
-  // MACD
-  let macdScore = 50
-  const hist = ind.macd?.hist
-  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
-
-  // Volume
-  let volScore = 50
-  const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') volScore = Math.max(0, Math.min(100, (ratio / 2) * 100))
-
-  const score = Math.round(
-    0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore
-  )
-  return { score, status: statusFromOverall(score) }
-}
-
+// ==== Status helpers (identiek aan wat je al had) ====
 function statusMA(ma50?: number|null, ma200?: number|null): Status {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
@@ -155,14 +121,74 @@ function PageInner() {
     return 'BINANCE:BTCUSDT'
   }, [coin, binance])
 
-  // Indicators
+  // Indicators (light endpoint)
   const { data } = useSWR<{ results: IndResp[] }>(
     binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 120_000 }
   )
   const ind: IndResp | undefined = (data?.results || [])[0]
-  const overall = overallScore(ind)
+
+  // >>> BEREKEN SCORE EXACT ALS LIB/score.ts (zelfde als homepage)
+  const overall = useMemo(() => {
+    // Als er geen data is, gedraag neutraal
+    if (!ind || ind.error) {
+      return { score: 50, status: 'HOLD' as Status }
+    }
+
+    // 1) Zet de light-indicators om naar de “lib/score” inputtypes
+    const maObj: MaCrossResp | null = ind.ma
+      ? {
+          symbol: coin?.symbol || '',
+          ma50: ind.ma.ma50 ?? null,
+          ma200: ind.ma.ma200 ?? null,
+          status: statusMA(ind.ma.ma50 ?? null, ind.ma.ma200 ?? null), // BUY/HOLD/SELL
+          points: null, // laat lib/score status → pts doen
+        }
+      : null
+
+    const macdObj: MacdResp | null = ind.macd
+      ? {
+          symbol: coin?.symbol || '',
+          fast: 12,
+          slow: 26,
+          signalPeriod: 9,
+          macd: ind.macd.macd ?? null,
+          signal: ind.macd.signal ?? null,
+          hist: ind.macd.hist ?? null,
+          status: statusMACD(ind.macd.hist ?? null),
+          points: null,
+        }
+      : null
+
+    const rsiObj: RsiResp | null =
+      typeof ind.rsi === 'number'
+        ? {
+            symbol: coin?.symbol || '',
+            period: 14,
+            rsi: ind.rsi,
+            status: statusRSI(ind.rsi),
+            points: null,
+          }
+        : null
+
+    const volObj: Vol20Resp | null = ind.volume
+      ? {
+          symbol: coin?.symbol || '',
+          period: 20,
+          volume: ind.volume.volume ?? null,
+          avg20: ind.volume.avg20d ?? null, // let op: light endpoint = avg20d
+          ratio: ind.volume.ratio ?? null,
+          status: statusVolume(ind.volume.ratio ?? null),
+          points: null,
+        }
+      : null
+
+    // 2) Laat lib/score de composiet-score berekenen (zelfde als homepage)
+    const score = computeCompositeScore(maObj, macdObj, rsiObj, volObj)
+    const status = sharedStatusFromScore(score) as Status
+    return { score, status }
+  }, [ind, coin?.symbol])
 
   // Prijs (uit Light prices-endpoint)
   const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
@@ -175,12 +201,11 @@ function PageInner() {
   // === Nieuws (Google News RSS via eigen API) ===
   const newsQuery = useMemo(() => {
     if (!coin) return null
-    // Eenvoudige query die vaak goed werkt
     return `${coin.name} ${coin.symbol} crypto`
   }, [coin])
 
   const { data: newsData } = useSWR<{ items: { title: string; link: string; source?: string; pubDate?: string }[] }>(
-    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}` : null,
+    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}&hl=nl&gl=NL&ceid=NL:nl` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 300_000 } // 5 min
   )
@@ -188,7 +213,19 @@ function PageInner() {
   // Schrijf score/status naar localStorage (voor de overzichtspagina)
   useEffect(() => {
     if (!binance) return
-    saveLocalTA(binance, overall.score, overall.status)
+    try {
+      localStorage.setItem(
+        `ta:${binance}`,
+        JSON.stringify({ score: overall.score, status: overall.status, ts: Date.now() })
+      )
+      // event zodat open tabbladen direct kunnen reageren
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: `ta:${binance}`,
+          newValue: localStorage.getItem(`ta:${binance}`),
+        })
+      )
+    } catch {}
   }, [binance, overall.score, overall.status])
 
   if (!coin) {
