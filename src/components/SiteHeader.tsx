@@ -140,7 +140,7 @@ export default function SiteHeader() {
                   { href: '/nikkei225',  label: 'Nikkei 225' },
                   { href: '/hangseng',   label: 'Hang Seng' },
                   { href: '/sensex',     label: 'Sensex' },
-                  { href: '/etfs',       label: 'ETFs' }, // ✅ nieuw toegevoegd
+                  { href: '/etfs',       label: 'ETFs' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
@@ -180,6 +180,11 @@ export default function SiteHeader() {
               </div>
             )}
           </div>
+
+          {/* ✅ NIEUW: Academy vóór About us */}
+          <Link href="/academy" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>Academy</span>
+          </Link>
 
           <Link href="/about" className="group text-white/80 hover:text-white transition">
             <span className={`transition-colors ${rainbow}`}>About us</span>
@@ -233,7 +238,7 @@ export default function SiteHeader() {
               { href: '/nikkei225',  label: 'Nikkei 225' },
               { href: '/hangseng',   label: 'Hang Seng' },
               { href: '/sensex',     label: 'Sensex' },
-              { href: '/etfs',       label: 'ETFs' }, // ✅ nieuw toegevoegd
+              { href: '/etfs',       label: 'ETFs' },
             ].map(it => (
               <Link
                 key={it.href}
@@ -264,6 +269,11 @@ export default function SiteHeader() {
               </Link>
             ))}
           </div>
+
+          {/* ✅ NIEUW: Academy vóór About us */}
+          <Link href="/academy" className="group rounded-xl px-4 py-3 text-base hover:bg-white/10" onClick={onMobileLinkClick}>
+            <span className={rainbow}>Academy</span>
+          </Link>
 
           <Link href="/about" className="group rounded-xl px-4 py-3 text-base hover:bg-white/10" onClick={onMobileLinkClick}>
             <span className={rainbow}>About us</span>
