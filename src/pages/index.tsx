@@ -7,6 +7,7 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
+import { computeCompositeScore } from '@/lib/score'  // ⬅️ exact dezelfde aggregatie als detailpagina
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
@@ -113,42 +114,124 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
 }
 
 /* =======================
+   CRYPTO — cache helpers (zelfde key als crypto-detailpagina)
+   ======================= */
+const LS_KEY = (sym: string) => `TA:INDICATORS:${sym}`
+type CachedTA = {
+  ma?: any; macd?: any; rsi?: any; vol?: any;
+  score?: number;
+  updatedAt?: number; ts?: number;
+}
+
+function readCachedComposite(sym: string): { score: number } | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(LS_KEY(sym))
+    if (!raw) return null
+    const obj: CachedTA = JSON.parse(raw)
+
+    const ma   = obj?.ma ?? null
+    const macd = obj?.macd ?? null
+    const rsi  = obj?.rsi ?? null
+    const vol  = obj?.vol ?? null
+
+    let score = Number(obj?.score)
+    if (!Number.isFinite(score)) {
+      const computed = computeCompositeScore(ma, macd, rsi, vol)
+      if (Number.isFinite(computed)) score = Math.round(computed)
+    }
+    if (!Number.isFinite(score)) return null
+    const pct = clamp(Math.round(Number(score)), 0, 100)
+    return { score: pct }
+  } catch {
+    return null
+  }
+}
+
+function writeCachedComposite(sym: string, payload: {
+  ma: any; macd: any; rsi: any; vol: any; score: number
+}) {
+  if (typeof window === 'undefined') return
+  try {
+    const prev: CachedTA = JSON.parse(localStorage.getItem(LS_KEY(sym) || 'null') || 'null') || {}
+    const next: CachedTA = {
+      ...prev,
+      ...payload,
+      score: payload.score,
+      updatedAt: Date.now(),
+    }
+    localStorage.setItem(LS_KEY(sym), JSON.stringify(next))
+  } catch {}
+}
+
+/* =======================
    CRYPTO — BRON VAN DE WAARHEID (identiek aan crypto-detail)
-   1) Probeer dezelfde endpoint als crypto-pagina: /api/crypto/score?symbol=…
-   2) Probeer generieke crypto-indicators endpoint (score veld)
-   3) Fallback: zelfde aggregatie als aandelen
+   Volgorde:
+   1) cache (zelfde key)
+   2) CRYPTO_SCORE_API
+   3) 4 indicatoren + computeCompositeScore  (en schrijf daarna terug in cache)
    ======================= */
 async function getCryptoScore(symbol: string): Promise<number | null> {
+  // 1) cache-first
+  const cached = readCachedComposite(symbol)
+  if (cached?.score !== undefined && Number.isFinite(cached.score)) return cached.score
+
+  // 2) detail-endpoint
   try {
-    // 1) Exact dezelfde API als de crypto-detailpagina
     const r1 = await fetch(`${CRYPTO_SCORE_API}?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' })
     if (r1.ok) {
       const j = await r1.json()
-      // Neem de exacte nummerieke score uit de detailbron
-      const scoreCand = j?.score ?? j?.overallScore ?? j?.taScore ?? j?.value
-      if (Number.isFinite(scoreCand)) return clamp(Math.round(Number(scoreCand)), 0, 100)
-      // Sommige implementaties geven status terug, map naar dezelfde spelregels
-      if (typeof j?.status === 'string') {
-        const s = j.status.toUpperCase() as Advice
-        if (s === 'BUY') return 75
-        if (s === 'SELL') return 25
-        return 50
+      // Probeer direct de score
+      const scoreDirect = j?.score ?? j?.overallScore ?? j?.taScore ?? j?.value
+      if (Number.isFinite(scoreDirect)) {
+        const pct = clamp(Math.round(Number(scoreDirect)), 0, 100)
+        // Indien indicators aanwezig zijn, schrijf alles terug in cache
+        const ma = j?.ma ?? j?.maCross ?? null
+        const macd = j?.macd ?? null
+        const rsi = j?.rsi ?? null
+        const vol = j?.vol ?? j?.vol20 ?? null
+        if (ma || macd || rsi || vol) {
+          writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
+        }
+        return pct
       }
-    }
-
-    // 2) Alternatieve crypto indicator endpoint die score geeft
-    const r2 = await fetch(`/api/crypto/indicators?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' })
-    if (r2.ok) {
-      const j2 = await r2.json()
-      const scoreCand2 = j2?.score ?? j2?.overallScore ?? j2?.taScore ?? j2?.value
-      if (Number.isFinite(scoreCand2)) return clamp(Math.round(Number(scoreCand2)), 0, 100)
+      // Of bereken indien losse indicatoren terugkomen
+      if (j && (j.ma || j.maCross || j.macd || j.rsi || j.vol || j.vol20)) {
+        const ma = j?.ma ?? j?.maCross ?? null
+        const macd = j?.macd ?? null
+        const rsi = j?.rsi ?? null
+        const vol = j?.vol ?? j?.vol20 ?? null
+        const computed = computeCompositeScore(ma, macd, rsi, vol)
+        if (Number.isFinite(computed)) {
+          const pct = clamp(Math.round(Number(computed)), 0, 100)
+          writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
+          return pct
+        }
+      }
     }
   } catch {
     // doorgaan naar fallback
   }
 
-  // 3) Fallback: zelfde 4-indicator aggregatie (identiek aan aandelen)
-  return await calcScoreForSymbol(symbol)
+  // 3) fallback: 4 indicatoren + aggregatie, en naar cache schrijven
+  try {
+    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
+    ])
+    if (rMa.ok && rRsi.ok && rMacd.ok && rVol.ok) {
+      const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()])
+      const computed = computeCompositeScore(ma, macd, rsi, vol)
+      if (Number.isFinite(computed)) {
+        const pct = clamp(Math.round(Number(computed)), 0, 100)
+        writeCachedComposite(symbol, { ma, macd, rsi, vol, score: pct })
+        return pct
+      }
+    }
+  } catch {}
+  return null
 }
 
 /* ---------------- constituents per markt ---------------- */
