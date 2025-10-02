@@ -10,6 +10,8 @@ import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
+// <<< PAS DIT AAN NAAR JULLIE CRYPTO-DETAIL ENDPOINT ALS DIE ANDERS HEET >>>
+const CRYPTO_SCORE_API = '/api/crypto/score' // bv. '/api/crypto/score' of '/api/coin/score'
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -52,7 +54,24 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/* ---- EXACT dezelfde aggregatie als op detailpagina’s (fallback) ---- */
+/* ---------- pool helper (concurrency) ---------- */
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/* =======================
+   AANDELEN — aggregatie (zoals individuele aandelenpagina)
+   ======================= */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
@@ -93,50 +112,43 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   }
 }
 
-/* ---- COIN score 1:1 via detail-endpoint (Optie A) ----
-   We proberen een reeks mogelijke composite endpoints (één ervan gebruik je op de coin detailpagina).
-   Zodra er één true hit geeft (score 0..100), gebruiken we die. Anders fallback: calcScoreForSymbol() */
-async function calcCoinScoreFromDetail(symbol: string): Promise<number | null> {
-  const candidates = [
-    // voeg hier gerust nog een variant toe als jullie detailpagina een andere route gebruikt
-    `/api/coins/score/${encodeURIComponent(symbol)}`,
-    `/api/coin/score/${encodeURIComponent(symbol)}`,
-    `/api/crypto/score/${encodeURIComponent(symbol)}`,
-    `/api/indicators/total-score/${encodeURIComponent(symbol)}?asset=coin`,
-  ]
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) continue
-      const j = await r.json() as any
-      // accepteer generieke vormen: {score}, {totalScore}, {data:{score}}
-      const raw =
-        (typeof j?.score === 'number' ? j.score :
-        typeof j?.totalScore === 'number' ? j.totalScore :
-        typeof j?.data?.score === 'number' ? j.data.score :
-        null)
-      if (Number.isFinite(raw) && raw >= 0 && raw <= 100) {
-        return Math.round(raw) // exact zoals badge toont
+/* =======================
+   CRYPTO — BRON VAN DE WAARHEID (identiek aan crypto-detail)
+   1) Probeer dezelfde endpoint als crypto-pagina: /api/crypto/score?symbol=…
+   2) Probeer generieke crypto-indicators endpoint (score veld)
+   3) Fallback: zelfde aggregatie als aandelen
+   ======================= */
+async function getCryptoScore(symbol: string): Promise<number | null> {
+  try {
+    // 1) Exact dezelfde API als de crypto-detailpagina
+    const r1 = await fetch(`${CRYPTO_SCORE_API}?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' })
+    if (r1.ok) {
+      const j = await r1.json()
+      // Neem de exacte nummerieke score uit de detailbron
+      const scoreCand = j?.score ?? j?.overallScore ?? j?.taScore ?? j?.value
+      if (Number.isFinite(scoreCand)) return clamp(Math.round(Number(scoreCand)), 0, 100)
+      // Sommige implementaties geven status terug, map naar dezelfde spelregels
+      if (typeof j?.status === 'string') {
+        const s = j.status.toUpperCase() as Advice
+        if (s === 'BUY') return 75
+        if (s === 'SELL') return 25
+        return 50
       }
-    } catch {}
-  }
-  // fallback naar exact dezelfde 4-indicator-aggregatie
-  return await calcScoreForSymbol(symbol)
-}
-
-/* pool helper */
-async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(arr.length) as any
-  let i = 0
-  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-    while (true) {
-      const idx = i++
-      if (idx >= arr.length) break
-      out[idx] = await fn(arr[idx], idx)
     }
-  })
-  await Promise.all(workers)
-  return out
+
+    // 2) Alternatieve crypto indicator endpoint die score geeft
+    const r2 = await fetch(`/api/crypto/indicators?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' })
+    if (r2.ok) {
+      const j2 = await r2.json()
+      const scoreCand2 = j2?.score ?? j2?.overallScore ?? j2?.taScore ?? j2?.value
+      if (Number.isFinite(scoreCand2)) return clamp(Math.round(Number(scoreCand2)), 0, 100)
+    }
+  } catch {
+    // doorgaan naar fallback
+  }
+
+  // 3) Fallback: zelfde 4-indicator aggregatie (identiek aan aandelen)
+  return await calcScoreForSymbol(symbol)
 }
 
 /* ---------------- constituents per markt ---------------- */
@@ -288,7 +300,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ========= NEWS state + loader ========= */
+  /* ========= NEWS ========= */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
@@ -321,7 +333,7 @@ export default function Homepage() {
   },[])
 
   /* =======================
-     EQUITIES — Top BUY/SELL (identieke score)
+     EQUITIES — Top BUY/SELL
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
@@ -371,7 +383,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (Optie A: composite endpoint) 
+     CRYPTO — Top 5 BUY/SELL (scores 1-op-1 met crypto-detail)
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -383,10 +395,13 @@ export default function Homepage() {
       try {
         setCoinErr(null)
         const list = COINS
+
         const scores = await pool(list, 8, async (row, idx) => {
           if (idx) await sleep(35)
-          return await calcCoinScoreFromDetail(row.symbol)   // <-- HIER: 1:1 dezelfde bron als coin detail
+          const s = await getCryptoScore(row.symbol)
+          return s
         })
+
         const rows = list
           .map((c, i) => ({ symbol: c.symbol, name: c.name, score: scores[i] ?? (null as any) }))
           .filter(r => Number.isFinite(r.score as number)) as ScoredCoin[]
@@ -487,7 +502,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (TOP 50 universum) */}
+      {/* CRYPTO — Top 5 BUY/SELL (bron = crypto-detail endpoint) */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
