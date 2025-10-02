@@ -6,9 +6,15 @@ export type RsiResp    = { symbol: string; period: number; rsi: number | null; s
 export type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
 export type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
+/**
+ * Accepts either 0..1 or 0..100 and normalizes to 0..100.
+ * This removes any double-/missing-×100 mismatches across pages.
+ */
 export function scoreToPct(s: number) {
-  return Math.max(0, Math.min(100, Math.round(s)))
+  const scaled = s <= 1.0000001 ? s * 100 : s
+  return Math.max(0, Math.min(100, Math.round(scaled)))
 }
+
 export function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
@@ -42,5 +48,6 @@ export function computeCompositeScore(
   const nVOL   = (pVOL  + 2) / 4
 
   const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-  return scoreToPct(agg * 100)
+  // agg is 0..1 — scoreToPct herkent dat en schaalt zelf naar 0..100
+  return scoreToPct(agg)
 }
