@@ -368,7 +368,7 @@ export default function Homepage() {
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
 
-        const scores = await pool(symbols, 4, async (sym, idx) => {
+          const scores = await pool(symbols, 4, async (sym, idx) => {
             if (idx) await sleep(60)
             return await calcScoreForSymbol(sym)
           })
@@ -462,7 +462,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ---- helper: compacte nieuws-lijst met favicon via EIGEN PROXY ---- */
+  /* ---- helper: compacte nieuws-lijst met favicon ---- */
   const renderNews = (items: NewsItem[], keyPrefix: string) => (
     <ul className="grid gap-2">
       {items.length === 0 ? (
@@ -472,15 +472,15 @@ export default function Homepage() {
         try {
           domain = new URL(n.url).hostname.replace(/^www\./, '')
         } catch {}
-        const proxySrc = domain ? `/api/favicon?domain=${encodeURIComponent(domain)}` : ''
+        const favicon = domain ? `https://www.google.com/s2/favicons?sz=64&domain=${domain}` : ''
         return (
           <li
             key={`${keyPrefix}${i}`}
             className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
           >
-            {/* bronlogo via eigen proxy; geen externe domains nodig in CSP */}
-            {proxySrc ? (
-              <img src={proxySrc} alt={domain || 'source'} className="w-4 h-4 mt-1 rounded-sm shrink-0" />
+            {/* klein bronlogo; <img> i.p.v. <Image> zodat je geen remote patterns hoeft whitelisten */}
+            {favicon ? (
+              <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
             ) : (
               <div className="w-4 h-4 mt-1 rounded-sm bg-white/10" />
             )}
@@ -653,4 +653,37 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopSell.map((r)=>(
               <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-               
+                <div className="truncate">
+                  <div className="font-medium truncate">{r.name}</div>
+                  <div className="text-white/60 text-xs">{r.symbol}</div>
+                </div>
+                <div className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      {/* NEWS — compact met favicon/bronlogo */}
+      <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Crypto News</h2>
+            <Link href="/index" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
+          </div>
+          {renderNews(newsCrypto, 'nC')}
+        </div>
+
+        <div className="table-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Equities News</h2>
+            <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
+          </div>
+          {renderNews(newsEq, 'nE')}
+        </div>
+      </section>
+    </>
+  )
+}
