@@ -462,7 +462,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ---- NIEUW: helpers voor nieuws (favicon + decode) ---- */
+  /* ---- NIEUW: helpers voor nieuws (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -472,21 +472,61 @@ export default function Homepage() {
       .replaceAll('&gt;', '>')
   }
 
-  function realDomainFromUrl(raw: string): { domain: string; favicon: string } {
+  // Handige mapping voor wanneer Google de echte URL niet meestuurt.
+  const SOURCE_DOMAIN_MAP: Record<string, string> = {
+    'reuters': 'reuters.com',
+    'yahoo finance': 'finance.yahoo.com',
+    'cnbc': 'cnbc.com',
+    'the wall street journal': 'wsj.com',
+    'wall street journal': 'wsj.com',
+    'investopedia': 'investopedia.com',
+    'marketwatch': 'marketwatch.com',
+    "investor's business daily": 'investors.com',
+    'investors business daily': 'investors.com',
+    'cointelegraph': 'cointelegraph.com',
+    'investing.com': 'investing.com',
+    'bloomberg': 'bloomberg.com',
+    'financial times': 'ft.com',
+    'the verge': 'theverge.com',
+    'forbes': 'forbes.com',
+    'techcrunch': 'techcrunch.com',
+  }
+
+  function sourceToDomain(src?: string): string | null {
+    if (!src) return null
+    const key = src.trim().toLowerCase()
+    // exacte match
+    if (SOURCE_DOMAIN_MAP[key]) return SOURCE_DOMAIN_MAP[key]
+    // losse woorden matchen
+    for (const k of Object.keys(SOURCE_DOMAIN_MAP)) {
+      if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
+    }
+    return null
+  }
+
+  function realDomainFromUrl(raw: string, src?: string): { domain: string; favicon: string } {
     try {
       const u = new URL(raw)
       if (u.hostname.endsWith('news.google.com')) {
+        // 1) Probeer ?url=
         const orig = u.searchParams.get('url')
         if (orig) {
           const ou = new URL(orig)
           const d = ou.hostname.replace(/^www\./, '')
           return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
         }
+        // 2) Val terug op bronnaam → domein
+        const d2 = sourceToDomain(src || '')
+        if (d2) {
+          return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
+        }
       }
+      // reguliere link
       const d = u.hostname.replace(/^www\./, '')
       return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
     } catch {
-      return { domain: '', favicon: '' }
+      const d2 = sourceToDomain(src || '')
+      return d2 ? { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` } : { domain: '', favicon: '' }
     }
   }
 
@@ -496,7 +536,7 @@ export default function Homepage() {
       {items.length === 0 ? (
         <li className="text-white/60">No news…</li>
       ) : items.map((n, i) => {
-        const { domain, favicon } = realDomainFromUrl(n.url)
+        const { domain, favicon } = realDomainFromUrl(n.url, n.source)
         const title = decodeHtml(n.title || '')
         return (
           <li
