@@ -6,13 +6,9 @@ export type RsiResp    = { symbol: string; period: number; rsi: number | null; s
 export type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
 export type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
-/**
- * Accepts either 0..1 or 0..100 and normalizes to 0..100.
- * This removes any double-/missing-×100 mismatches across pages.
- */
+/** Rond af en clamp naar 0..100 (homepage-stijl) */
 export function scoreToPct(s: number) {
-  const scaled = s <= 1.0000001 ? s * 100 : s
-  return Math.max(0, Math.min(100, Math.round(scaled)))
+  return Math.max(0, Math.min(100, Math.round(s)))
 }
 
 export function statusFromScore(score: number): Advice {
@@ -21,7 +17,13 @@ export function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/** Zelfde aggregatie als op de detail- en lijstpagina’s */
+/**
+ * Composite score — IDENTIEK aan de homepage-calculatie:
+ * - punten per indicator: als `points` bestaat -> clamp(-2..2); anders BUY=+2, SELL=-2, HOLD=0
+ * - normalisatie: (pts + 2) / 4  => 0..1
+ * - wegingen: MA 40%, MACD 30%, RSI 20%, VOL 10%
+ * - eindscore: agg * 100, afgerond en geclamped 0..100
+ */
 export function computeCompositeScore(
   ma: MaCrossResp | null,
   macd: MacdResp | null,
@@ -42,12 +44,13 @@ export function computeCompositeScore(
   const pRSI   = toPts(rsi?.status,  rsi?.points)
   const pVOL   = toPts(vol?.status,  vol?.points)
 
+  // 0..1 per indicator
   const nMA    = (pMA   + 2) / 4
   const nMACD  = (pMACD + 2) / 4
   const nRSI   = (pRSI  + 2) / 4
   const nVOL   = (pVOL  + 2) / 4
 
+  // gewogen som (0..1) -> 0..100
   const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-  // agg is 0..1 — scoreToPct herkent dat en schaalt zelf naar 0..100
-  return scoreToPct(agg)
+  return scoreToPct(agg * 100)
 }
