@@ -1,79 +1,42 @@
-// src/pages/academy/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
-import { useMemo } from 'react'
 
-type ArticleStub = {
-  slug: string
-  title: string
-  excerpt: string
-  tag?: string
-}
+const ARTICLES = [
+  { slug: 'what-is-momentum',       title: 'What is momentum',        excerpt: 'Understand why winners often keep winning for a while and how to ride the wave responsibly.' },
+  { slug: 'rsi-explained',          title: 'RSI explained',           excerpt: 'Learn how the relative strength index works and how to avoid the classic overbought and oversold trap.' },
+  { slug: 'macd-basics',            title: 'MACD basics',             excerpt: 'See how the line, signal and histogram map trend impulse and shifts in control.' },
+  { slug: 'volume-as-a-signal',     title: 'Volume as a signal',      excerpt: 'Use activity relative to average to confirm breakouts and filter weak moves.' },
+  { slug: 'moving-averages-101',    title: 'Moving averages 101',     excerpt: 'Smooth price, define direction and find dynamic support and resistance.' },
+  { slug: 'risk-management',         title: 'Risk management',         excerpt: 'Size positions, pre define exits and respect volatility so your system survives.' },
+  { slug: 'market-regimes',          title: 'Market regimes',          excerpt: 'Trends, ranges and turbulence each demand a different playbook.' },
+  { slug: 'backtesting-quickstart',  title: 'Backtesting quickstart',  excerpt: 'Test rules on history without curve fitting and build confidence in your plan.' },
+]
 
-export default function Academy() {
-  // Placeholder data — later kun je dit vullen via CMS/MDX/API
-  const articles = useMemo<ArticleStub[]>(
-    () => [
-      { slug: 'what-is-momentum',        title: 'What is momentum?',        excerpt: 'A simple, practical explanation of price momentum and how to use it.' },
-      { slug: 'rsi-explained',           title: 'RSI explained',            excerpt: 'Overbought vs. oversold, and what that actually means for entries.' },
-      { slug: 'macd-basics',             title: 'MACD basics',              excerpt: 'Signal line, histogram, crossovers — the parts that matter.' },
-      { slug: 'volume-as-a-signal',      title: 'Volume as a signal',       excerpt: 'Why volume confirms trends and how to read spikes properly.' },
-      { slug: 'moving-averages-101',     title: 'Moving averages 101',      excerpt: '50 vs 200, golden/death cross, smoothing and pitfalls.' },
-      { slug: 'risk-management',         title: 'Risk management',          excerpt: 'Sizing, stop-loss logic, and compounding your edge.' },
-      { slug: 'market-regimes',          title: 'Market regimes',           excerpt: 'Trending, ranging, volatile: adapt your strategy to the regime.' },
-      { slug: 'backtesting-quickstart',  title: 'Backtesting quickstart',   excerpt: 'How to evaluate a signal before you risk real capital.' },
-    ],
-    []
-  )
-
+export default function AcademyIndex() {
   return (
     <>
       <Head>
         <title>SignalHub Academy — Learn the Signals</title>
-        <meta
-          name="description"
-          content="SignalHub Academy: bite-sized knowledge articles on momentum, volume, RSI, MACD, market regimes, risk, and more."
-        />
+        <meta name="description" content="SignalHub Academy: clear, practical articles on momentum, RSI, MACD, volume, moving averages, risk management, market regimes and backtesting." />
       </Head>
 
-      <main className="max-w-6xl mx-auto px-4 py-10">
+      <main className="max-w-6xl mx-auto px-4 py-12">
         <header className="mb-6">
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">
-            Academy
-          </h1>
-          <p className="text-white/70 mt-2">
-            Bite-sized tutorials to understand the signals behind the dashboard.
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Academy</h1>
+          <p className="text-white/80 mt-2 max-w-3xl">
+            Short, practical knowledge articles that cut through noise and improve decisions. Click a tile to read the full article.
           </p>
         </header>
 
-        {/* Grid met kaarten (placeholder links) */}
         <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {articles.map((a) => (
-            <Link
-              key={a.slug}
-              href={`/academy/${a.slug}`}
-              className="group block rounded-2xl border border-white/10 bg-ink table-card p-4 hover:bg-white/5 transition"
-            >
-              <div className="flex items-start gap-3">
-                {/* Subtiele placeholder-illustratie */}
-                <div className="shrink-0 w-10 h-10 rounded-xl bg-white/10 grid place-items-center">
-                  <svg width="20" height="20" viewBox="0 0 24 24" className="opacity-80" aria-hidden>
-                    <path fill="currentColor" d="M12 3l9 4.5v9L12 21 3 16.5v-9L12 3Zm0 2.2L5 8v7l7 3.8L19 15V8l-7-2.8Z"/>
-                  </svg>
-                </div>
-
-                <div className="min-w-0">
-                  <h2 className="font-semibold text-white group-hover:underline truncate">
-                    {a.title}
-                  </h2>
-                  <p className="text-sm text-white/70 mt-1 line-clamp-2">
-                    {a.excerpt}
-                  </p>
-                  <div className="mt-3 text-xs text-white/60 group-hover:text-white/70">
-                    Read more →
-                  </div>
-                </div>
-              </div>
+          {ARTICLES.map(a => (
+            <Link key={a.slug} href={`/academy/${a.slug}`} className="table-card p-4 rounded-2xl hover:bg-white/10 transition group flex flex-col">
+              <h2 className="font-semibold text-white group-hover:underline">{a.title}</h2>
+              <p className="text-sm text-white/70 mt-2">{a.excerpt}</p>
+              <span className="mt-3 text-xs text-white/60 inline-flex items-center gap-1">
+                Read article
+                <svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M13 5l7 7-7 7v-4H4v-6h9V5z"/></svg>
+              </span>
             </Link>
           ))}
         </section>
