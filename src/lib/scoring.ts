@@ -1,3 +1,4 @@
+// src/lib/scoring.ts
 import { WEIGHTS } from "./weights";
 
 export type ComponentScoreNullable = {
@@ -15,21 +16,44 @@ export type ComponentScoreNullable = {
 
 export type ScoreOut = {
   total: number;                     // 0..100
-  status: 'BUY'|'HOLD'|'SELL';
+  status: "BUY" | "HOLD" | "SELL";
   breakdown: ComponentScoreNullable; // null = N/A
 };
 
-export function combineScores(s: ComponentScoreNullable): ScoreOut {
-  const entries = Object.entries(s) as [keyof ComponentScoreNullable, number | null][];
-  let wSum = 0, acc = 0;
-  for (const [k,v] of entries) {
-    if (v == null) continue;
-    const w = (WEIGHTS as any)[k] as number;
+// ---- helpers ----------------------------------------------------
+const isFiniteNum = (x: unknown): x is number =>
+  typeof x === "number" && Number.isFinite(x);
+
+function combineObject(o: ComponentScoreNullable): ScoreOut {
+  const entries = Object.entries(o) as [keyof ComponentScoreNullable, number | null][];
+  let wSum = 0;
+  let acc = 0;
+
+  for (const [k, v] of entries) {
+    if (v == null || !isFiniteNum(v)) continue;
+    const w = (WEIGHTS as Record<string, number>)[k as string] || 0;
     if (!w) continue;
-    wSum += w; acc += v * w;
+    wSum += w;
+    acc += v * w; // v is 0..100 in dit model
   }
-  const norm = wSum > 0 ? acc / wSum : 0.5; // alles N/A → neutraal
-  const total = Math.round(norm * 100);
-  const status: 'BUY'|'HOLD'|'SELL' = total>=66 ? 'BUY' : total<=33 ? 'SELL' : 'HOLD';
-  return { total, status, breakdown: s };
+
+  const norm01 = wSum > 0 ? acc / wSum : 0.5;
+  const total = Math.round(norm01);
+  const status: "BUY" | "HOLD" | "SELL" =
+    total >= 66 ? "BUY" : total <= 33 ? "SELL" : "HOLD";
+
+  return { total, status, breakdown: o };
+}
+
+/**
+ * Backwards-compatible combine:
+ * - accepteert ofwel één object, of een array (waarbij het 1e element wordt gebruikt).
+ *   Dit dekt oude aanroepen waar per ongeluk een array werd doorgegeven.
+ */
+export function combineScores(
+  input: ComponentScoreNullable | ComponentScoreNullable[]
+): ScoreOut {
+  const obj: ComponentScoreNullable =
+    Array.isArray(input) ? (input[0] ?? ({} as ComponentScoreNullable)) : input;
+  return combineObject(obj);
 }
