@@ -2,7 +2,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import Image from 'next/image'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
@@ -55,12 +55,69 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 }
 
 /* =======================
-   AANDELEN — aggregatie (zoals individuele aandelenpagina)
+   AANDELEN — aggregatie
    ======================= */
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice | string; points: number | string | null }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice | string; points: number | string | null }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice | string; points: number | string | null }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice | string; points: number | string | null }
+type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status?: Advice | string; points?: number | string | null }
+type RsiResp    = { symbol: string; period: number; rsi: number | null; status?: Advice | string; points?: number | string | null }
+type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status?: Advice | string; points?: number | string | null }
+type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status?: Advice | string; points?: number | string | null }
+
+const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
+const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
+
+// Convert a 0..100 score into our internal points scale -2..+2 (keeps compatibility)
+const scoreToPts = (s: number) => clamp((s / 100) * 4 - 2, -2, 2)
+
+// Derive fair points if API didn’t include points/status
+function deriveMaPoints(ma?: MaCrossResp): number | null {
+  const ma50 = ma?.ma50, ma200 = ma?.ma200
+  if (ma50 == null || ma200 == null) return null
+  let maScore = 50
+  if (ma50 > ma200) {
+    const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, 0.2)
+    maScore = 60 + (spread / 0.2) * 40
+  } else if (ma50 < ma200) {
+    const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, 0.2)
+    maScore = 40 - (spread / 0.2) * 40
+  }
+  return scoreToPts(maScore)
+}
+function deriveRsiPoints(rsiResp?: RsiResp): number | null {
+  const r = rsiResp?.rsi
+  if (typeof r !== 'number') return null
+  const rsiScore = clamp(((r - 30) / 40) * 100, 0, 100)
+  return scoreToPts(rsiScore)
+}
+function deriveMacdPoints(macd?: MacdResp, ma?: MaCrossResp): number | null {
+  const hist = macd?.hist
+  const ma50 = ma?.ma50 ?? null
+  if (typeof hist !== 'number') return null
+  if (ma50 && ma50 > 0) {
+    const t = 0.01 // 1% van MA50
+    const relClamped = clamp((hist / ma50) / t, -1, 1)
+    const macdScore = 50 + relClamped * 20 // 30..70
+    return scoreToPts(macdScore)
+  }
+  const macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
+  return scoreToPts(macdScore)
+}
+function deriveVolPoints(vol?: Vol20Resp): number | null {
+  const ratio = vol?.ratio
+  if (typeof ratio !== 'number') return null
+  const delta = clamp((ratio - 1) / 1, -1, 1)
+  const volScore = clamp(50 + delta * 30, 0, 100)
+  return scoreToPts(volScore)
+}
+
+// Prefer API points/status; else derive gracefully (so this works for ALL tickers)
+const toPtsSmart = (status?: Advice | string, pts?: number | string | null, fallback: () => number | null) => {
+  if (isFiniteNum(pts)) return clamp(toNum(pts), -2, 2)
+  const s = String(status || '').toUpperCase()
+  if (s === 'BUY')  return  2
+  if (s === 'SELL') return -2
+  const f = fallback()
+  return f == null ? 0 : clamp(f, -2, 2)
+}
 
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
@@ -76,26 +133,19 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
       rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
     ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-    const toPts = (status?: Advice | string, pts?: number | string | null) => {
-      const n = typeof pts === 'string' ? Number(pts) : pts
-      if (Number.isFinite(n as number)) return clamp(Number(n), -2, 2)
-      const s = String(status || '').toUpperCase()
-      if (s === 'BUY')  return  2
-      if (s === 'SELL') return -2
-      return 0
-    }
+    // ⬇️ NEW: robust points across all indicators
+    const pMA   = toPtsSmart(ma?.status,   ma?.points,   () => deriveMaPoints(ma))
+    const pMACD = toPtsSmart(macd?.status, macd?.points, () => deriveMacdPoints(macd, ma))
+    const pRSI  = toPtsSmart(rsi?.status,  rsi?.points,  () => deriveRsiPoints(rsi))
+    const pVOL  = toPtsSmart(vol?.status,  vol?.points,  () => deriveVolPoints(vol))
 
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const pMA   = toPts(ma?.status,   ma?.points)
-    const pMACD = toPts(macd?.status, macd?.points)
-    const pRSI  = toPts(rsi?.status,  rsi?.points)
-    const pVOL  = toPts(vol?.status,  vol?.points)
-
+    // Normaliseer naar 0..1 en weeg
     const nMA   = (pMA   + 2) / 4
     const nMACD = (pMACD + 2) / 4
     const nRSI  = (pRSI  + 2) / 4
     const nVOL  = (pVOL  + 2) / 4
 
+    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
     const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
     const pct = clamp(Math.round(agg * 100), 0, 100)
     return pct
@@ -105,7 +155,7 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
 }
 
 /* =======================
-   CRYPTO — EXACT ZELFDE BRON & FORMULE ALS DETAILPAGINA
+   CRYPTO — light score (universally fixed)
    ======================= */
 type IndResp = {
   symbol: string
@@ -122,7 +172,7 @@ function statusFromOverall(score: number): Advice {
   return 'HOLD'
 }
 
-// Zelfde totaal-score als de crypto-detailpagina
+// Zelfde verbeterde mapping als detailpagina (MACD/Volume genormaliseerd)
 function overallScore(ind?: IndResp): { score: number, status: Advice } {
   if (!ind || ind.error) return { score: 50, status: 'HOLD' }
 
@@ -144,15 +194,27 @@ function overallScore(ind?: IndResp): { score: number, status: Advice } {
     rsiScore = Math.max(0, Math.min(100, ((ind.rsi - 30) / 40) * 100))
   }
 
-  // MACD
+  // MACD (hist t.o.v. MA50)
   let macdScore = 50
   const hist = ind.macd?.hist
-  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
+  const ma50 = ind.ma?.ma50 ?? null
+  if (typeof hist === 'number') {
+    if (ma50 && ma50 > 0) {
+      const t = 0.01
+      const relClamped = Math.max(-1, Math.min(1, (hist / ma50) / t))
+      macdScore = Math.round(50 + relClamped * 20) // 30..70
+    } else {
+      macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
+    }
+  }
 
-  // Volume
+  // Volume (ratio gecentreerd op 1)
   let volScore = 50
   const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') volScore = Math.max(0, Math.min(100, (ratio / 2) * 100))
+  if (typeof ratio === 'number') {
+    const delta = Math.max(-1, Math.min(1, (ratio - 1) / 1))
+    volScore = Math.max(0, Math.min(100, 50 + delta * 30))
+  }
 
   const score = Math.round(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore)
   return { score, status: statusFromOverall(score) }
@@ -398,7 +460,7 @@ export default function Homepage() {
   }, [])
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL (scores 1-op-1 met crypto-detail)
+     CRYPTO — Top 5 BUY/SELL
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
@@ -462,7 +524,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ---- NIEUW: helpers voor nieuws (favicon + decode + source→domain fallback) ---- */
+  /* ---- helpers voor nieuws (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -472,7 +534,6 @@ export default function Homepage() {
       .replaceAll('&gt;', '>')
   }
 
-  // Handige mapping voor wanneer Google de echte URL niet meestuurt.
   const SOURCE_DOMAIN_MAP: Record<string, string> = {
     'reuters': 'reuters.com',
     'yahoo finance': 'finance.yahoo.com',
@@ -495,9 +556,7 @@ export default function Homepage() {
   function sourceToDomain(src?: string): string | null {
     if (!src) return null
     const key = src.trim().toLowerCase()
-    // exacte match
     if (SOURCE_DOMAIN_MAP[key]) return SOURCE_DOMAIN_MAP[key]
-    // losse woorden matchen
     for (const k of Object.keys(SOURCE_DOMAIN_MAP)) {
       if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
     }
@@ -508,20 +567,15 @@ export default function Homepage() {
     try {
       const u = new URL(raw)
       if (u.hostname.endsWith('news.google.com')) {
-        // 1) Probeer ?url=
         const orig = u.searchParams.get('url')
         if (orig) {
           const ou = new URL(orig)
           const d = ou.hostname.replace(/^www\./, '')
           return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
         }
-        // 2) Val terug op bronnaam → domein
         const d2 = sourceToDomain(src || '')
-        if (d2) {
-          return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
-        }
+        if (d2) return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
       }
-      // reguliere link
       const d = u.hostname.replace(/^www\./, '')
       return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
     } catch {
@@ -681,7 +735,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* CRYPTO — Top 5 BUY/SELL (zelfde bron & formule als detail) */}
+      {/* CRYPTO — Top 5 BUY/SELL */}
       <section className="max-w-6xl mx-auto px-4 pb-10 grid md:grid-cols-2 gap-4">
         {/* BUY top 5 */}
         <div className="table-card p-5">
@@ -730,7 +784,7 @@ export default function Homepage() {
         </div>
       </section>
 
-      {/* NEWS — compact met favicon/bronlogo */}
+      {/* NEWS — compact */}
       <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-2 gap-4">
         <div className="table-card p-5">
           <div className="flex items-center justify-between mb-3">
