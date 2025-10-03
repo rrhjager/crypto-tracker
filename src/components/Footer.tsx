@@ -18,7 +18,7 @@ export default function Footer() {
     <footer className="mt-16 border-t" style={{ backgroundColor: '#232323', borderColor: '#2b2b2b' }}>
       <div className="max-w-6xl mx-auto px-4 py-10">
         {/* top */}
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-7">
           {/* brand */}
           <div className="col-span-1">
             <div className="text-lg font-semibold text-gray-100">SignalHub</div>
@@ -66,11 +66,18 @@ export default function Footer() {
             </ul>
           </div>
 
-          {/* ✅ NIEUW: Academy & About (tussen Markets en Disclaimer) */}
+          {/* ✅ NIEUW: Academy (rechts naast Markets) */}
           <div>
             <div className={head}>Academy</div>
             <ul className="mt-3 space-y-2 text-sm">
               <li><Link className={a} href="/academy">Academy</Link></li>
+            </ul>
+          </div>
+
+          {/* ✅ NIEUW: About us (naast Academy, links van Disclaimer) */}
+          <div>
+            <div className={head}>About us</div>
+            <ul className="mt-3 space-y-2 text-sm">
               <li><Link className={a} href="/about">About us</Link></li>
             </ul>
           </div>
@@ -94,7 +101,6 @@ export default function Footer() {
             © {year} SignalHub. All rights reserved.
           </div>
 
-          {/* Cookie settings knop rechts */}
           <div className="text-sm">
             <a
               href="#cookie-settings"
