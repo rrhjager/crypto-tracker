@@ -415,15 +415,34 @@ export default function Homepage() {
           .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
           .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-        // Indicators ophalen (zoals detailpagina) — GEEN localStorage fallback meer
+        // LocalStorage quick-path
+        const lsScores: Record<string, number> = {}
+        try {
+          if (typeof window !== 'undefined') {
+            pairs.forEach(({ pair }) => {
+              const raw = localStorage.getItem(`ta:${pair}`)
+              if (raw) {
+                const j = JSON.parse(raw) as { score?: number; ts?: number }
+                if (Number.isFinite(j?.score)) lsScores[pair] = Math.round(Number(j.score))
+              }
+            })
+          }
+        } catch {}
+
+        // Indicators ophalen (zoals detailpagina)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-          const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-          const r = await fetch(url, { cache: 'no-store' })
-          if (!r.ok) throw new Error(`HTTP ${r.status}`)
-          const j = await r.json() as { results?: IndResp[] }
-          const ind = (j.results || [])[0]
-          const { score } = overallScore(ind)
-          return { symbol: c.symbol, name: c.name, score }
+          try {
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
+            const r = await fetch(url, { cache: 'no-store' })
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const j = await r.json() as { results?: IndResp[] }
+            const ind = (j.results || [])[0]
+            const { score } = overallScore(ind)
+            return { symbol: c.symbol, name: c.name, score }
+          } catch {
+            const sLS = lsScores[pair]
+            return { symbol: c.symbol, name: c.name, score: Number.isFinite(sLS) ? sLS : (null as any) }
+          }
         })
 
         const rows = batchScores
@@ -453,6 +472,7 @@ export default function Homepage() {
       .replaceAll('&gt;', '>')
   }
 
+  // Handige mapping voor wanneer Google de echte URL niet meestuurt.
   const SOURCE_DOMAIN_MAP: Record<string, string> = {
     'reuters': 'reuters.com',
     'yahoo finance': 'finance.yahoo.com',
@@ -475,7 +495,9 @@ export default function Homepage() {
   function sourceToDomain(src?: string): string | null {
     if (!src) return null
     const key = src.trim().toLowerCase()
+    // exacte match
     if (SOURCE_DOMAIN_MAP[key]) return SOURCE_DOMAIN_MAP[key]
+    // losse woorden matchen
     for (const k of Object.keys(SOURCE_DOMAIN_MAP)) {
       if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
     }
@@ -486,15 +508,20 @@ export default function Homepage() {
     try {
       const u = new URL(raw)
       if (u.hostname.endsWith('news.google.com')) {
+        // 1) Probeer ?url=
         const orig = u.searchParams.get('url')
         if (orig) {
           const ou = new URL(orig)
           const d = ou.hostname.replace(/^www\./, '')
           return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
         }
+        // 2) Val terug op bronnaam → domein
         const d2 = sourceToDomain(src || '')
-        if (d2) return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
+        if (d2) {
+          return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
+        }
       }
+      // reguliere link
       const d = u.hostname.replace(/^www\./, '')
       return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
     } catch {
