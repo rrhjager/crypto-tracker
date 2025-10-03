@@ -110,7 +110,11 @@ function deriveVolPoints(vol?: Vol20Resp): number | null {
 }
 
 // Prefer API points/status; else derive gracefully (so this works for ALL tickers)
-const toPtsSmart = (status?: Advice | string, pts?: number | string | null, fallback: () => number | null) => {
+const toPtsSmart = (
+  status?: Advice | string,
+  pts?: number | string | null,
+  fallback: () => number | null = () => null
+) => {
   if (isFiniteNum(pts)) return clamp(toNum(pts), -2, 2)
   const s = String(status || '').toUpperCase()
   if (s === 'BUY')  return  2
