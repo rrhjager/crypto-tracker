@@ -2,7 +2,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import Image from 'next/image'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
@@ -10,6 +10,7 @@ import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
+const TTL_MS = 5 * 60 * 1000 // 5 min cache
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -38,6 +39,27 @@ function statusFromScore(score: number): Advice {
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
+const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
+const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
+
+/* ---------- localStorage cache helpers ---------- */
+function getCache<T>(key: string): T | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const j = JSON.parse(raw) as { ts: number; data: T }
+    if (!j?.ts) return null
+    if (Date.now() - j.ts > TTL_MS) return null
+    return j.data
+  } catch { return null }
+}
+function setCache<T>(key: string, data: T) {
+  try {
+    if (typeof window === 'undefined') return
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+  } catch {}
+}
 
 /* ---------- pool helper (concurrency) ---------- */
 async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -62,13 +84,10 @@ type RsiResp    = { symbol: string; period: number; rsi: number | null; status?:
 type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status?: Advice | string; points?: number | string | null }
 type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status?: Advice | string; points?: number | string | null }
 
-const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
-const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
-
-// Convert a 0..100 score into our internal points scale -2..+2 (keeps compatibility)
+// Convert a 0..100 score into our internal points scale -2..+2
 const scoreToPts = (s: number) => clamp((s / 100) * 4 - 2, -2, 2)
 
-// Derive fair points if API didn’t include points/status
+// Derive points if API didn’t include points/status
 function deriveMaPoints(ma?: MaCrossResp): number | null {
   const ma50 = ma?.ma50, ma200 = ma?.ma200
   if (ma50 == null || ma200 == null) return null
@@ -109,7 +128,7 @@ function deriveVolPoints(vol?: Vol20Resp): number | null {
   return scoreToPts(volScore)
 }
 
-// Prefer API points/status; else derive gracefully (so this works for ALL tickers)
+// Prefer API points/status; else derive
 const toPtsSmart = (
   status?: Advice | string,
   pts?: number | string | null,
@@ -137,13 +156,11 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
       rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
     ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
 
-    // ⬇️ NEW: robust points across all indicators
     const pMA   = toPtsSmart(ma?.status,   ma?.points,   () => deriveMaPoints(ma))
     const pMACD = toPtsSmart(macd?.status, macd?.points, () => deriveMacdPoints(macd, ma))
     const pRSI  = toPtsSmart(rsi?.status,  rsi?.points,  () => deriveRsiPoints(rsi))
     const pVOL  = toPtsSmart(vol?.status,  vol?.points,  () => deriveVolPoints(vol))
 
-    // Normaliseer naar 0..1 en weeg
     const nMA   = (pMA   + 2) / 4
     const nMACD = (pMACD + 2) / 4
     const nRSI  = (pRSI  + 2) / 4
@@ -176,7 +193,6 @@ function statusFromOverall(score: number): Advice {
   return 'HOLD'
 }
 
-// Zelfde verbeterde mapping als detailpagina (MACD/Volume genormaliseerd)
 function overallScore(ind?: IndResp): { score: number, status: Advice } {
   if (!ind || ind.error) return { score: 50, status: 'HOLD' }
 
@@ -352,18 +368,18 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
-/* -------- helpers voor links (NIEUW) -------- */
-const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
-const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
-
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
 
-  // Prefetch
+  /* ---------- Achtergrond-prefetch van routes ---------- */
   useEffect(() => {
-    router.prefetch('/stocks').catch(()=>{})
-    router.prefetch('/index').catch(()=>{})
+    const routes = [
+      '/crypto',
+      '/aex','/sp500','/nasdaq','/dowjones','/dax','/ftse100','/nikkei225','/hangseng','/sensex','/etfs',
+      '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors'
+    ]
+    routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
   // SWR warm-up (news)
@@ -430,6 +446,16 @@ export default function Homepage() {
     ;(async () => {
       try {
         setScoreErr(null)
+        const cacheKeyBuy  = 'home:eq:topBuy'
+        const cacheKeySell = 'home:eq:topSell'
+
+        // 1) probeer cache
+        const cachedBuy  = getCache<ScoredEq[]>(cacheKeyBuy)
+        const cachedSell = getCache<ScoredEq[]>(cacheKeySell)
+        if (cachedBuy)  setTopBuy(cachedBuy)
+        if (cachedSell) setTopSell(cachedSell)
+
+        // 2) altijd (op achtergrond) opnieuw berekenen
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
 
@@ -455,10 +481,15 @@ export default function Homepage() {
           }
         }
 
+        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+        const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
+        const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
+
         if (!aborted) {
-          const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-          setTopBuy(outBuy.sort((a,b)=> order(a.market)-order(b.market)))
-          setTopSell(outSell.sort((a,b)=> order(a.market)-order(b.market)))
+          setTopBuy(finalBuy)
+          setTopSell(finalSell)
+          setCache(cacheKeyBuy, finalBuy)
+          setCache(cacheKeySell, finalSell)
         }
       } catch (e: any) {
         if (!aborted) setScoreErr(String(e?.message || e))
@@ -480,12 +511,20 @@ export default function Homepage() {
       try {
         setCoinErr(null)
 
-        // Bouw BINANCE pairs voor het hele universum
+        // cache eerst tonen
+        const cacheKeyB = 'home:coin:topBuy'
+        const cacheKeyS = 'home:coin:topSell'
+        const cB = getCache<ScoredCoin[]>(cacheKeyB)
+        const cS = getCache<ScoredCoin[]>(cacheKeyS)
+        if (cB) setCoinTopBuy(cB)
+        if (cS) setCoinTopSell(cS)
+
+        // pairs bouwen
         const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
           .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
           .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-        // LocalStorage quick-path
+        // LocalStorage quick-path (bijv. vanuit detailpagina)
         const lsScores: Record<string, number> = {}
         try {
           if (typeof window !== 'undefined') {
@@ -493,13 +532,15 @@ export default function Homepage() {
               const raw = localStorage.getItem(`ta:${pair}`)
               if (raw) {
                 const j = JSON.parse(raw) as { score?: number; ts?: number }
-                if (Number.isFinite(j?.score)) lsScores[pair] = Math.round(Number(j.score))
+                if (Number.isFinite(j?.score) && (Date.now() - (j.ts||0) < TTL_MS)) {
+                  lsScores[pair] = Math.round(Number(j.score))
+                }
               }
             })
           }
         } catch {}
 
-        // Indicators ophalen (zoals detailpagina)
+        // Indicators ophalen
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
@@ -524,7 +565,12 @@ export default function Homepage() {
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
 
-        if (!aborted) { setCoinTopBuy(buys); setCoinTopSell(sells) }
+        if (!aborted) {
+          setCoinTopBuy(buys)
+          setCoinTopSell(sells)
+          setCache(cacheKeyB, buys)
+          setCache(cacheKeyS, sells)
+        }
       } catch (e:any) {
         if (!aborted) setCoinErr(String(e?.message || e))
       }
@@ -631,6 +677,10 @@ export default function Homepage() {
     </ul>
   )
 
+  /* ---- link helpers (klikbaar) ---- */
+  const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
+  const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
+
   /* ---------------- render ---------------- */
   return (
     <>
@@ -703,15 +753,17 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topBuy.map((r)=>(
               <li key={`bb-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <Link href={equityHref(r.symbol)} className="min-w-0 group">
+                <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate group-hover:underline">
-                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                  <div className="font-medium truncate">
+                    <Link href={equityHref(r.symbol)} className="hover:underline">
+                      {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                    </Link>
                   </div>
-                </Link>
-                <div className="shrink-0 origin-right scale-90 sm:scale-100">
-                  <ScoreBadge score={r.score} />
                 </div>
+                <Link href={equityHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </Link>
               </li>
             ))}
           </ul>
@@ -728,15 +780,17 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topSell.map((r)=>(
               <li key={`bs-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <Link href={equityHref(r.symbol)} className="min-w-0 group">
+                <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate group-hover:underline">
-                    {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                  <div className="font-medium truncate">
+                    <Link href={equityHref(r.symbol)} className="hover:underline">
+                      {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                    </Link>
                   </div>
-                </Link>
-                <div className="shrink-0 origin-right scale-90 sm:scale-100">
-                  <ScoreBadge score={r.score} />
                 </div>
+                <Link href={equityHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </Link>
               </li>
             ))}
           </ul>
@@ -756,13 +810,17 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopBuy.map((r)=>(
               <li key={`cb-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <Link href={coinHref(r.symbol)} className="truncate group">
-                  <div className="font-medium truncate group-hover:underline">{r.name}</div>
-                  <div className="text-white/60 text-xs">{r.symbol}</div>
-                </Link>
-                <div className="shrink-0 origin-right scale-90 sm:scale-100">
-                  <ScoreBadge score={r.score} />
+                <div className="truncate">
+                  <div className="font-medium truncate">
+                    <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
+                  </div>
+                  <div className="text-white/60 text-xs">
+                    <Link href={coinHref(r.symbol)} className="hover:underline">{r.symbol}</Link>
+                  </div>
                 </div>
+                <Link href={coinHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </Link>
               </li>
             ))}
           </ul>
@@ -779,13 +837,17 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopSell.map((r)=>(
               <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <Link href={coinHref(r.symbol)} className="truncate group">
-                  <div className="font-medium truncate group-hover:underline">{r.name}</div>
-                  <div className="text-white/60 text-xs">{r.symbol}</div>
-                </Link>
-                <div className="shrink-0 origin-right scale-90 sm:scale-100">
-                  <ScoreBadge score={r.score} />
+                <div className="truncate">
+                  <div className="font-medium truncate">
+                    <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
+                  </div>
+                  <div className="text-white/60 text-xs">
+                    <Link href={coinHref(r.symbol)} className="hover:underline">{r.symbol}</Link>
+                  </div>
                 </div>
+                <Link href={coinHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
+                  <ScoreBadge score={r.score} />
+                </Link>
               </li>
             ))}
           </ul>
