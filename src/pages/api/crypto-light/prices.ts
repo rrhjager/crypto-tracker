@@ -2,6 +2,7 @@
 export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { cache5min } from '@/lib/cacheHeaders'
 
 // Zelfde alias-bron als indicators
 const CG_ALIASES: Record<string, string[]> = {
@@ -54,7 +55,7 @@ const CG_ALIASES: Record<string, string[]> = {
 
   // ---- nieuw zoals gevraagd ----
   ICPUSDT:  ['internet-computer'],
-  XLMUSDT:  ['stellar'],        // was al aanwezig in indicators; hier ook
+  XLMUSDT:  ['stellar'],
   FILUSDT:  ['filecoin'],
   ALGOUSDT: ['algorand'],
   QNTUSDT:  ['quant', 'quant-network'],
@@ -111,6 +112,9 @@ async function fetchPerfFromChart(id: string) {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // ✅ Cache headers toegevoegd (5 minuten geldig, daarna SWR 30 min)
+    cache5min(res, 300, 1800)
+
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
@@ -176,7 +180,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const perfCache = new Map<string, { w: number|null, m: number|null }>()
     for (const id of fallbackIds) {
-      // zelfs als simple price niets gaf, probeer perf alsnog (kan null zijn)
       perfCache.set(id, await fetchPerfFromChart(id))
     }
 
@@ -211,7 +214,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ debug: { urls, markets_count: marketsRows.length, missing: missingSymbols }, results })
     }
 
-    res.setHeader('Cache-Control', 's-maxage=15, stale-while-revalidate=30')
     return res.status(200).json({ results })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
