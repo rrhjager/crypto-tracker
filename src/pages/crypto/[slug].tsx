@@ -140,11 +140,41 @@ function saveLocalTA(symUSDT: string, score: number, status: Status) {
 
 function PageInner() {
   const { query } = useRouter()
-  const slug = String(query.slug || '')
+  const raw = String(query.slug || '')
+  const slug = raw.toLowerCase()
+
+  // 🔧 FLEXIBLE COIN RESOLUTION
   const coin = useMemo(() => {
-    const bySlug = COINS.find(c => (c.slug || c.symbol.toLowerCase()) === slug)
-    if (bySlug) return bySlug
-    return COINS.find(c => c.symbol.toLowerCase() === slug.toLowerCase())
+    // Build a small set of acceptable aliases from the incoming slug
+    const aliases = new Set<string>()
+    const s = slug.replace(/_/g, '-') // normalize underscores
+
+    aliases.add(s)
+    // bnb-usd <-> bnb
+    if (s.endsWith('-usd')) aliases.add(s.slice(0, -4))
+    else aliases.add(`${s}-usd`)
+
+    // usdt endings → -usd
+    if (s.endsWith('usdt')) {
+      aliases.add(s.slice(0, -4))        // bnbusdt -> bnb
+      aliases.add(s.slice(0, -4) + '-usd')
+    }
+
+    // hyphenless variant (bnbusd -> bnb-usd)
+    aliases.add(s.replace(/-/g, ''))
+    if (!s.includes('-')) aliases.add(s + '-usd')
+
+    // Try to match against COINS list
+    return COINS.find((c: any) => {
+      const sym = String(c.symbol || '').toLowerCase()            // e.g. bnb-usd
+      const base = sym.replace(/-usd$/, '')                       // e.g. bnb
+      const alt = String(c.slug || '').toLowerCase() || ''        // optional custom slug
+      return (
+        aliases.has(sym) ||
+        aliases.has(base) ||
+        (alt && aliases.has(alt))
+      )
+    })
   }, [slug])
 
   const binanceFromList = (coin as any)?.pairUSD?.binance || null

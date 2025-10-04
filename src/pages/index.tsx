@@ -352,6 +352,10 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
+/* -------- helpers voor links (NIEUW) -------- */
+const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
+const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
+
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -699,12 +703,12 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topBuy.map((r)=>(
               <li key={`bb-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
+                <Link href={equityHref(r.symbol)} className="min-w-0 group">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate">
+                  <div className="font-medium truncate group-hover:underline">
                     {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                   </div>
-                </div>
+                </Link>
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
@@ -724,12 +728,12 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topSell.map((r)=>(
               <li key={`bs-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
+                <Link href={equityHref(r.symbol)} className="min-w-0 group">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                  <div className="font-medium truncate">
+                  <div className="font-medium truncate group-hover:underline">
                     {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                   </div>
-                </div>
+                </Link>
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
@@ -752,10 +756,10 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopBuy.map((r)=>(
               <li key={`cb-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{r.name}</div>
+                <Link href={coinHref(r.symbol)} className="truncate group">
+                  <div className="font-medium truncate group-hover:underline">{r.name}</div>
                   <div className="text-white/60 text-xs">{r.symbol}</div>
-                </div>
+                </Link>
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
@@ -775,10 +779,10 @@ export default function Homepage() {
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopSell.map((r)=>(
               <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
-                <div className="truncate">
-                  <div className="font-medium truncate">{r.name}</div>
+                <Link href={coinHref(r.symbol)} className="truncate group">
+                  <div className="font-medium truncate group-hover:underline">{r.name}</div>
                   <div className="text-white/60 text-xs">{r.symbol}</div>
-                </div>
+                </Link>
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
