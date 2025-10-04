@@ -2,6 +2,7 @@
 export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { cache5min } from '@/lib/cacheHeaders'
 
 // ---------- helpers (general) ----------
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -116,14 +117,12 @@ const macdCalc = (closes: number[], fast = 12, slow = 26, sig = 9) => {
 type MarketData = { closes: number[]; volumes: number[] }
 
 async function okxFetch(instId: string): Promise<MarketData | null> {
-  // OKX bar=1D (200 candles)
   const url = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=1D&limit=200`
   const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
   if (!r.ok) return null
   const j = await r.json()
   const arr: any[] = Array.isArray(j?.data) ? j.data : []
   if (!arr.length) return null
-  // OKX row: [ts, o, h, l, c, vol, ...] — take close idx 4, volume idx 5, reverse to oldest→newest
   const rows = arr.slice().reverse()
   const closes = rows.map(x => Number(x?.[4])).filter(Number.isFinite)
   const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
@@ -132,13 +131,11 @@ async function okxFetch(instId: string): Promise<MarketData | null> {
 }
 
 async function bitfinexFetch(tSymbol: string): Promise<MarketData | null> {
-  // Bitfinex: /v2/candles/trade:1D:tBTCUSD/hist
   const url = `https://api-pub.bitfinex.com/v2/candles/trade:1D:${encodeURIComponent(tSymbol)}/hist?limit=200`
   const r = await fetch(url, { headers: { 'cache-control': 'no-cache' } })
   if (!r.ok) return null
   const arr: any[] = await r.json()
   if (!Array.isArray(arr) || !arr.length) return null
-  // Row: [MTS, OPEN, CLOSE, HIGH, LOW, VOLUME]
   const rows = arr.slice().reverse()
   const closes = rows.map(x => Number(x?.[2])).filter(Number.isFinite)
   const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
@@ -206,7 +203,6 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  // Volatility (stdev(20) van dagrendementen)
   const rets: number[] = []
   for (let i = 1; i < closes.length; i++) {
     const a = closes[i - 1], b = closes[i]
@@ -216,7 +212,6 @@ function computeIndicators(closes: number[], volumes: number[]) {
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
-  // Perf (d/w/m/q) optioneel (niet gebruikt voor score hier)
   const last = closes.at(-1) ?? null
   const pct = (from?: number, to?: number) => (from && to) ? ((to - from) / from) * 100 : null
   const perf = {
@@ -249,7 +244,6 @@ function taScoreFrom(ind: {
   volume?: { ratio: number|null }
 }) {
   const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
-  // MA (35%)
   let maScore = 50
   if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
     if (ind.ma.ma50 > ind.ma.ma200) {
@@ -260,31 +254,25 @@ function taScoreFrom(ind: {
       maScore = 40 - (spread / 0.2) * 40
     }
   }
-  // RSI (25%)
   let rsiScore = 50
   if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
-  // MACD (25%)
   let macdScore = 50
   const hist = ind.macd?.hist
   if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
-  // Volume (15%)
   let volScore = 50
   const ratio = ind.volume?.ratio
   if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
-
   const score = Math.round(clamp(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore, 0, 100))
   return { score, status: statusFromScore(score) as UiStatus }
 }
 
 // ---------- symbol mapping helpers ----------
 function symbolToOkx(symUSDT: string) {
-  // BTCUSDT -> BTC-USDT
   const base = symUSDT.replace(/USDT$/,'')
   if (!base) return null
   return `${base}-USDT`
 }
 function symbolToBitfinex(symUSDT: string) {
-  // Try USD first, then UST (Tether legacy code on Bitfinex)
   const base = symUSDT.replace(/USDT$/,'')
   return [`t${base}USD`, `t${base}UST`]
 }
@@ -293,7 +281,6 @@ function symbolToBitfinex(symUSDT: string) {
 async function fetchMarketDataFor(symUSDT: string): Promise<
   { ok: true; data: MarketData; source: string } | { ok: false; error: string }
 > {
-  // A) OKX
   const okxId = symbolToOkx(symUSDT)
   if (okxId) {
     try {
@@ -301,8 +288,6 @@ async function fetchMarketDataFor(symUSDT: string): Promise<
       if (d) return { ok: true, data: d, source: 'okx' }
     } catch {}
   }
-
-  // B) Bitfinex
   const tSymbols = symbolToBitfinex(symUSDT)
   for (const t of tSymbols) {
     try {
@@ -310,8 +295,6 @@ async function fetchMarketDataFor(symUSDT: string): Promise<
       if (d) return { ok: true, data: d, source: `bitfinex:${t}` }
     } catch {}
   }
-
-  // C) CoinGecko
   let aliases = CG_ALIASES[symUSDT]
   if (!aliases || aliases.length === 0) {
     const base = symUSDT.replace(/USDT$/,'')
@@ -324,7 +307,6 @@ async function fetchMarketDataFor(symUSDT: string): Promise<
       if (d) return { ok: true, data: d, source: 'coingecko' }
     } catch {}
   }
-
   return { ok: false, error: 'No source returned data' }
 }
 
@@ -338,6 +320,9 @@ function chunk<T>(arr: T[], size: number) {
 // ---------- API handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // ⬇️ Cache headers (CDN) — 5 min + SWR
+    cache5min(res, 300, 1800)
+
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
@@ -345,22 +330,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
 
-    // gentle throttle to avoid rate-limits on free sources
     const batches = chunk(symbols, 3)
     const results: any[] = []
 
     for (let bi = 0; bi < batches.length; bi++) {
       const group = batches[bi]
-
       const groupResults = await Promise.all(group.map(async (sym) => {
-        // Try OKX -> Bitfinex -> CoinGecko
         const got = await fetchMarketDataFor(sym)
         dbg?.used.push({ symbol: sym, ok: got.ok, source: (got as any).source ?? null })
-
-        // ✅ TypeScript narrowing fix
-        if (got.ok === false) {
-          return { symbol: sym, error: got.error }
-        }
+        if (got.ok === false) return { symbol: sym, error: got.error }
 
         try {
           const ind = computeIndicators(got.data.closes, got.data.volumes)
@@ -375,14 +353,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return { symbol: sym, error: e?.message || 'Compute failed' }
         }
       }))
-
       results.push(...groupResults)
-
-      // sleep between batches (except after last)
       if (bi < batches.length - 1) await sleep(650)
     }
 
-    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
     if (debug) return res.status(200).json({ debug: dbg, results })
     return res.status(200).json({ results })
   } catch (e: any) {

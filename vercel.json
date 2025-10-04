@@ -3,3 +3,12 @@
     { "path": "/api/v1/refresh", "schedule": "0 6 * * *" }
   ]
 }
+
+{
+  "crons": [
+    {
+      "path": "/api/warm-cache",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
