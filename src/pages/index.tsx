@@ -434,7 +434,7 @@ export default function Homepage() {
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
 
-        const scores = await pool(symbols, 4, async (sym, idx) => {
+          const scores = await pool(symbols, 4, async (sym, idx) => {
             if (idx) await sleep(60)
             return await calcScoreForSymbol(sym)
           })
@@ -694,15 +694,11 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Equities — Top BUY (by Signal Score)</h2>
             {scoreErr && <span className="text-xs text-red-300">Error: {scoreErr}</span>}
           </div>
-          {/* ⬇️ FULL-ROW CLICKABLE */}
           <ul className="divide-y divide-white/10">
             {topBuy.length===0 ? (
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topBuy.map((r)=>(
-              <li
-                key={`bb-${r.market}-${r.symbol}`}
-                className="relative py-2 px-2 -mx-2 rounded-md flex items-center justify-between gap-3 hover:bg-white/10 transition"
-              >
+              <li key={`bb-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
                   <div className="font-medium truncate">
@@ -712,11 +708,6 @@ export default function Homepage() {
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
-                <Link
-                  href={`/stocks/${encodeURIComponent(r.symbol)}`}
-                  className="absolute inset-0"
-                  aria-label={`Open ${r.name} (${r.symbol})`}
-                />
               </li>
             ))}
           </ul>
@@ -728,15 +719,11 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Equities — Top SELL (by Signal Score)</h2>
             {scoreErr && <span className="text-xs text-red-300">Error: {scoreErr}</span>}
           </div>
-          {/* ⬇️ FULL-ROW CLICKABLE */}
           <ul className="divide-y divide-white/10">
             {topSell.length===0 ? (
               <li className="py-3 text-white/60">No data yet…</li>
             ) : topSell.map((r)=>(
-              <li
-                key={`bs-${r.market}-${r.symbol}`}
-                className="relative py-2 px-2 -mx-2 rounded-md flex items-center justify-between gap-3 hover:bg-white/10 transition"
-              >
+              <li key={`bs-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
                   <div className="font-medium truncate">
@@ -746,11 +733,6 @@ export default function Homepage() {
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
-                <Link
-                  href={`/stocks/${encodeURIComponent(r.symbol)}`}
-                  className="absolute inset-0"
-                  aria-label={`Open ${r.name} (${r.symbol})`}
-                />
               </li>
             ))}
           </ul>
@@ -765,15 +747,11 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Crypto — Top 5 BUY (by Signal Score)</h2>
             {coinErr && <span className="text-xs text-red-300">Error: {coinErr}</span>}
           </div>
-          {/* ⬇️ FULL-ROW CLICKABLE */}
           <ul className="divide-y divide-white/10">
             {coinTopBuy.length===0 ? (
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopBuy.map((r)=>(
-              <li
-                key={`cb-${r.symbol}`}
-                className="relative py-2 px-2 -mx-2 rounded-md flex items-center justify-between gap-3 hover:bg-white/10 transition"
-              >
+              <li key={`cb-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="truncate">
                   <div className="font-medium truncate">{r.name}</div>
                   <div className="text-white/60 text-xs">{r.symbol}</div>
@@ -781,11 +759,6 @@ export default function Homepage() {
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
-                <Link
-                  href={`/crypto/${r.symbol.toLowerCase()}`}
-                  className="absolute inset-0"
-                  aria-label={`Open ${r.name} (${r.symbol})`}
-                />
               </li>
             ))}
           </ul>
@@ -797,15 +770,11 @@ export default function Homepage() {
             <h2 className="text-lg font-semibold">Crypto — Top 5 SELL (by Signal Score)</h2>
             {coinErr && <span className="text-xs text-red-300">Error: {coinErr}</span>}
           </div>
-          {/* ⬇️ FULL-ROW CLICKABLE */}
           <ul className="divide-y divide-white/10">
             {coinTopSell.length===0 ? (
               <li className="py-3 text-white/60">No data yet…</li>
             ) : coinTopSell.map((r)=>(
-              <li
-                key={`cs-${r.symbol}`}
-                className="relative py-2 px-2 -mx-2 rounded-md flex items-center justify-between gap-3 hover:bg-white/10 transition"
-              >
+              <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
                 <div className="truncate">
                   <div className="font-medium truncate">{r.name}</div>
                   <div className="text-white/60 text-xs">{r.symbol}</div>
@@ -813,11 +782,6 @@ export default function Homepage() {
                 <div className="shrink-0 origin-right scale-90 sm:scale-100">
                   <ScoreBadge score={r.score} />
                 </div>
-                <Link
-                  href={`/crypto/${r.symbol.toLowerCase()}`}
-                  className="absolute inset-0"
-                  aria-label={`Open ${r.name} (${r.symbol})`}
-                />
               </li>
             ))}
           </ul>
