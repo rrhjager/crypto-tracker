@@ -2,7 +2,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import Image from 'next/image'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
@@ -15,15 +15,16 @@ const TTL_MS = 5 * 60 * 1000 // 5 min cache
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
+
 type MarketLabel =
   | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
   | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
 type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
 type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
@@ -51,7 +52,7 @@ function setCache<T>(key: string, data: T) {
   } catch {}
 }
 
-/* ---------- pool helper ---------- */
+/* ---------- pool helper (concurrency) ---------- */
 async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(arr.length) as any
   let i = 0
@@ -123,14 +124,14 @@ const toPtsSmart = (status?: Advice | string, pts?: number | string | null, fall
   return f == null ? 0 : clamp(f, -2, 2)
 }
 
-/* ✅ snellere versie zonder cache: 'no-store' (laat CDN gebruiken) */
+/* ✅ nu met echte cache hint voor CDN/browser */
 async function calcScoreForSymbol(symbol: string): Promise<number | null> {
   try {
     const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`),
+      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'force-cache' }),
+      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'force-cache' }),
+      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'force-cache' }),
+      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'force-cache' }),
     ])
     if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
 
@@ -151,185 +152,6 @@ async function calcScoreForSymbol(symbol: string): Promise<number | null> {
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
     const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
     const pct = clamp(Math.round(agg * 100), 0, 100)
-    return pct
-  } catch {
-    return null
-  }
-}
-
-/* rest van je bestand ongewijzigd */
-
-// src/pages/index.tsx
-import Head from 'next/head'
-import Link from 'next/link'
-import Image from 'next/image'
-import { useEffect, useState, useMemo } from 'react'
-import { useRouter } from 'next/router'
-import { mutate } from 'swr'
-import { AEX } from '@/lib/aex'
-import ScoreBadge from '@/components/ScoreBadge'
-
-/* ---------------- config ---------------- */
-const HERO_IMG = '/images/hero-crypto-tracker.png'
-const TTL_MS = 5 * 60 * 1000 // 5 min cache
-
-/* ---------------- types ---------------- */
-type Advice = 'BUY' | 'HOLD' | 'SELL'
-
-type NewsItem = {
-  title: string
-  url: string
-  source?: string
-  published?: string
-  image?: string | null
-}
-
-/* ---- markten ---- */
-type MarketLabel =
-  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
-  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
-
-type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
-type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
-
-/* ---------------- utils ---------------- */
-const clamp2 = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-const sleep2 = (ms: number) => new Promise(r => setTimeout(r, ms))
-function statusFromScore2(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-const toNum2 = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
-const isFiniteNum2 = (x: unknown) => Number.isFinite(toNum2(x))
-
-/* ---------- localStorage cache helpers ---------- */
-function getCache2<T>(key: string): T | null {
-  try {
-    if (typeof window === 'undefined') return null
-    const raw = localStorage.getItem(key)
-    if (!raw) return null
-    const j = JSON.parse(raw) as { ts: number; data: T }
-    if (!j?.ts) return null
-    if (Date.now() - j.ts > TTL_MS) return null
-    return j.data
-  } catch { return null }
-}
-function setCache2<T>(key: string, data: T) {
-  try {
-    if (typeof window === 'undefined') return
-    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
-  } catch {}
-}
-
-/* ---------- pool helper (concurrency) ---------- */
-async function pool2<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(arr.length) as any
-  let i = 0
-  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-    while (true) {
-      const idx = i++
-      if (idx >= arr.length) break
-      out[idx] = await fn(arr[idx], idx)
-    }
-  })
-  await Promise.all(workers)
-  return out
-}
-
-/* =======================
-   AANDELEN — aggregatie
-   ======================= */
-type MaCrossResp2 = { symbol: string; ma50: number | null; ma200: number | null; status?: Advice | string; points?: number | string | null }
-type RsiResp2    = { symbol: string; period: number; rsi: number | null; status?: Advice | string; points?: number | string | null }
-type MacdResp2   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status?: Advice | string; points?: number | string | null }
-type Vol20Resp2  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status?: Advice | string; points?: number | string | null }
-
-// Convert a 0..100 score into our internal points scale -2..+2
-const scoreToPts2 = (s: number) => clamp2((s / 100) * 4 - 2, -2, 2)
-
-// Derive points if API didn’t include points/status
-function deriveMaPoints2(ma?: MaCrossResp2): number | null {
-  const ma50 = ma?.ma50, ma200 = ma?.ma200
-  if (ma50 == null || ma200 == null) return null
-  let maScore = 50
-  if (ma50 > ma200) {
-    const spread = clamp2(ma50 / Math.max(1e-9, ma200) - 1, 0, 0.2)
-    maScore = 60 + (spread / 0.2) * 40
-  } else if (ma50 < ma200) {
-    const spread = clamp2(ma200 / Math.max(1e-9, ma50) - 1, 0, 0.2)
-    maScore = 40 - (spread / 0.2) * 40
-  }
-  return scoreToPts2(maScore)
-}
-function deriveRsiPoints2(rsiResp?: RsiResp2): number | null {
-  const r = rsiResp?.rsi
-  if (typeof r !== 'number') return null
-  const rsiScore = clamp2(((r - 30) / 40) * 100, 0, 100)
-  return scoreToPts2(rsiScore)
-}
-function deriveMacdPoints2(macd?: MacdResp2, ma?: MaCrossResp2): number | null {
-  const hist = macd?.hist
-  const ma50 = ma?.ma50 ?? null
-  if (typeof hist !== 'number') return null
-  if (ma50 && ma50 > 0) {
-    const t = 0.01 // 1% van MA50
-    const relClamped = clamp2((hist / ma50) / t, -1, 1)
-    const macdScore = 50 + relClamped * 20 // 30..70
-    return scoreToPts2(macdScore)
-  }
-  const macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
-  return scoreToPts2(macdScore)
-}
-function deriveVolPoints2(vol?: Vol20Resp2): number | null {
-  const ratio = vol?.ratio
-  if (typeof ratio !== 'number') return null
-  const delta = clamp2((ratio - 1) / 1, -1, 1)
-  const volScore = clamp2(50 + delta * 30, 0, 100)
-  return scoreToPts2(volScore)
-}
-
-// Prefer API points/status; else derive
-const toPtsSmart2 = (
-  status?: Advice | string,
-  pts?: number | string | null,
-  fallback: () => number | null = () => null
-) => {
-  if (isFiniteNum2(pts)) return clamp2(toNum2(pts), -2, 2)
-  const s = String(status || '').toUpperCase()
-  if (s === 'BUY')  return  2
-  if (s === 'SELL') return -2
-  const f = fallback()
-  return f == null ? 0 : clamp2(f, -2, 2)
-}
-
-async function calcScoreForSymbol2(symbol: string): Promise<number | null> {
-  try {
-    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-    ])
-    if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-    const [ma, rsi, macd, vol] = await Promise.all([
-      rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-    ]) as [MaCrossResp2, RsiResp2, MacdResp2, Vol20Resp2]
-
-    const pMA   = toPtsSmart2(ma?.status,   ma?.points,   () => deriveMaPoints2(ma))
-    const pMACD = toPtsSmart2(macd?.status, macd?.points, () => deriveMacdPoints2(macd, ma))
-    const pRSI  = toPtsSmart2(rsi?.status,  rsi?.points,  () => deriveRsiPoints2(rsi))
-    const pVOL  = toPtsSmart2(vol?.status,  vol?.points,  () => deriveVolPoints2(vol))
-
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    const pct = clamp2(Math.round(agg * 100), 0, 100)
     return pct
   } catch {
     return null
@@ -543,28 +365,24 @@ export default function Homepage() {
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
-  /* ---------- WARM-UP CACHE (NIEUW) ----------
-     Doel: bij eerste bezoek alvast de home-cards berekenen en in localStorage zetten,
-     zodat de UI direct uit cache kan renderen bij volgende navigaties/verversingen. */
+  /* ---------- WARM-UP CACHE ---------- */
   useEffect(() => {
     let aborted = false
     const ric = (cb: () => void) => {
       if (typeof window === 'undefined') return
-      // requestIdleCallback polyfill
       const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      if (_ric) _ric(cb, { timeout: 1500 })
+      if (_ric) _ric(cb, { timeout: 100 }) // ⬅ 1500 → 100
       else setTimeout(cb, 0)
     }
 
     ric(async () => {
       try {
-        // Sla niets over als er recent al cache is
         const hadEqBuy  = !!getCache<ScoredEq[]>('home:eq:topBuy')
         const hadEqSell = !!getCache<ScoredEq[]>('home:eq:topSell')
         const hadCBuy   = !!getCache<ScoredCoin[]>('home:coin:topBuy')
         const hadCSell  = !!getCache<ScoredCoin[]>('home:coin:topSell')
 
-        // Alleen warmen wat ontbreekt (scheelt bandbreedte)
+        // --- Equities warmen (zonder sleeps) ---
         if (!(hadEqBuy && hadEqSell)) {
           const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
           const outBuy: ScoredEq[] = []
@@ -576,9 +394,8 @@ export default function Homepage() {
             if (!cons.length) continue
             const symbols = cons.map(c => c.symbol)
 
-            const scores = await pool(symbols, 4, async (sym, idx) => {
-              if (idx) await sleep(40)
-              return await calcScoreForSymbol(sym) // gebruikt standaard fetch (CDN kan warmen)
+            const scores = await pool(symbols, 4, async (sym) => {
+              return await calcScoreForSymbol(sym) // cache: 'force-cache'
             })
 
             const rows = cons.map((c, i) => ({
@@ -603,22 +420,20 @@ export default function Homepage() {
           }
         }
 
+        // --- Crypto warmen (force-cache op indicators) ---
         if (!(hadCBuy && hadCSell)) {
-          // Warm crypto top-lijsten
           const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
             .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
             .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
           const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-            if (aborted) return { symbol: c.symbol, name: c.name, score: null as any }
             try {
               const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-              const r = await fetch(url, { cache: 'no-store' })
+              const r = await fetch(url, { cache: 'force-cache' }) // ⬅ force-cache
               if (!r.ok) throw new Error(`HTTP ${r.status}`)
               const j = await r.json() as { results?: IndResp[] }
               const ind = (j.results || [])[0]
               const { score } = overallScore(ind)
-              // Schrijf ook per-pair mini cache zoals detailpagina's gebruiken
               try {
                 localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() }))
               } catch {}
@@ -642,7 +457,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  // SWR warm-up (news)
+  // SWR warm-up (news) – blijft no-store
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -709,13 +524,13 @@ export default function Homepage() {
         const cacheKeyBuy  = 'home:eq:topBuy'
         const cacheKeySell = 'home:eq:topSell'
 
-        // 1) probeer cache
+        // 1) cache tonen
         const cachedBuy  = getCache<ScoredEq[]>(cacheKeyBuy)
         const cachedSell = getCache<ScoredEq[]>(cacheKeySell)
         if (cachedBuy)  setTopBuy(cachedBuy)
         if (cachedSell) setTopSell(cachedSell)
 
-        // 2) altijd (op achtergrond) opnieuw berekenen
+        // 2) opnieuw berekenen op achtergrond (zonder sleeps)
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
 
@@ -724,9 +539,8 @@ export default function Homepage() {
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
 
-          const scores = await pool(symbols, 4, async (sym, idx) => {
-            if (idx) await sleep(60)
-            return await calcScoreForSymbol(sym)
+          const scores = await pool(symbols, 4, async (sym) => {
+            return await calcScoreForSymbol(sym) // cache: 'force-cache'
           })
 
           const rows = cons.map((c, i) => ({
@@ -779,40 +593,32 @@ export default function Homepage() {
         if (cB) setCoinTopBuy(cB)
         if (cS) setCoinTopSell(cS)
 
-        // pairs bouwen
         const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
           .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
           .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-        // LocalStorage quick-path (bijv. vanuit detailpagina)
-        const lsScores: Record<string, number> = {}
-        try {
-          if (typeof window !== 'undefined') {
-            pairs.forEach(({ pair }) => {
-              const raw = localStorage.getItem(`ta:${pair}`)
-              if (raw) {
-                const j = JSON.parse(raw) as { score?: number; ts?: number }
-                if (Number.isFinite(j?.score) && (Date.now() - (j.ts||0) < TTL_MS)) {
-                  lsScores[pair] = Math.round(Number(j.score))
-                }
-              }
-            })
-          }
-        } catch {}
-
-        // Indicators ophalen
+        // Indicators ophalen (force-cache i.p.v. no-store)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-            const r = await fetch(url, { cache: 'no-store' })
+            const r = await fetch(url, { cache: 'force-cache' }) // ⬅ force-cache
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
             const ind = (j.results || [])[0]
             const { score } = overallScore(ind)
             return { symbol: c.symbol, name: c.name, score }
           } catch {
-            const sLS = lsScores[pair]
-            return { symbol: c.symbol, name: c.name, score: Number.isFinite(sLS) ? sLS : (null as any) }
+            // quick-path met eventueel lokale score (ongewijzigd)
+            try {
+              const raw = localStorage.getItem(`ta:${pair}`)
+              if (raw) {
+                const jj = JSON.parse(raw) as { score?: number; ts?: number }
+                if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
+                  return { symbol: c.symbol, name: c.name, score: Math.round(Number(jj.score)) }
+                }
+              }
+            } catch {}
+            return { symbol: c.symbol, name: c.name, score: (null as any) }
           }
         })
 
@@ -898,7 +704,6 @@ export default function Homepage() {
     }
   }
 
-  /* ---- helper: compacte nieuws-lijst met favicon ---- */
   const renderNews = (items: NewsItem[], keyPrefix: string) => (
     <ul className="grid gap-2">
       {items.length === 0 ? (
@@ -937,11 +742,9 @@ export default function Homepage() {
     </ul>
   )
 
-  /* ---- link helpers (klikbaar) ---- */
   const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
   const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
 
-  /* ---------------- render ---------------- */
   return (
     <>
       <Head>
