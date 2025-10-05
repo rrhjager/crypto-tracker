@@ -1,4 +1,4 @@
-// src/components/Footer.tsx
+// File: src/components/Footer.tsx
 import Link from 'next/link'
 import React from 'react'
 
@@ -9,9 +9,8 @@ export default function Footer() {
 
   function openCookieSettings(e: React.MouseEvent) {
     e.preventDefault()
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('cookie:open'))
-    }
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent('cookie:open'))
   }
 
   return (
@@ -79,6 +78,8 @@ export default function Footer() {
             <div className={head}>About us</div>
             <ul className="mt-3 space-y-2 text-sm">
               <li><Link className={a} href="/about">About us</Link></li>
+              {/* ✅ Nieuw: Contact us-link direct onder About us */}
+              <li><Link className={a} href="/contact">Contact us</Link></li>
             </ul>
           </div>
 
