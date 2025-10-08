@@ -99,7 +99,7 @@ export default function Footer() {
         {/* bottom */}
         <div className="mt-10 pt-6 border-t flex items-center justify-between" style={{ borderColor: '#2b2b2b' }}>
           <div className="text-sm text-gray-400">
-            © {year} SignalHub. All rights reserved
+            © {year} SignalHub. All rights reserved.
           </div>
 
           <div className="text-sm">
