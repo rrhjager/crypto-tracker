@@ -371,7 +371,7 @@ export default function Homepage() {
     const ric = (cb: () => void) => {
       if (typeof window === 'undefined') return
       const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      if (_ric) _ric(cb, { timeout: 100 }) // ⬅ 1500 → 100
+      if (_ric) _ric(cb, { timeout: 100 })
       else setTimeout(cb, 0)
     }
 
@@ -384,18 +384,18 @@ export default function Homepage() {
 
         // --- Equities warmen (zonder sleeps) ---
         if (!(hadEqBuy && hadEqSell)) {
-          const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+          const WARM_MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
           const outBuy: ScoredEq[] = []
           const outSell: ScoredEq[] = []
 
-          for (const market of MARKET_ORDER) {
+          for (const market of WARM_MARKET_ORDER) {
             if (aborted) return
             const cons = constituentsForMarket(market)
             if (!cons.length) continue
             const symbols = cons.map(c => c.symbol)
 
             const scores = await pool(symbols, 4, async (sym) => {
-              return await calcScoreForSymbol(sym) // cache: 'force-cache'
+              return await calcScoreForSymbol(sym)
             })
 
             const rows = cons.map((c, i) => ({
@@ -410,8 +410,7 @@ export default function Homepage() {
             }
           }
 
-          const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-          const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+          const order = (m: MarketLabel) => WARM_MARKET_ORDER.indexOf(m)
           const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
           const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
           if (!aborted) {
@@ -429,7 +428,7 @@ export default function Homepage() {
           const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
             try {
               const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-              const r = await fetch(url, { cache: 'force-cache' }) // ⬅ force-cache
+              const r = await fetch(url, { cache: 'force-cache' })
               if (!r.ok) throw new Error(`HTTP ${r.status}`)
               const j = await r.json() as { results?: IndResp[] }
               const ind = (j.results || [])[0]
@@ -601,14 +600,14 @@ export default function Homepage() {
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-            const r = await fetch(url, { cache: 'force-cache' }) // ⬅ force-cache
+            const r = await fetch(url, { cache: 'force-cache' })
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
             const ind = (j.results || [])[0]
             const { score } = overallScore(ind)
             return { symbol: c.symbol, name: c.name, score }
           } catch {
-            // quick-path met eventueel lokale score (ongewijzigd)
+            // quick-path met evt. lokale score
             try {
               const raw = localStorage.getItem(`ta:${pair}`)
               if (raw) {
