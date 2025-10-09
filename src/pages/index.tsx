@@ -1,6 +1,7 @@
 // src/pages/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
+import Image from 'next/image'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
@@ -8,6 +9,7 @@ import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
+const HERO_IMG = '/images/hero-crypto-tracker.png'
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
 // compacter, uniform voor 9 tegels (~screenshot-hoogte)
 const CARD_CONTENT_H = 'h-[280px]'
@@ -663,12 +665,13 @@ export default function Homepage() {
 
   /* ========= Congress Trading (LIVE lijst) ========= */
   type CongressTrade = {
-    person?: string
-    ticker?: string
-    side?: 'BUY' | 'SELL' | string
-    amount?: string | number
-    price?: string | number | null
-    date?: string
+    person?: string;
+    ticker?: string;
+    side?: 'BUY' | 'SELL' | string;
+    amount?: string | number;
+    price?: string | number | null;
+    date?: string;
+    url?: string;
   }
   const [trades, setTrades] = useState<CongressTrade[]>([])
   const [tradesErr, setTradesErr] = useState<string | null>(null)
@@ -678,18 +681,20 @@ export default function Homepage() {
     ;(async () => {
       try {
         setTradesErr(null)
-        // Gebruik exact dezelfde endpoint als de Congress-pagina
-        const r = await fetch('/api/market/congress?limit=20', { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json() as { items?: any[] }
-        const arr = Array.isArray(j?.items) ? j.items : []
-        const norm: CongressTrade[] = arr.slice(0, 20).map((x: any) => ({
-          person: x.person || '',
-          ticker: String(x.ticker || '').toUpperCase(),
-          side: String(x.side || '—').toUpperCase(),
-          amount: x.amount || '—',
-          price: x.price ?? '—',
-          date: x.publishedISO || x.tradedISO || null,
+        // Zelfde endpoint/bron als de Congress-pagina
+        const res = await fetch('/api/intel/congress', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const j = await res.json()
+
+        const src = Array.isArray(j) ? j : (j?.items || j?.results || [])
+        const norm: CongressTrade[] = (src || []).map((x: any) => ({
+          person: x.person || x.politician || x.member || x.name || '',
+          ticker: String(x.ticker || x.symbol || '').toUpperCase(),
+          side: String(x.side || x.action || '').toUpperCase(),
+          amount: x.amount ?? x.value ?? x.size ?? x.amountRange ?? '',
+          price: x.price ?? x.avgPrice ?? x.fillPrice ?? null,
+          date: x.date || x.tradeDate || x.disclosedAt || '',
+          url: x.url || x.link || '',
         }))
         if (!aborted) setTrades(norm)
       } catch (e: any) {
@@ -811,27 +816,23 @@ export default function Homepage() {
         {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-4 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1. Intro (image removed, English copy, About link) */}
+          {/* 1. Intro / uitleg (EN + About) */}
           <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
             <h2 className="text-lg font-semibold mb-2">Cut the noise. Catch the signal.</h2>
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
                 <p>
-                  SignalHub provides a clean, actionable view of crypto and
-                  equities — built for clarity and speed. Less noise, more
-                  direction: momentum, volume, and trend in one place.
+                  SignalHub provides a clean, actionable view of crypto and equities — built for clarity and speed.
+                  Less noise, more direction: momentum, volume, and trend in one place.
                 </p>
                 <ul className="list-disc list-inside text-white/70 space-y-1">
                   <li>Universal BUY / HOLD / SELL scores</li>
                   <li>Fast cache & smart warm-up</li>
                   <li>Global indices + top crypto coverage</li>
                 </ul>
-                <div className="pt-1 flex gap-2">
+                <div className="pt-1">
                   <Link href="/about" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition">
                     About us →
-                  </Link>
-                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition">
-                    Open crypto →
                   </Link>
                 </div>
               </div>
@@ -947,7 +948,7 @@ export default function Homepage() {
             </ul>
           </div>
 
-          {/* 6. Congress Trading — LIVE (zelfde endpoint als /intel) */}
+          {/* 6. Congress Trading — LIVE */}
           <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Congress Trading — Latest</h2>
@@ -971,20 +972,22 @@ export default function Homepage() {
                   <li
                     key={`tr-${i}-${t.person}-${t.ticker}`}
                     className="grid grid-cols-12 items-center gap-2 py-2 px-1 rounded hover:bg-white/5 transition"
-                    title={t?.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
+                    title={t.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
                   >
                     <div className="col-span-4 min-w-0 truncate">
-                      <span>{t.person || '-'}</span>
+                      {t.url ? (
+                        <a href={t.url} target="_blank" rel="noreferrer" className="hover:underline">{t.person || '-'}</a>
+                      ) : <span>{t.person || '-'}</span>}
                     </div>
                     <div className="col-span-3 font-medium">
                       {t.ticker || '-'}
                     </div>
-                    <div className={`col-span-2 text-xs font-semibold ${String(t.side).toUpperCase()==='BUY' ? 'text-emerald-600' : String(t.side).toUpperCase()==='SELL' ? 'text-rose-600' : 'text-white/70'}`}>
+                    <div className={`col-span-2 text-xs font-semibold ${String(t.side).toUpperCase()==='BUY' ? 'text-emerald-400' : String(t.side).toUpperCase()==='SELL' ? 'text-rose-400' : 'text-white/70'}`}>
                       {String(t.side || '-').toUpperCase()}
                     </div>
                     <div className="col-span-3 text-right text-sm">
                       <span className="text-white/80">{t.amount || '-'}</span>
-                      {t.price != null && t.price !== '' && t.price !== '—' && (
+                      {t.price != null && t.price !== '' && (
                         <span className="text-white/50 ml-1">• {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : t.price}</span>
                       )}
                     </div>
