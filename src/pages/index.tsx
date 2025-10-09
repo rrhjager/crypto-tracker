@@ -368,7 +368,12 @@ export default function Homepage() {
     const ric = (cb: () => void) => {
       if (typeof window === 'undefined') return
       const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      if (_ric) _ric(cb, { timeout: 100 }) else setTimeout(cb, 0)
+      // FIX (optie A): accolades gebruiken
+      if (_ric) {
+        _ric(cb, { timeout: 100 })
+      } else {
+        setTimeout(cb, 0)
+      }
     }
 
     ric(async () => {
