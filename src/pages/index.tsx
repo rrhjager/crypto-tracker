@@ -11,7 +11,8 @@ import ScoreBadge from '@/components/ScoreBadge'
 /* ---------------- config ---------------- */
 const HERO_IMG = '/images/hero-crypto-tracker.png'
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
-const CARD_CONTENT_H = 'h-[360px]' // uniforme hoogte voor 9 tegels
+// compacter, uniform voor 9 tegels (~screenshot-hoogte)
+const CARD_CONTENT_H = 'h-[280px]'
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -368,7 +369,6 @@ export default function Homepage() {
     const ric = (cb: () => void) => {
       if (typeof window === 'undefined') return
       const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      // FIX (optie A): accolades gebruiken
       if (_ric) {
         _ric(cb, { timeout: 100 })
       } else {
@@ -383,6 +383,7 @@ export default function Homepage() {
         const hadCBuy   = !!getCache<ScoredCoin[]>('home:coin:topBuy')
         const hadCSell  = !!getCache<ScoredCoin[]>('home:coin:topSell')
 
+        // --- Equities warmen ---
         if (!(hadEqBuy && hadEqSell)) {
           const WARM_MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
           const outBuy: ScoredEq[] = []
@@ -416,6 +417,7 @@ export default function Homepage() {
           }
         }
 
+        // --- Crypto warmen ---
         if (!(hadCBuy && hadCSell)) {
           const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
             .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
@@ -661,6 +663,64 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
+  /* ========= Congress Trading (LIVE lijst) ========= */
+  type CongressTrade = {
+    person?: string; // naam politicus
+    ticker?: string; // TSLA, AAPL, ...
+    side?: 'BUY' | 'SELL' | string;
+    amount?: string | number; // 5K-25K of numeriek
+    price?: string | number | null;
+    date?: string;
+    url?: string;
+  }
+  const [trades, setTrades] = useState<CongressTrade[]>([])
+  const [tradesErr, setTradesErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let aborted = false
+    ;(async () => {
+      try {
+        setTradesErr(null)
+        // Probeer meerdere bekende paden — we gebruiken de eerste die werkt.
+        const CANDIDATES = [
+          '/api/intel/congress/latest?limit=20',
+          '/api/congress/latest?limit=20',
+          '/api/congress-trades/latest?limit=20',
+          '/api/usa/congress/latest?limit=20',
+        ]
+        let okData: any = null
+        for (const url of CANDIDATES) {
+          try {
+            const r = await fetch(url, { cache: 'no-store' })
+            if (!r.ok) continue
+            const j = await r.json()
+            if (j && (Array.isArray(j) || Array.isArray(j?.items) || Array.isArray(j?.results))) {
+              okData = j
+              break
+            }
+          } catch {}
+        }
+        const arr = (Array.isArray(okData) ? okData
+          : Array.isArray(okData?.items) ? okData.items
+          : Array.isArray(okData?.results) ? okData.results : []) as any[]
+
+        const norm: CongressTrade[] = (arr || []).slice(0, 20).map((x: any) => ({
+          person: x.person || x.politician || x.member || x.name || '',
+          ticker: (x.ticker || x.symbol || '').toUpperCase(),
+          side: String(x.side || x.action || '').toUpperCase(),
+          amount: x.amount || x.value || x.size || x.amountRange || '',
+          price: x.price ?? x.avgPrice ?? x.fillPrice ?? null,
+          date: x.date || x.tradeDate || x.disclosedAt || '',
+          url: x.url || x.link || '',
+        }))
+        if (!aborted) setTrades(norm)
+      } catch (e: any) {
+        if (!aborted) setTradesErr(String(e?.message || e))
+      }
+    })()
+    return () => { aborted = true }
+  }, [])
+
   /* ---- helpers voor nieuws (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
     return (s || '')
@@ -728,7 +788,7 @@ export default function Homepage() {
         return (
           <li
             key={`${keyPrefix}${i}`}
-            className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
+            className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
           >
             {favicon ? (
               <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
@@ -769,40 +829,29 @@ export default function Homepage() {
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
-      <main className="max-w-screen-2xl mx-auto px-4 pt-10 pb-16">
+      <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-4 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1. Intro / uitleg */}
-          <div className="table-card p-5 flex flex-col">
-            <h2 className="text-lg font-semibold mb-3">Cut the noise. Catch the signal.</h2>
+          {/* 1. Intro / uitleg (plaatje verwijderd) */}
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <h2 className="text-lg font-semibold mb-2">Cut the noise. Catch the signal.</h2>
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="text-white/80 space-y-3">
-                  <p>
-                    SignalHub geeft je een clean, actionable view van crypto & aandelen.
-                    Minder ruis, meer richting: momentum, volume, sentiment & context.
-                  </p>
-                  <ul className="list-disc list-inside text-white/70 space-y-1">
-                    <li>Universele BUY/HOLD/SELL scores</li>
-                    <li>Snelle cache & slimme warm-up</li>
-                    <li>Globale indices + top crypto’s</li>
-                  </ul>
-                </div>
-                <Image
-                  src={HERO_IMG}
-                  alt="SignalHub"
-                  width={1280}
-                  height={960}
-                  priority
-                  unoptimized
-                  className="w-full h-auto rounded-md"
-                />
-                <div className="flex gap-2">
-                  <Link href="/crypto" className="btn btn-primary px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white">
+              <div className="text-white/80 space-y-3 leading-relaxed">
+                <p>
+                  SignalHub geeft je een clean, actionable view van crypto & aandelen.
+                  Minder ruis, meer richting: momentum, volume, sentiment & context.
+                </p>
+                <ul className="list-disc list-inside text-white/70 space-y-1">
+                  <li>Universele BUY/HOLD/SELL scores</li>
+                  <li>Snelle cache & slimme warm-up</li>
+                  <li>Globale indices + top crypto’s</li>
+                </ul>
+                <div className="pt-1 flex gap-2">
+                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition">
                     Open Crypto →
                   </Link>
-                  <Link href="/aex" className="btn px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white">
+                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition">
                     Open AEX →
                   </Link>
                 </div>
@@ -811,8 +860,8 @@ export default function Homepage() {
           </div>
 
           {/* 2. Crypto — Top BUY */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Crypto — Top 5 BUY</h2>
               <Link href="/crypto" className="text-sm text-white/70 hover:text-white">All crypto →</Link>
             </div>
@@ -820,7 +869,7 @@ export default function Homepage() {
               {coinTopBuy.length===0 ? (
                 <li className="py-3 text-white/60">No data yet…</li>
               ) : coinTopBuy.map((r)=>(
-                <li key={`cb-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <li key={`cb-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
                   <div className="truncate">
                     <div className="font-medium truncate">
                       <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
@@ -838,8 +887,8 @@ export default function Homepage() {
           </div>
 
           {/* 3. Crypto — Top SELL */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Crypto — Top 5 SELL</h2>
               <Link href="/crypto" className="text-sm text-white/70 hover:text-white">All crypto →</Link>
             </div>
@@ -847,7 +896,7 @@ export default function Homepage() {
               {coinTopSell.length===0 ? (
                 <li className="py-3 text-white/60">No data yet…</li>
               ) : coinTopSell.map((r)=>(
-                <li key={`cs-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <li key={`cs-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
                   <div className="truncate">
                     <div className="font-medium truncate">
                       <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
@@ -866,8 +915,8 @@ export default function Homepage() {
 
           {/* -------- Row 2 -------- */}
           {/* 4. Equities — Top BUY */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Equities — Top BUY</h2>
               <Link href="/sp500" className="text-sm text-white/70 hover:text-white">Browse markets →</Link>
             </div>
@@ -875,7 +924,7 @@ export default function Homepage() {
               {topBuy.length===0 ? (
                 <li className="py-3 text-white/60">No data yet…</li>
               ) : topBuy.map((r)=>(
-                <li key={`bb-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <li key={`bb-${r.market}-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
                   <div className="min-w-0">
                     <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
                     <div className="font-medium truncate">
@@ -893,8 +942,8 @@ export default function Homepage() {
           </div>
 
           {/* 5. Equities — Top SELL */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Equities — Top SELL</h2>
               <Link href="/sp500" className="text-sm text-white/70 hover:text-white">Browse markets →</Link>
             </div>
@@ -902,7 +951,7 @@ export default function Homepage() {
               {topSell.length===0 ? (
                 <li className="py-3 text-white/60">No data yet…</li>
               ) : topSell.map((r)=>(
-                <li key={`bs-${r.market}-${r.symbol}`} className="py-2 flex items-center justify-between gap-3">
+                <li key={`bs-${r.market}-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
                   <div className="min-w-0">
                     <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
                     <div className="font-medium truncate">
@@ -919,35 +968,59 @@ export default function Homepage() {
             </ul>
           </div>
 
-          {/* 6. Congress Trading (nieuw) */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-semibold">Congress Trading</h2>
+          {/* 6. Congress Trading — LIVE */}
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-semibold">Congress Trading — Latest</h2>
               <Link href="/intel" className="text-sm text-white/70 hover:text-white">Open dashboard →</Link>
             </div>
-            <div className={`space-y-3 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              <p className="text-white/80">
-                Bekijk recente aankopen/verkopen van Amerikaanse congresleden, gefilterd op
-                sector/bedrijf. Dezelfde dataset als op het Intel-dashboard.
-              </p>
-              <ul className="text-sm grid gap-2">
-                <li><Link href="/intel" className="block p-2 rounded bg-white/5 hover:bg-white/10">Congress trading overview</Link></li>
-                <li><Link href="/intel/hedgefunds" className="block p-2 rounded bg-white/5 hover:bg-white/10">Hedge funds</Link></li>
-                <li><Link href="/intel/sectors" className="block p-2 rounded bg-white/5 hover:bg-white/10">Sectors heatmap</Link></li>
-                <li><Link href="/intel/macro" className="block p-2 rounded bg-white/5 hover:bg-white/10">Macro calendar</Link></li>
-              </ul>
-              <div className="pt-2">
-                <Link href="/intel" className="inline-flex items-center px-3 py-2 rounded-md bg-white/10 hover:bg-white/20">
-                  Explore trades →
-                </Link>
+
+            <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {tradesErr && <div className="text-xs text-red-300 mb-2">Error: {tradesErr}</div>}
+
+              <div className="grid grid-cols-12 text-xs text-white/60 px-1 pb-1">
+                <div className="col-span-4">Person</div>
+                <div className="col-span-3">Ticker</div>
+                <div className="col-span-2">Side</div>
+                <div className="col-span-3 text-right">Amount / Price</div>
               </div>
+
+              <ul className="divide-y divide-white/10">
+                {trades.length === 0 ? (
+                  <li className="py-3 text-white/60">No trades…</li>
+                ) : trades.slice(0, 12).map((t, i) => (
+                  <li
+                    key={`tr-${i}-${t.person}-${t.ticker}`}
+                    className="grid grid-cols-12 items-center gap-2 py-2 px-1 rounded hover:bg-white/5 transition"
+                    title={t.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
+                  >
+                    <div className="col-span-4 min-w-0 truncate">
+                      {t.url ? (
+                        <a href={t.url} target="_blank" rel="noreferrer" className="hover:underline">{t.person || '-'}</a>
+                      ) : <span>{t.person || '-'}</span>}
+                    </div>
+                    <div className="col-span-3 font-medium">
+                      {t.ticker || '-'}
+                    </div>
+                    <div className={`col-span-2 text-xs font-semibold ${String(t.side).toUpperCase()==='BUY' ? 'text-emerald-400' : String(t.side).toUpperCase()==='SELL' ? 'text-rose-400' : 'text-white/70'}`}>
+                      {String(t.side || '-').toUpperCase()}
+                    </div>
+                    <div className="col-span-3 text-right text-sm">
+                      <span className="text-white/80">{t.amount || '-'}</span>
+                      {t.price != null && t.price !== '' && (
+                        <span className="text-white/50 ml-1">• {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : t.price}</span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
 
           {/* -------- Row 3 -------- */}
           {/* 7. Crypto News */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Crypto News</h2>
               <Link href="/crypto" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
             </div>
@@ -955,24 +1028,24 @@ export default function Homepage() {
           </div>
 
           {/* 8. Equities News */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Equities News</h2>
               <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
             </div>
             {renderNews(newsEq, 'nE')}
           </div>
 
-          {/* 9. Academy Overview (nieuw) */}
-          <div className="table-card p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          {/* 9. Academy Overview */}
+          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Academy</h2>
               <Link href="/academy" className="text-sm text-white/70 hover:text-white">All articles →</Link>
             </div>
             <ul className={`text-sm grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {academy.map((a, i) => (
                 <li key={`ac-${i}`}>
-                  <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10">
+                  <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10 transition">
                     {a.title}
                   </Link>
                 </li>
