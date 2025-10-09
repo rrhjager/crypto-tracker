@@ -9,7 +9,7 @@ import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
-// compacter, uniform voor 9 tegels (~screenshot-hoogte)
+// compact: ongeveer als je screenshot
 const CARD_CONTENT_H = 'h-[280px]'
 
 /* ---------------- types ---------------- */
@@ -367,11 +367,7 @@ export default function Homepage() {
     const ric = (cb: () => void) => {
       if (typeof window === 'undefined') return
       const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      if (_ric) {
-        _ric(cb, { timeout: 100 })
-      } else {
-        setTimeout(cb, 0)
-      }
+      if (_ric) _ric(cb, { timeout: 100 }); else setTimeout(cb, 0)
     }
 
     ric(async () => {
@@ -381,7 +377,6 @@ export default function Homepage() {
         const hadCBuy   = !!getCache<ScoredCoin[]>('home:coin:topBuy')
         const hadCSell  = !!getCache<ScoredCoin[]>('home:coin:topSell')
 
-        // --- Equities warmen ---
         if (!(hadEqBuy && hadEqSell)) {
           const WARM_MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
           const outBuy: ScoredEq[] = []
@@ -392,7 +387,6 @@ export default function Homepage() {
             const cons = constituentsForMarket(market)
             if (!cons.length) continue
             const symbols = cons.map(c => c.symbol)
-
             const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
             const rows = cons.map((c, i) => ({
               symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
@@ -415,13 +409,12 @@ export default function Homepage() {
           }
         }
 
-        // --- Crypto warmen ---
         if (!(hadCBuy && hadCSell)) {
           const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
             .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
             .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-          const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
+          await pool(pairs, 8, async ({ c, pair }) => {
             try {
               const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
               const r = await fetch(url, { cache: 'force-cache' })
@@ -435,14 +428,6 @@ export default function Homepage() {
               return { symbol: c.symbol, name: c.name, score: null as any }
             }
           })
-
-          const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
-          const buys  = [...rows].sort((a,b)=> b.score - a.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
-          const sells = [...rows].sort((a,b)=> a.score - b.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
-          if (!aborted) {
-            if (!hadCBuy)  setCache('home:coin:topBuy',  buys)
-            if (!hadCSell) setCache('home:coin:topSell', sells)
-          }
         }
       } catch {}
     })
@@ -507,13 +492,11 @@ export default function Homepage() {
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
   const [topSell, setTopSell] = useState<ScoredEq[]>([])
-  const [scoreErr, setScoreErr] = useState<string | null>(null)
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setScoreErr(null)
         const cacheKeyBuy  = 'home:eq:topBuy'
         const cacheKeySell = 'home:eq:topSell'
 
@@ -529,7 +512,6 @@ export default function Homepage() {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
-
           const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
           const rows = cons.map((c, i) => ({
             symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
@@ -553,9 +535,7 @@ export default function Homepage() {
           setCache(cacheKeyBuy, finalBuy)
           setCache(cacheKeySell, finalSell)
         }
-      } catch (e: any) {
-        if (!aborted) setScoreErr(String(e?.message || e))
-      }
+      } catch {}
     })()
     return () => { aborted = true }
   }, [])
@@ -565,14 +545,11 @@ export default function Homepage() {
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
-  const [coinErr, setCoinErr] = useState<string | null>(null)
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setCoinErr(null)
-
         const cacheKeyB = 'home:coin:topBuy'
         const cacheKeyS = 'home:coin:topSell'
         const cB = getCache<ScoredCoin[]>(cacheKeyB)
@@ -622,9 +599,7 @@ export default function Homepage() {
           setCache(cacheKeyB, buys)
           setCache(cacheKeyS, sells)
         }
-      } catch (e:any) {
-        if (!aborted) setCoinErr(String(e?.message || e))
-      }
+      } catch {}
     })()
     return () => { aborted = true }
   }, [])
@@ -664,32 +639,42 @@ export default function Homepage() {
   /* ========= Congress Trading (LIVE lijst) ========= */
   type CongressTrade = {
     person?: string
-    ticker?: string
+    ticker?: string // kan "COMPANY\nSYM:EX" bevatten
     side?: 'BUY' | 'SELL' | string
     amount?: string | number
     price?: string | number | null
     date?: string
+    url?: string
   }
   const [trades, setTrades] = useState<CongressTrade[]>([])
   const [tradesErr, setTradesErr] = useState<string | null>(null)
+
+  // helper: split "COMPANY\nSYM:EX" -> { name, code }
+  function splitIssuerCell(s?: string) {
+    const raw = String(s || '')
+    const [line1, line2] = raw.split(/\r?\n/).map(t => t.trim())
+    if (line2) return { name: line1, code: line2 }
+    return { name: raw, code: '' }
+  }
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
         setTradesErr(null)
-        // Gebruik exact dezelfde endpoint als de Congress-pagina
+        // exact dezelfde bron als je /intel pagina:
         const r = await fetch('/api/market/congress?limit=20', { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json() as { items?: any[] }
-        const arr = Array.isArray(j?.items) ? j.items : []
-        const norm: CongressTrade[] = arr.slice(0, 20).map((x: any) => ({
+        const j = await r.json()
+        const arr = (j?.items || []) as any[]
+        const norm: CongressTrade[] = arr.map((x: any) => ({
           person: x.person || '',
-          ticker: String(x.ticker || '').toUpperCase(),
-          side: String(x.side || '—').toUpperCase(),
-          amount: x.amount || '—',
-          price: x.price ?? '—',
-          date: x.publishedISO || x.tradedISO || null,
+          ticker: x.ticker || '',
+          side: String(x.side || '').toUpperCase(),
+          amount: x.amount || '',
+          price: x.price ?? null,
+          date: x.publishedISO || x.tradedISO || '',
+          url: x.url || '',
         }))
         if (!aborted) setTrades(norm)
       } catch (e: any) {
@@ -699,7 +684,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ---- helpers voor nieuws (favicon + decode + source→domain fallback) ---- */
+  /* ---- helpers voor nieuws ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -802,7 +787,10 @@ export default function Homepage() {
     <>
       <Head>
         <title>SignalHub — Clarity in Markets</title>
-        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
+        <meta
+          name="description"
+          content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view."
+        />
         <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
@@ -811,7 +799,7 @@ export default function Homepage() {
         {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-4 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1. Intro (image removed, English copy, About link) */}
+          {/* 1. Intro / text-only (EN) */}
           <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
             <h2 className="text-lg font-semibold mb-2">Cut the noise. Catch the signal.</h2>
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
@@ -947,7 +935,7 @@ export default function Homepage() {
             </ul>
           </div>
 
-          {/* 6. Congress Trading — LIVE (zelfde endpoint als /intel) */}
+          {/* 6. Congress Trading — Latest (compact typography) */}
           <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-semibold">Congress Trading — Latest</h2>
@@ -955,41 +943,68 @@ export default function Homepage() {
             </div>
 
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {tradesErr && <div className="text-xs text-red-300 mb-2">Error: {tradesErr}</div>}
+              {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
 
-              <div className="grid grid-cols-12 text-xs text-white/60 px-1 pb-1">
+              {/* header-row */}
+              <div className="grid grid-cols-12 text-[11px] text-white/60 px-1 pb-1">
                 <div className="col-span-4">Person</div>
-                <div className="col-span-3">Ticker</div>
+                <div className="col-span-4">Ticker</div>
                 <div className="col-span-2">Side</div>
-                <div className="col-span-3 text-right">Amount / Price</div>
+                <div className="col-span-2 text-right">Amount / Price</div>
               </div>
 
               <ul className="divide-y divide-white/10">
                 {trades.length === 0 ? (
-                  <li className="py-3 text-white/60">No trades…</li>
-                ) : trades.slice(0, 12).map((t, i) => (
-                  <li
-                    key={`tr-${i}-${t.person}-${t.ticker}`}
-                    className="grid grid-cols-12 items-center gap-2 py-2 px-1 rounded hover:bg-white/5 transition"
-                    title={t?.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
-                  >
-                    <div className="col-span-4 min-w-0 truncate">
-                      <span>{t.person || '-'}</span>
-                    </div>
-                    <div className="col-span-3 font-medium">
-                      {t.ticker || '-'}
-                    </div>
-                    <div className={`col-span-2 text-xs font-semibold ${String(t.side).toUpperCase()==='BUY' ? 'text-emerald-600' : String(t.side).toUpperCase()==='SELL' ? 'text-rose-600' : 'text-white/70'}`}>
-                      {String(t.side || '-').toUpperCase()}
-                    </div>
-                    <div className="col-span-3 text-right text-sm">
-                      <span className="text-white/80">{t.amount || '-'}</span>
-                      {t.price != null && t.price !== '' && t.price !== '—' && (
-                        <span className="text-white/50 ml-1">• {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : t.price}</span>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                  <li className="py-3 text-white/60 text-sm">No trades…</li>
+                ) : trades.slice(0, 12).map((t, i) => {
+                  const { name, code } = splitIssuerCell(t.ticker)
+                  const side = String(t.side || '-').toUpperCase()
+                  const sideClr =
+                    side === 'BUY' ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/20' :
+                    side === 'SELL' ? 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-400/20' :
+                    'bg-white/5 text-white/70 ring-1 ring-white/10'
+                  return (
+                    <li
+                      key={`tr-${i}-${t.person}-${t.ticker}`}
+                      className="grid grid-cols-12 items-center gap-2 py-2 px-1 rounded hover:bg-white/5 transition"
+                      title={t.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
+                    >
+                      {/* Person */}
+                      <div className="col-span-4 min-w-0">
+                        {t.url ? (
+                          <a href={t.url} target="_blank" rel="noreferrer" className="text-[12px] text-white/90 hover:underline truncate">
+                            {t.person || '-'}
+                          </a>
+                        ) : (
+                          <span className="text-[12px] text-white/90 truncate">{t.person || '-'}</span>
+                        )}
+                      </div>
+
+                      {/* Ticker (company + code stacked) */}
+                      <div className="col-span-4 min-w-0">
+                        <div className="text-[12px] font-medium leading-tight truncate">{name || code || '-'}</div>
+                        {code && <div className="text-[11px] text-white/50 leading-tight">{code}</div>}
+                      </div>
+
+                      {/* Side badge */}
+                      <div className="col-span-2">
+                        <span className={`inline-flex items-center justify-center px-2 py-[2px] rounded-full text-[10px] font-semibold ${sideClr}`}>
+                          {side}
+                        </span>
+                      </div>
+
+                      {/* Amount / Price */}
+                      <div className="col-span-2 text-right">
+                        <div className="text-[12px] text-white/80 leading-tight">{t.amount || '-'}</div>
+                        {t.price != null && t.price !== '' && (
+                          <div className="text-[11px] text-white/50 leading-tight">
+                            {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : String(t.price)}
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           </div>
