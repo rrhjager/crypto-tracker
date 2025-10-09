@@ -665,10 +665,10 @@ export default function Homepage() {
 
   /* ========= Congress Trading (LIVE lijst) ========= */
   type CongressTrade = {
-    person?: string; // naam politicus
-    ticker?: string; // TSLA, AAPL, ...
+    person?: string;
+    ticker?: string;
     side?: 'BUY' | 'SELL' | string;
-    amount?: string | number; // 5K-25K of numeriek
+    amount?: string | number;
     price?: string | number | null;
     date?: string;
     url?: string;
@@ -681,34 +681,17 @@ export default function Homepage() {
     ;(async () => {
       try {
         setTradesErr(null)
-        // Probeer meerdere bekende paden — we gebruiken de eerste die werkt.
-        const CANDIDATES = [
-          '/api/intel/congress/latest?limit=20',
-          '/api/congress/latest?limit=20',
-          '/api/congress-trades/latest?limit=20',
-          '/api/usa/congress/latest?limit=20',
-        ]
-        let okData: any = null
-        for (const url of CANDIDATES) {
-          try {
-            const r = await fetch(url, { cache: 'no-store' })
-            if (!r.ok) continue
-            const j = await r.json()
-            if (j && (Array.isArray(j) || Array.isArray(j?.items) || Array.isArray(j?.results))) {
-              okData = j
-              break
-            }
-          } catch {}
-        }
-        const arr = (Array.isArray(okData) ? okData
-          : Array.isArray(okData?.items) ? okData.items
-          : Array.isArray(okData?.results) ? okData.results : []) as any[]
+        // Zelfde endpoint/bron als de Congress-pagina
+        const res = await fetch('/api/intel/congress', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const j = await res.json()
 
-        const norm: CongressTrade[] = (arr || []).slice(0, 20).map((x: any) => ({
+        const src = Array.isArray(j) ? j : (j?.items || j?.results || [])
+        const norm: CongressTrade[] = (src || []).map((x: any) => ({
           person: x.person || x.politician || x.member || x.name || '',
-          ticker: (x.ticker || x.symbol || '').toUpperCase(),
+          ticker: String(x.ticker || x.symbol || '').toUpperCase(),
           side: String(x.side || x.action || '').toUpperCase(),
-          amount: x.amount || x.value || x.size || x.amountRange || '',
+          amount: x.amount ?? x.value ?? x.size ?? x.amountRange ?? '',
           price: x.price ?? x.avgPrice ?? x.fillPrice ?? null,
           date: x.date || x.tradeDate || x.disclosedAt || '',
           url: x.url || x.link || '',
@@ -833,26 +816,23 @@ export default function Homepage() {
         {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-4 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1. Intro / uitleg (plaatje verwijderd) */}
+          {/* 1. Intro / uitleg (EN + About) */}
           <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
             <h2 className="text-lg font-semibold mb-2">Cut the noise. Catch the signal.</h2>
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
                 <p>
-                  SignalHub geeft je een clean, actionable view van crypto & aandelen.
-                  Minder ruis, meer richting: momentum, volume, sentiment & context.
+                  SignalHub provides a clean, actionable view of crypto and equities — built for clarity and speed.
+                  Less noise, more direction: momentum, volume, and trend in one place.
                 </p>
                 <ul className="list-disc list-inside text-white/70 space-y-1">
-                  <li>Universele BUY/HOLD/SELL scores</li>
-                  <li>Snelle cache & slimme warm-up</li>
-                  <li>Globale indices + top crypto’s</li>
+                  <li>Universal BUY / HOLD / SELL scores</li>
+                  <li>Fast cache & smart warm-up</li>
+                  <li>Global indices + top crypto coverage</li>
                 </ul>
-                <div className="pt-1 flex gap-2">
-                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition">
-                    Open Crypto →
-                  </Link>
-                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition">
-                    Open AEX →
+                <div className="pt-1">
+                  <Link href="/about" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition">
+                    About us →
                   </Link>
                 </div>
               </div>
