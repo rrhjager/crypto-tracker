@@ -850,15 +850,15 @@ export default function Homepage() {
                 <ul className="space-y-1">
                   <li className="flex items-center gap-2 text-[13px]">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Universal BUY / HOLD / SELL scores
+                    Unified BUY / HOLD / SELL signals across major cryptos and stock markets → spot high-conviction setups in seconds
                   </li>
                   <li className="flex items-center gap-2 text-[13px]">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Fast cache & smart warm-up
+                    Momentum, volume & trend analytics → understand why assets move and predict future movements
                   </li>
                   <li className="flex items-center gap-2 text-[13px]">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Global indices + top crypto coverage
+                    Market Intel feeds → track hedge funds, congress trades, and macro trends as they unfold
                   </li>
                 </ul>
                 <div className="pt-1 flex gap-2">
