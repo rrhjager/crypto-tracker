@@ -9,7 +9,7 @@ import ScoreBadge from '@/components/ScoreBadge'
 
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
-// compact: ongeveer als je screenshot
+// compact, uniform for 9 tiles (similar to your screenshot)
 const CARD_CONTENT_H = 'h-[280px]'
 
 /* ---------------- types ---------------- */
@@ -347,16 +347,46 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
+/* ---------------- small UI primitives (no extra deps) ---------------- */
+const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
+  title, actionHref, actionLabel, children
+}) => (
+  <section className="rounded-2xl border border-white/10 bg-white/[0.03] shadow-[0_6px_30px_-10px_rgba(0,0,0,0.25)] transition-all hover:-translate-y-[1px] hover:shadow-[0_10px_40px_-12px_rgba(0,0,0,0.35)]">
+    <header className="flex items-center justify-between px-5 pt-4 pb-2">
+      <h2 className="text-[15px] font-semibold">{title}</h2>
+      {actionHref && (
+        <Link href={actionHref} className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
+          {actionLabel || 'View all'} <span aria-hidden>→</span>
+        </Link>
+      )}
+    </header>
+    <div className="px-4 pb-4">{children}</div>
+  </section>
+)
+
+const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: string; title?: string }> = ({
+  left, right, href, title
+}) => {
+  const Cmp: any = href ? Link : 'div'
+  const props: any = href ? { href } : {}
+  return (
+    <Cmp {...props} title={title} className="flex items-center justify-between gap-3 px-3 py-[10px] rounded-xl hover:bg-white/6 transition-colors">
+      <div className="min-w-0">{left}</div>
+      {right && <div className="shrink-0">{right}</div>}
+    </Cmp>
+  )
+}
+
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
 
-  /* ---------- Achtergrond-prefetch van routes ---------- */
+  /* ---------- Prefetch routes ---------- */
   useEffect(() => {
     const routes = [
       '/crypto',
       '/aex','/sp500','/nasdaq','/dowjones','/dax','/ftse100','/nikkei225','/hangseng','/sensex','/etfs',
-      '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors','/academy'
+      '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors','/academy','/about'
     ]
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
@@ -377,6 +407,7 @@ export default function Homepage() {
         const hadCBuy   = !!getCache<ScoredCoin[]>('home:coin:topBuy')
         const hadCSell  = !!getCache<ScoredCoin[]>('home:coin:topSell')
 
+        // --- Equities warm ---
         if (!(hadEqBuy && hadEqSell)) {
           const WARM_MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
           const outBuy: ScoredEq[] = []
@@ -387,6 +418,7 @@ export default function Homepage() {
             const cons = constituentsForMarket(market)
             if (!cons.length) continue
             const symbols = cons.map(c => c.symbol)
+
             const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
             const rows = cons.map((c, i) => ({
               symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
@@ -409,12 +441,13 @@ export default function Homepage() {
           }
         }
 
+        // --- Crypto warm ---
         if (!(hadCBuy && hadCSell)) {
           const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
             .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
             .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
 
-          await pool(pairs, 8, async ({ c, pair }) => {
+          const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
             try {
               const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
               const r = await fetch(url, { cache: 'force-cache' })
@@ -428,6 +461,14 @@ export default function Homepage() {
               return { symbol: c.symbol, name: c.name, score: null as any }
             }
           })
+
+          const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
+          const buys  = [...rows].sort((a,b)=> b.score - a.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
+          const sells = [...rows].sort((a,b)=> a.score - b.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
+          if (!aborted) {
+            if (!hadCBuy)  setCache('home:coin:topBuy',  buys)
+            if (!hadCSell) setCache('home:coin:topSell', sells)
+          }
         }
       } catch {}
     })
@@ -492,11 +533,13 @@ export default function Homepage() {
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
   const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
   const [topSell, setTopSell] = useState<ScoredEq[]>([])
+  const [scoreErr, setScoreErr] = useState<string | null>(null)
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
+        setScoreErr(null)
         const cacheKeyBuy  = 'home:eq:topBuy'
         const cacheKeySell = 'home:eq:topSell'
 
@@ -512,6 +555,7 @@ export default function Homepage() {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
+
           const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
           const rows = cons.map((c, i) => ({
             symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
@@ -535,7 +579,9 @@ export default function Homepage() {
           setCache(cacheKeyBuy, finalBuy)
           setCache(cacheKeySell, finalSell)
         }
-      } catch {}
+      } catch (e: any) {
+        if (!aborted) setScoreErr(String(e?.message || e))
+      }
     })()
     return () => { aborted = true }
   }, [])
@@ -545,11 +591,14 @@ export default function Homepage() {
      ======================= */
   const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
+  const [coinErr, setCoinErr] = useState<string | null>(null)
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
+        setCoinErr(null)
+
         const cacheKeyB = 'home:coin:topBuy'
         const cacheKeyS = 'home:coin:topSell'
         const cB = getCache<ScoredCoin[]>(cacheKeyB)
@@ -599,12 +648,14 @@ export default function Homepage() {
           setCache(cacheKeyB, buys)
           setCache(cacheKeyS, sells)
         }
-      } catch {}
+      } catch (e:any) {
+        if (!aborted) setCoinErr(String(e?.message || e))
+      }
     })()
     return () => { aborted = true }
   }, [])
 
-  /* ========= Academy (optionele fetch + fallback) ========= */
+  /* ========= Academy (optional fetch + fallback) ========= */
   type AcademyItem = { title: string; href: string }
   const [academy, setAcademy] = useState<AcademyItem[]>([])
   useEffect(() => {
@@ -636,38 +687,30 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ========= Congress Trading (LIVE lijst) ========= */
+  /* ========= Congress Trading (LIVE list) ========= */
   type CongressTrade = {
-    person?: string
-    ticker?: string // kan "COMPANY\nSYM:EX" bevatten
-    side?: 'BUY' | 'SELL' | string
-    amount?: string | number
-    price?: string | number | null
-    date?: string
-    url?: string
+    person?: string;
+    ticker?: string;
+    side?: 'BUY' | 'SELL' | string;
+    amount?: string | number;
+    price?: string | number | null;
+    date?: string;
+    url?: string;
   }
   const [trades, setTrades] = useState<CongressTrade[]>([])
   const [tradesErr, setTradesErr] = useState<string | null>(null)
-
-  // helper: split "COMPANY\nSYM:EX" -> { name, code }
-  function splitIssuerCell(s?: string) {
-    const raw = String(s || '')
-    const [line1, line2] = raw.split(/\r?\n/).map(t => t.trim())
-    if (line2) return { name: line1, code: line2 }
-    return { name: raw, code: '' }
-  }
 
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
         setTradesErr(null)
-        // exact dezelfde bron als je /intel pagina:
-        const r = await fetch('/api/market/congress?limit=20', { cache: 'no-store' })
+        // Use the SAME endpoint/shape as your Congress page
+        const r = await fetch('/api/market/congress?limit=30', { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        const arr = (j?.items || []) as any[]
-        const norm: CongressTrade[] = arr.map((x: any) => ({
+        const j = await r.json() as { items?: any[] }
+        const arr = Array.isArray(j?.items) ? j.items : []
+        const norm: CongressTrade[] = (arr || []).map((x: any) => ({
           person: x.person || '',
           ticker: x.ticker || '',
           side: String(x.side || '').toUpperCase(),
@@ -684,7 +727,7 @@ export default function Homepage() {
     return () => { aborted = true }
   }, [])
 
-  /* ---- helpers voor nieuws ---- */
+  /* ---- helpers for news (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -763,12 +806,12 @@ export default function Homepage() {
                 href={n.url}
                 target="_blank"
                 rel="noreferrer"
-                className="block font-medium text-white hover:underline truncate"
+                className="block font-medium text-white hover:underline truncate text-[13px]"
                 title={title}
               >
                 {title}
               </a>
-              <div className="text-xs text-white/60 mt-0.5 truncate">
+              <div className="text-[11px] text-white/60 mt-0.5 truncate">
                 {(n.source || domain || '').trim()}
                 {n.published ? ` • ${new Date(n.published).toLocaleString('nl-NL')}` : ''}
               </div>
@@ -787,254 +830,206 @@ export default function Homepage() {
     <>
       <Head>
         <title>SignalHub — Clarity in Markets</title>
-        <meta
-          name="description"
-          content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view."
-        />
+        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
         <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
       </Head>
 
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         {/* ======= 3×3 GRID ======= */}
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-5 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1. Intro / text-only (EN) */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <h2 className="text-lg font-semibold mb-2">Cut the noise. Catch the signal.</h2>
+          {/* 1) Intro (image removed, English copy, About us CTA) */}
+          <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
-                <p>
-                  SignalHub provides a clean, actionable view of crypto and
-                  equities — built for clarity and speed. Less noise, more
-                  direction: momentum, volume, and trend in one place.
+                <p className="text-[13px]">
+                  SignalHub provides a clean, actionable view of crypto and equities — built for clarity and speed.
+                  Less noise, more direction: momentum, volume, and trend in one place.
                 </p>
-                <ul className="list-disc list-inside text-white/70 space-y-1">
-                  <li>Universal BUY / HOLD / SELL scores</li>
-                  <li>Fast cache & smart warm-up</li>
-                  <li>Global indices + top crypto coverage</li>
+                <ul className="space-y-1">
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Universal BUY / HOLD / SELL scores
+                  </li>
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Fast cache & smart warm-up
+                  </li>
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Global indices + top crypto coverage
+                  </li>
                 </ul>
                 <div className="pt-1 flex gap-2">
-                  <Link href="/about" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition">
-                    About us →
-                  </Link>
-                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition">
+                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition text-[13px]">
                     Open crypto →
+                  </Link>
+                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition text-[13px]">
+                    Open AEX →
                   </Link>
                 </div>
               </div>
             </div>
-          </div>
+          </Card>
 
-          {/* 2. Crypto — Top BUY */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Crypto — Top 5 BUY</h2>
-              <Link href="/crypto" className="text-sm text-white/70 hover:text-white">All crypto →</Link>
-            </div>
-            <ul className={`divide-y divide-white/10 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+          {/* 2) Crypto — Top BUY */}
+          <Card title="Crypto — Top 5 BUY" actionHref="/crypto" actionLabel="All crypto →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {coinTopBuy.length===0 ? (
-                <li className="py-3 text-white/60">No data yet…</li>
+                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
               ) : coinTopBuy.map((r)=>(
-                <li key={`cb-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
-                  <div className="truncate">
-                    <div className="font-medium truncate">
-                      <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
-                    </div>
-                    <div className="text-white/60 text-xs">
-                      <Link href={coinHref(r.symbol)} className="hover:underline">{r.symbol}</Link>
-                    </div>
-                  </div>
-                  <Link href={coinHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
-                    <ScoreBadge score={r.score} />
-                  </Link>
+                <li key={`cb-${r.symbol}`}>
+                  <Row
+                    href={coinHref(r.symbol)}
+                    left={
+                      <div className="truncate">
+                        <div className="font-medium truncate text-[13px]">{r.name}</div>
+                        <div className="text-white/60 text-[11px]">{r.symbol}</div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
                 </li>
               ))}
             </ul>
-          </div>
+          </Card>
 
-          {/* 3. Crypto — Top SELL */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Crypto — Top 5 SELL</h2>
-              <Link href="/crypto" className="text-sm text-white/70 hover:text-white">All crypto →</Link>
-            </div>
-            <ul className={`divide-y divide-white/10 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+          {/* 3) Crypto — Top SELL */}
+          <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {coinTopSell.length===0 ? (
-                <li className="py-3 text-white/60">No data yet…</li>
+                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
               ) : coinTopSell.map((r)=>(
-                <li key={`cs-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
-                  <div className="truncate">
-                    <div className="font-medium truncate">
-                      <Link href={coinHref(r.symbol)} className="hover:underline">{r.name}</Link>
-                    </div>
-                    <div className="text-white/60 text-xs">
-                      <Link href={coinHref(r.symbol)} className="hover:underline">{r.symbol}</Link>
-                    </div>
-                  </div>
-                  <Link href={coinHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
-                    <ScoreBadge score={r.score} />
-                  </Link>
+                <li key={`cs-${r.symbol}`}>
+                  <Row
+                    href={coinHref(r.symbol)}
+                    left={
+                      <div className="truncate">
+                        <div className="font-medium truncate text-[13px]">{r.name}</div>
+                        <div className="text-white/60 text-[11px]">{r.symbol}</div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
                 </li>
               ))}
             </ul>
-          </div>
+          </Card>
 
           {/* -------- Row 2 -------- */}
-          {/* 4. Equities — Top BUY */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Equities — Top BUY</h2>
-              <Link href="/sp500" className="text-sm text-white/70 hover:text-white">Browse markets →</Link>
-            </div>
-            <ul className={`divide-y divide-white/10 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+          {/* 4) Equities — Top BUY */}
+          <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {topBuy.length===0 ? (
-                <li className="py-3 text-white/60">No data yet…</li>
+                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
               ) : topBuy.map((r)=>(
-                <li key={`bb-${r.market}-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
-                  <div className="min-w-0">
-                    <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                    <div className="font-medium truncate">
-                      <Link href={equityHref(r.symbol)} className="hover:underline">
-                        {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
-                      </Link>
-                    </div>
-                  </div>
-                  <Link href={equityHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
-                    <ScoreBadge score={r.score} />
-                  </Link>
+                <li key={`bb-${r.market}-${r.symbol}`}>
+                  <Row
+                    href={equityHref(r.symbol)}
+                    left={
+                      <div className="min-w-0">
+                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
+                        <div className="font-medium truncate text-[13px]">
+                          {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                        </div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
                 </li>
               ))}
             </ul>
-          </div>
+          </Card>
 
-          {/* 5. Equities — Top SELL */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Equities — Top SELL</h2>
-              <Link href="/sp500" className="text-sm text-white/70 hover:text-white">Browse markets →</Link>
-            </div>
-            <ul className={`divide-y divide-white/10 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+          {/* 5) Equities — Top SELL */}
+          <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {topSell.length===0 ? (
-                <li className="py-3 text-white/60">No data yet…</li>
+                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
               ) : topSell.map((r)=>(
-                <li key={`bs-${r.market}-${r.symbol}`} className="py-2 px-1 flex items-center justify-between gap-3 rounded hover:bg-white/5 transition">
-                  <div className="min-w-0">
-                    <div className="text-white/60 text-xs mb-0.5">{r.market}</div>
-                    <div className="font-medium truncate">
-                      <Link href={equityHref(r.symbol)} className="hover:underline">
-                        {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
-                      </Link>
-                    </div>
-                  </div>
-                  <Link href={equityHref(r.symbol)} className="shrink-0 origin-right scale-90 sm:scale-100">
-                    <ScoreBadge score={r.score} />
-                  </Link>
+                <li key={`bs-${r.market}-${r.symbol}`}>
+                  <Row
+                    href={equityHref(r.symbol)}
+                    left={
+                      <div className="min-w-0">
+                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
+                        <div className="font-medium truncate text-[13px]">
+                          {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                        </div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
                 </li>
               ))}
             </ul>
-          </div>
+          </Card>
 
-          {/* 6. Congress Trading — Latest (compact typography) */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Congress Trading — Latest</h2>
-              <Link href="/intel" className="text-sm text-white/70 hover:text-white">Open dashboard →</Link>
-            </div>
-
+          {/* 6) Congress Trading — Latest (smaller type scale) */}
+          <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
 
-              {/* header-row */}
-              <div className="grid grid-cols-12 text-[11px] text-white/60 px-1 pb-1">
+              <div className="grid grid-cols-12 text-[10px] text-white/60 px-2 pb-1">
                 <div className="col-span-4">Person</div>
-                <div className="col-span-4">Ticker</div>
+                <div className="col-span-3">Ticker</div>
                 <div className="col-span-2">Side</div>
-                <div className="col-span-2 text-right">Amount / Price</div>
+                <div className="col-span-3 text-right">Amount / Price</div>
               </div>
 
-              <ul className="divide-y divide-white/10">
+              <ul className="divide-y divide-white/8">
                 {trades.length === 0 ? (
-                  <li className="py-3 text-white/60 text-sm">No trades…</li>
-                ) : trades.slice(0, 12).map((t, i) => {
-                  const { name, code } = splitIssuerCell(t.ticker)
-                  const side = String(t.side || '-').toUpperCase()
-                  const sideClr =
-                    side === 'BUY' ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/20' :
-                    side === 'SELL' ? 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-400/20' :
-                    'bg-white/5 text-white/70 ring-1 ring-white/10'
-                  return (
-                    <li
-                      key={`tr-${i}-${t.person}-${t.ticker}`}
-                      className="grid grid-cols-12 items-center gap-2 py-2 px-1 rounded hover:bg-white/5 transition"
+                  <li className="py-3 text-white/60 text-[12px]">No trades…</li>
+                ) : trades.slice(0, 14).map((t, i) => (
+                  <li key={`tr-${i}-${t.person}-${t.ticker}`} className="px-2">
+                    <div
+                      className="grid grid-cols-12 items-center gap-2 py-2 px-2 rounded-lg hover:bg-white/6 transition"
                       title={t.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
                     >
-                      {/* Person */}
-                      <div className="col-span-4 min-w-0">
+                      <div className="col-span-4 min-w-0 truncate text-[12px]">
                         {t.url ? (
-                          <a href={t.url} target="_blank" rel="noreferrer" className="text-[12px] text-white/90 hover:underline truncate">
-                            {t.person || '-'}
-                          </a>
-                        ) : (
-                          <span className="text-[12px] text-white/90 truncate">{t.person || '-'}</span>
-                        )}
+                          <a href={t.url} target="_blank" rel="noreferrer" className="hover:underline">{t.person || '-'}</a>
+                        ) : <span>{t.person || '-'}</span>}
                       </div>
-
-                      {/* Ticker (company + code stacked) */}
-                      <div className="col-span-4 min-w-0">
-                        <div className="text-[12px] font-medium leading-tight truncate">{name || code || '-'}</div>
-                        {code && <div className="text-[11px] text-white/50 leading-tight">{code}</div>}
+                      <div className="col-span-3 text-[11px] leading-tight">
+                        <div className="font-semibold tracking-wide">{(t.ticker || '').toUpperCase()}</div>
                       </div>
-
-                      {/* Side badge */}
-                      <div className="col-span-2">
-                        <span className={`inline-flex items-center justify-center px-2 py-[2px] rounded-full text-[10px] font-semibold ${sideClr}`}>
-                          {side}
-                        </span>
+                      <div className={`col-span-2 text-[11px] font-semibold ${
+                        String(t.side).toUpperCase()==='BUY' ? 'text-emerald-400' :
+                        String(t.side).toUpperCase()==='SELL' ? 'text-rose-400' : 'text-white/70'
+                      }`}>
+                        {String(t.side || '-').toUpperCase()}
                       </div>
-
-                      {/* Amount / Price */}
-                      <div className="col-span-2 text-right">
-                        <div className="text-[12px] text-white/80 leading-tight">{t.amount || '-'}</div>
+                      <div className="col-span-3 text-right text-[12px]">
+                        <span className="text-white/80">{t.amount || '-'}</span>
                         {t.price != null && t.price !== '' && (
-                          <div className="text-[11px] text-white/50 leading-tight">
-                            {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : String(t.price)}
-                          </div>
+                          <span className="text-white/50 ml-1">
+                            • {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : t.price}
+                          </span>
                         )}
                       </div>
-                    </li>
-                  )
-                })}
+                    </div>
+                  </li>
+                ))}
               </ul>
             </div>
-          </div>
+          </Card>
 
           {/* -------- Row 3 -------- */}
-          {/* 7. Crypto News */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Crypto News</h2>
-              <Link href="/crypto" className="text-sm text-white/70 hover:text-white">Open crypto →</Link>
-            </div>
+          {/* 7) Crypto News */}
+          <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
             {renderNews(newsCrypto, 'nC')}
-          </div>
+          </Card>
 
-          {/* 8. Equities News */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Equities News</h2>
-              <Link href="/stocks" className="text-sm text-white/70 hover:text-white">Open AEX →</Link>
-            </div>
+          {/* 8) Equities News */}
+          <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
             {renderNews(newsEq, 'nE')}
-          </div>
+          </Card>
 
-          {/* 9. Academy Overview */}
-          <div className="table-card p-5 flex flex-col transition hover:shadow-lg hover:shadow-white/5 hover:-translate-y-[1px] hover:bg-white/[0.04]">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Academy</h2>
-              <Link href="/academy" className="text-sm text-white/70 hover:text-white">All articles →</Link>
-            </div>
-            <ul className={`text-sm grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+          {/* 9) Academy */}
+          <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
+            <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {academy.map((a, i) => (
                 <li key={`ac-${i}`}>
                   <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10 transition">
@@ -1046,14 +1041,14 @@ export default function Homepage() {
                 <li className="text-white/60">No articles found…</li>
               )}
             </ul>
-          </div>
+          </Card>
         </div>
       </main>
     </>
   )
 }
 
-// ISR onderaan
+// ISR
 export async function getStaticProps() {
   return {
     props: {},
