@@ -18,7 +18,8 @@ type IndResp = {
   error?: string
 }
 
-const fetcher = (u: string) => fetch(u).then(r => r.json())
+// ⬇️ wijziging: forceer no-store
+const fetcher = (u: string) => fetch(u, { cache: 'no-store' }).then(r => r.json())
 
 type Status = 'BUY'|'HOLD'|'SELL'
 const pill = (s: Status) =>
@@ -187,8 +188,11 @@ function PageInner() {
     return 'BINANCE:BTCUSDT'
   }, [coin, binance])
 
+  // ⬇️ wijziging: 1-minuut cache-buster (zorgt dat we niet vastplakken aan oude CDN/browser cache)
+  const minuteTag = Math.floor(Date.now() / 60_000)
+
   const { data } = useSWR<{ results: IndResp[] }>(
-    binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}` : null,
+    binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}&v=${minuteTag}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 120_000 }
   )
@@ -196,7 +200,7 @@ function PageInner() {
   const overall = overallScore(ind)
 
   const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
-    binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}` : null,
+    binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}&v=${minuteTag}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
