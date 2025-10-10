@@ -381,6 +381,15 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
 export default function Homepage() {
   const router = useRouter()
 
+  // ---------------- NEW: loading flags ----------------
+  const [loadingEq, setLoadingEq] = useState(true)
+  const [loadingCoin, setLoadingCoin] = useState(true)
+  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(true)
+  const [loadingNewsEq, setLoadingNewsEq] = useState(true)
+  const [loadingCongress, setLoadingCongress] = useState(true)
+  const [loadingAcademy, setLoadingAcademy] = useState(true)
+  // ----------------------------------------------------
+
   /* ---------- Prefetch routes ---------- */
   useEffect(() => {
     const routes = [
@@ -500,8 +509,9 @@ export default function Homepage() {
   const [newsEq, setNewsEq] = useState<NewsItem[]>([])
   useEffect(()=>{
     let aborted=false
-    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void){
+    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void, setLoading:(f:boolean)=>void){
       try{
+        setLoading(true)
         const query =
           topic === 'crypto'
             ? 'crypto OR bitcoin OR ethereum OR blockchain'
@@ -520,10 +530,12 @@ export default function Homepage() {
         if (!aborted) setter(arr)
       }catch{
         if (!aborted) setter([])
+      } finally {
+        if (!aborted) setLoading(false)
       }
     }
-    load('crypto', setNewsCrypto)
-    load('equities', setNewsEq)
+    load('crypto', setNewsCrypto, setLoadingNewsCrypto)
+    load('equities', setNewsEq, setLoadingNewsEq)
     return ()=>{aborted=true}
   },[])
 
@@ -539,6 +551,7 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
+        setLoadingEq(true) // NEW
         setScoreErr(null)
         const cacheKeyBuy  = 'home:eq:topBuy'
         const cacheKeySell = 'home:eq:topSell'
@@ -581,6 +594,8 @@ export default function Homepage() {
         }
       } catch (e: any) {
         if (!aborted) setScoreErr(String(e?.message || e))
+      } finally {
+        if (!aborted) setLoadingEq(false) // NEW
       }
     })()
     return () => { aborted = true }
@@ -597,6 +612,7 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
+        setLoadingCoin(true) // NEW
         setCoinErr(null)
 
         const cacheKeyB = 'home:coin:topBuy'
@@ -650,6 +666,8 @@ export default function Homepage() {
         }
       } catch (e:any) {
         if (!aborted) setCoinErr(String(e?.message || e))
+      } finally {
+        if (!aborted) setLoadingCoin(false) // NEW
       }
     })()
     return () => { aborted = true }
@@ -662,6 +680,7 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
+        setLoadingAcademy(true) // NEW
         const r = await fetch('/api/academy/list', { cache: 'force-cache' })
         if (r.ok) {
           const j = await r.json() as { items?: AcademyItem[] }
@@ -683,7 +702,7 @@ export default function Homepage() {
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
         ])
       }
-    })()
+    })().finally(() => { if (!aborted) setLoadingAcademy(false) }) // NEW
     return () => { aborted = true }
   }, [])
 
@@ -704,6 +723,7 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
+        setLoadingCongress(true) // NEW
         setTradesErr(null)
         // Use the SAME endpoint/shape as your Congress page
         const r = await fetch('/api/market/congress?limit=30', { cache: 'no-store' })
@@ -722,6 +742,8 @@ export default function Homepage() {
         if (!aborted) setTrades(norm)
       } catch (e: any) {
         if (!aborted) setTradesErr(String(e?.message || e))
+      } finally {
+        if (!aborted) setLoadingCongress(false) // NEW
       }
     })()
     return () => { aborted = true }
@@ -784,9 +806,12 @@ export default function Homepage() {
     }
   }
 
-  const renderNews = (items: NewsItem[], keyPrefix: string) => (
+  // UPDATED: renderNews accepteert nu een loading-flag
+  const renderNews = (items: NewsItem[], keyPrefix: string, loading = false) => (
     <ul className={`grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-      {items.length === 0 ? (
+      {loading ? (
+        <li className="text-white/60">Loading…</li>
+      ) : items.length === 0 ? (
         <li className="text-white/60">No news…</li>
       ) : items.map((n, i) => {
         const { domain, favicon } = realDomainFromUrl(n.url, n.source)
@@ -876,8 +901,10 @@ export default function Homepage() {
           {/* 2) Crypto — Top BUY */}
           <Card title="Crypto — Top 5 BUY" actionHref="/crypto" actionLabel="All crypto →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {coinTopBuy.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
+              {loadingCoin ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : coinTopBuy.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : coinTopBuy.map((r)=>(
                 <li key={`cb-${r.symbol}`}>
                   <Row
@@ -898,8 +925,10 @@ export default function Homepage() {
           {/* 3) Crypto — Top SELL */}
           <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {coinTopSell.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
+              {loadingCoin ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : coinTopSell.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : coinTopSell.map((r)=>(
                 <li key={`cs-${r.symbol}`}>
                   <Row
@@ -921,8 +950,10 @@ export default function Homepage() {
           {/* 4) Equities — Top BUY */}
           <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {topBuy.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
+              {loadingEq ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : topBuy.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : topBuy.map((r)=>(
                 <li key={`bb-${r.market}-${r.symbol}`}>
                   <Row
@@ -945,8 +976,10 @@ export default function Homepage() {
           {/* 5) Equities — Top SELL */}
           <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {topSell.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">No data yet…</li>
+              {loadingEq ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : topSell.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : topSell.map((r)=>(
                 <li key={`bs-${r.market}-${r.symbol}`}>
                   <Row
@@ -979,7 +1012,9 @@ export default function Homepage() {
               </div>
 
               <ul className="divide-y divide-white/8">
-                {trades.length === 0 ? (
+                {loadingCongress ? (
+                  <li className="py-3 text-white/60 text-[12px]">Loading…</li>
+                ) : trades.length === 0 ? (
                   <li className="py-3 text-white/60 text-[12px]">No trades…</li>
                 ) : trades.slice(0, 14).map((t, i) => (
                   <li key={`tr-${i}-${t.person}-${t.ticker}`} className="px-2">
@@ -1019,27 +1054,28 @@ export default function Homepage() {
           {/* -------- Row 3 -------- */}
           {/* 7) Crypto News */}
           <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
-            {renderNews(newsCrypto, 'nC')}
+            {renderNews(newsCrypto, 'nC', loadingNewsCrypto)}
           </Card>
 
           {/* 8) Equities News */}
           <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
-            {renderNews(newsEq, 'nE')}
+            {renderNews(newsEq, 'nE', loadingNewsEq)}
           </Card>
 
           {/* 9) Academy */}
           <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
             <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {academy.map((a, i) => (
+              {loadingAcademy ? (
+                <li className="text-white/60">Loading…</li>
+              ) : academy.length===0 ? (
+                <li className="text-white/60">No articles found…</li>
+              ) : academy.map((a, i) => (
                 <li key={`ac-${i}`}>
                   <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10 transition">
                     {a.title}
                   </Link>
                 </li>
               ))}
-              {academy.length===0 && (
-                <li className="text-white/60">No articles found…</li>
-              )}
             </ul>
           </Card>
         </div>
