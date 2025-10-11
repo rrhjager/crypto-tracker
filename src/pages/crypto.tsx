@@ -1,13 +1,13 @@
+// src/pages/crypto.tsx
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
-import { computeScoreStatus } from '@/lib/taScore'
-import ScoreBadge from '@/components/ScoreBadge'
+import ScoreBadge from '@/components/ScoreBadge' // blijft staan, maar we tonen nu status-badge
 
 // ---------- helpers ----------
-const fetcher = (url: string) => fetch(url, { cache: 'no-store' }).then(r => r.json())
+const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 function formatFiat(n: number | null | undefined) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -22,7 +22,6 @@ const fmtPct = (v: number | null | undefined) =>
 type Status = 'BUY'|'HOLD'|'SELL'
 type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)) }
-
 function colorStops(status: Status, score: number) {
   const s = clamp(score, 0, 100)
   let hue = 38, sat = 70, light = 42
@@ -38,7 +37,7 @@ function statusFromScore(score: number): Status {
   return 'HOLD'
 }
 
-// Yahoo “BTC-USD” → Binance “BTCUSDT” (stablecoins overslaan)
+// Binance-pair fallback (voor Vercel): maak SYMBOLUSDT behalve voor stablecoins
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
@@ -46,21 +45,111 @@ const toBinancePair = (symbol: string) => {
   return `${s}USDT`
 }
 
-// ---------- API shapes ----------
+// ---------- scoring op 4 indicatoren ----------
 type IndResp = {
   symbol: string
-  ma?: { ma50: number|null; ma200: number|null; cross?: string }
+  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  // backend mag ook direct score/status meeleveren – maar wij herberekenen client-side met computeScoreStatus
+  // NIEUW: door backend meegeleverd (optioneel)
   score?: number
   status?: Status
   error?: string
 }
-type PxResp = { results: { symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }[] }
 
-// ---------- rechterkolom widgets ----------
+function scoreFromIndicators(ind?: IndResp): { score: number, status: Status } {
+  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
+
+  // MA (35%)
+  let maScore = 50
+  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
+    if (ind.ma.ma50 > ind.ma.ma200) {
+      const spread = clamp(ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1, 0, 0.2)
+      maScore = 60 + (spread / 0.2) * 40
+    } else if (ind.ma.ma50 < ind.ma.ma200) {
+      const spread = clamp(ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1, 0, 0.2)
+      maScore = 40 - (spread / 0.2) * 40
+    } else {
+      maScore = 50
+    }
+  }
+
+  // RSI (25%)
+  let rsiScore = 50
+  if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
+
+  // MACD (25%)
+  let macdScore = 50
+  const hist = ind.macd?.hist
+  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
+
+  // Volume (15%)
+  let volScore = 50
+  const ratio = ind.volume?.ratio
+  if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
+
+  const score = Math.round(clamp(
+    0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore,
+    0, 100
+  ))
+  return { score, status: statusFromScore(score) }
+}
+
+/* ====== NIEUW: detail→home localStorage handshake ====== */
+type LocalTA = { score: number; status: Status; ts: number }
+const TA_KEY_PREFIX = 'ta:' // sleutels zoals ta:BTCUSDT
+
+function readAllLocalTA(): Map<string, LocalTA> {
+  if (typeof window === 'undefined') return new Map()
+  const out = new Map<string, LocalTA>()
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i) || ''
+      if (!k.startsWith(TA_KEY_PREFIX)) continue
+      const sym = k.slice(TA_KEY_PREFIX.length)
+      const raw = localStorage.getItem(k)
+      if (!raw) continue
+      const obj = JSON.parse(raw)
+      const score = Number(obj?.score)
+      const status = (obj?.status as Status) || 'HOLD'
+      const ts = Number(obj?.ts) || 0
+      if (Number.isFinite(score) && (status === 'BUY' || status === 'HOLD' || status === 'SELL')) {
+        out.set(sym, { score, status, ts })
+      }
+    }
+  } catch {}
+  return out
+}
+
+function saveLocalTA(symUSDT: string, score: number, status: Status) {
+  try {
+    const k = `${TA_KEY_PREFIX}${symUSDT}`
+    localStorage.setItem(k, JSON.stringify({ score, status, ts: Date.now() }))
+    // evt. notify — sommige browsers propagaten 'storage' alleen tussen tabs
+    window.dispatchEvent(new StorageEvent('storage', { key: k, newValue: localStorage.getItem(k) }))
+  } catch {}
+}
+
+/* ====== NIEUW: snellere, incrementele indicator-fetch ====== */
+async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return await r.json()
+  } finally {
+    clearTimeout(t)
+  }
+}
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+// ---------- rechterkolom ----------
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -270,16 +359,16 @@ type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
-  // basis-rows uit COINS
+  // build rows vanuit COINS + Binance symbolen (met fallback)
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
-      const fallback = toBinancePair(c.symbol.replace('-USD',''))
+      const fallback = toBinancePair(c.symbol)
       return {
         slug: (c.slug || c.symbol.toLowerCase()),
         symbol: c.symbol,
         name: c.name,
-        binance: fromList || fallback,
+        binance: fromList || fallback, // <-- belangrijk voor Vercel
         _rank: i,
         _price: null as number | null,
         _d: 0 as number | null,
@@ -292,7 +381,7 @@ function PageInner() {
     })
   }, [])
 
-  // favorieten
+  // Favorieten
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -312,7 +401,19 @@ function PageInner() {
     })
   }
 
-  // indicators ophalen (batched) en prijzen ophalen (SWR)
+  // NEW: lokale TA state (detailpagina schrijft hierin via localStorage)
+  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
+  useEffect(() => {
+    setLocalTA(readAllLocalTA())
+    function onStorage(ev: StorageEvent) {
+      if (!ev.key || !ev.key.startsWith(TA_KEY_PREFIX)) return
+      setLocalTA(readAllLocalTA())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // ---- Indicators ophalen (INCREMENTEEL & SNELLER) ----
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -321,38 +422,54 @@ function PageInner() {
     if (!symbols.length) return
     let aborted = false
 
-    async function fetchGroup(group: string[]) {
-      const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = await r.json() as { results?: IndResp[] }
-      const arr = Array.isArray(j.results) ? j.results : []
-      if (aborted) return
-      setIndBySym(prev => {
-        const next = new Map(prev)
-        for (const it of arr) next.set(it.symbol, it)
-        return next
-      })
-      setIndUpdatedAt(Date.now())
-    }
-
-    async function run() {
-      // chunks van 12 om burst te beperken
-      for (let i = 0; i < symbols.length; i += 12) {
-        const group = symbols.slice(i, i + 12)
-        try { await fetchGroup(group) } catch {}
-        await new Promise(r => setTimeout(r, 120)) // mini-pause
+    async function runOnce() {
+      try {
+        const chunks = chunk(symbols, 12) // parallel kleinere batches
+        await Promise.all(chunks.map(async (group, gi) => {
+          // kleine delay tussen groepen om burst te voorkomen
+          if (gi) await new Promise(r => setTimeout(r, 120 * gi))
+          const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
+          try {
+            const j = await fetchJSON(url, { timeoutMs: 9000 })
+            const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
+            if (aborted) return
+            setIndBySym(prev => {
+              const next = new Map(prev)
+              for (const it of arr) next.set(it.symbol, it)
+              return next
+            })
+            setIndUpdatedAt(Date.now())
+          } catch {
+            // retry één keer voor deze groep
+            if (aborted) return
+            try {
+              const j2 = await fetchJSON(url, { timeoutMs: 9000 })
+              const arr2: IndResp[] = Array.isArray(j2?.results) ? j2.results : []
+              if (aborted) return
+              setIndBySym(prev => {
+                const next = new Map(prev)
+                for (const it of arr2) next.set(it.symbol, it)
+                return next
+              })
+              setIndUpdatedAt(Date.now())
+            } catch {}
+          }
+        }))
+      } finally {
+        if (!aborted) {
+          // noop
+        }
       }
     }
 
-    run()
-    const id = setInterval(run, 120_000)
+    runOnce()
+    const id = setInterval(runOnce, 120_000) // dezelfde interval als voorheen
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
-  // prijzen + d/w/m
+  // ---- Prijs + d/w/m ophalen (Light) ----
   const symbolsCsv = useMemo(() => symbols.join(','), [symbols])
-  const { data: pxData } = useSWR<PxResp>(
+  const { data: pxData } = useSWR<{ results: { symbol: string, price: number|null, d: number|null, w: number|null, m: number|null }[] }>(
     symbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
@@ -363,7 +480,7 @@ function PageInner() {
     return map
   }, [pxData])
 
-  // sortering
+  // Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -371,25 +488,41 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // rows verrijken met score/status (via computeScoreStatus) + prijs/perf
+  // rows verrijken met indicator-score + prijs/perf
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
-      const ind = c.binance ? indBySym.get(c.binance) : undefined
-      let score = 50
-      let status: Status = 'HOLD'
-      if (ind) {
-        const res = computeScoreStatus({
-          ma: ind.ma, rsi: ind.rsi, macd: ind.macd, volume: ind.volume
-        } as any)
-        score = res.score
-        status = (res.status as Status) || statusFromScore(res.score)
+      const symU = String(c.symbol || '').toUpperCase()
+      const ind  = c.binance ? indBySym.get(c.binance) : undefined
+
+      // 1) Probeer serverwaarden (status/score) — nu incrementeel binnenkomend
+      const serverScore = (ind?.score != null && Number.isFinite(Number(ind.score))) ? Number(ind.score) : null
+      const serverStatus = ind?.status as Status | undefined
+
+      // 2) Fallback naar bestaande clientberekening
+      const calc = scoreFromIndicators(ind)
+
+      let finalScore = serverScore ?? calc.score
+      let finalStatus = serverStatus ?? calc.status
+
+      // 3) Override met localStorage (door detailpagina berekend) — blijft bestaan
+      const localKey = c.binance // bijv. "VETUSDT"
+      if (localKey) {
+        const ta = localTA.get(localKey)
+        if (ta) {
+          const fresh = (Date.now() - ta.ts) <= 10 * 60 * 1000 // 10 min
+          if (fresh || serverScore == null) {
+            finalScore = Number.isFinite(ta.score) ? ta.score : finalScore
+            finalStatus = (ta.status as Status) || finalStatus
+          }
+        }
       }
+
       const px = c.binance ? pxBySym.get(c.binance) : undefined
       return {
         ...c,
-        _fav: faves.includes(String(c.symbol).toUpperCase()),
-        _score: score,
-        status,
+        _fav: faves.includes(symU),
+        _score: finalScore,
+        status: finalStatus,
         _price: px?.price ?? null,
         _d: px?.d ?? null,
         _w: px?.w ?? null,
@@ -413,107 +546,120 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym, localTA])
 
   const updatedAt = (indUpdatedAt || pxData) ? (indUpdatedAt ?? Date.now()) : undefined
 
   return (
-    <main className="w-full overflow-x-hidden">
-      <div className="max-w-6xl mx-auto p-6">
-        <header className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="hero">Crypto Tracker (light)</h1>
-            <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
-          </div>
-        </header>
+    <main className="p-6 max-w-6xl mx-auto">
+      <header className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="hero">Crypto Tracker (light)</h1>
+          <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
+        </div>
+        {/* Nav-knoppen waren verwijderd; laten zo */}
+      </header>
 
-        <div className="grid gap-6 lg:grid-cols-12 min-w-0">
-          {/* LINKS: TABEL */}
-          <div className="lg:col-span-8 min-w-0">
-            <div className="table-card overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="text-white/60">
-                  <tr>
-                    <th className="text-left py-2">#</th>
-                    <th className="py-2 w-10 text-center">
-                      <button
-                        onClick={() => toggleSort('fav')}
-                        title="Sorteren op favoriet"
-                        className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
-                      >
-                        <span className="leading-none">⭐</span>
-                        <span className="sr-only">Favoriet</span>
-                      </button>
-                    </th>
-                    <th className="text-left py-2">
-                      <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">Coin</button>
-                    </th>
-                    <th className="text-right py-2">
-                      <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Prijs</button>
-                    </th>
-                    <th className="text-right py-2">
-                      <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
-                    </th>
-                    <th className="text-right py-2">
-                      <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
-                    </th>
-                    <th className="text-right py-2">
-                      <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
-                    </th>
-                    <th className="text-right py-2">Score</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((c: any, i: number) => {
-                    const sym = String(c.symbol || '').toUpperCase()
-                    const isFav = c._fav === true
-                    const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
-                    return (
-                      <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
-                        <td className="py-3 pr-3">{i + 1}</td>
-                        <td className="py-3 w-10 text-center">
-                          <button
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
-                            aria-pressed={isFav}
-                            title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
-                            className={[
-                              'inline-flex items-center justify-center',
-                              'h-5 w-5 rounded hover:bg-white/10 transition',
-                              isFav ? 'text-yellow-400' : 'text-white/40 hover:text-yellow-300',
-                            ].join(' ')}
-                          >
-                            <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
-                          </button>
-                        </td>
-                        <td className="py-3">
-                          <Link href={`/crypto/${c.slug}`} className="link font-semibold">
-                            {c.name} <span className="ticker">({c.symbol})</span>
-                          </Link>
-                        </td>
-                        <td className="py-3 text-right">{formatFiat(c._price)}</td>
-                        <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
-                        <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
-                        <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
-                        <td className="py-3 text-right">
-                          <div className="inline-block align-middle">
-                            <ScoreBadge score={scoreNum} />
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+      <div className="grid gap-6 lg:grid-cols-12">
+        {/* LINKS: TABEL */}
+        <div className="lg:col-span-8">
+          <div className="table-card overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="text-white/60">
+                <tr>
+                  <th className="text-left py-2">#</th>
+                  <th className="py-2 w-10 text-center">
+                    <button
+                      onClick={() => toggleSort('fav')}
+                      title="Sorteren op favoriet"
+                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
+                    >
+                      <span className="leading-none">⭐</span>
+                      <span className="sr-only">Favoriet</span>
+                    </button>
+                  </th>
+                  <th className="text-left py-2">
+                    <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">Coin</button>
+                  </th>
+                  <th className="text-right py-2">
+                    <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Prijs</button>
+                  </th>
+                  <th className="text-right py-2">
+                    <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
+                  </th>
+                  <th className="text-right py-2">
+                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
+                  </th>
+                  <th className="text-right py-2">
+                    <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
+                  </th>
+                  <th className="text-right py-2">
+                    <button onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Status</button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c: any, i: number) => {
+                  const sym = String(c.symbol || '').toUpperCase()
+                  const isFav = c._fav === true
+                  const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
+                  const status = (c.status as Status) || 'HOLD'
+                  const badgeCls =
+                    status === 'BUY'  ? 'badge-buy'  :
+                    status === 'SELL' ? 'badge-sell' : 'badge-hold'
 
-          {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
-          <div className="lg:col-span-4 min-w-0">
-            <div className="sticky top-6 space-y-6">
-              <AISummary rows={rows} updatedAt={updatedAt} />
-              <DailySummary rows={rows} updatedAt={updatedAt} />
-              <Heatmap rows={rows} />
-            </div>
+                  return (
+                    <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
+                      <td className="py-3 pr-3">{i + 1}</td>
+                      <td className="py-3 w-10 text-center">
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
+                          aria-pressed={isFav}
+                          title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
+                          className={[
+                            'inline-flex items-center justify-center',
+                            'h-5 w-5 rounded hover:bg-white/10 transition',
+                            isFav ? 'text-yellow-400' : 'text-white/40 hover:text-yellow-300',
+                          ].join(' ')}
+                        >
+                          <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
+                        </button>
+                      </td>
+                      <td className="py-3">
+                        <Link href={`/crypto/${c.slug}`} className="link font-semibold">
+                          {c.name} <span className="ticker">({c.symbol})</span>
+                        </Link>
+                      </td>
+                      <td className="py-3 text-right">{formatFiat(c._price)}</td>
+                      <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
+                      <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
+                      <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
+
+                      {/* Status-badge met score */}
+                      <td className="py-3 text-right">
+                        <button
+                          type="button"
+                          className={`${badgeCls} text-xs px-2 py-1 rounded`}
+                          title={`Status: ${status} · Score: ${scoreNum}`}
+                          aria-label={`Status ${status} met score ${scoreNum}`}
+                        >
+                          {status} · {scoreNum}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
+        <div className="lg:col-span-4">
+          <div className="sticky top-6 space-y-6">
+            <AISummary rows={rows} updatedAt={updatedAt} />
+            <DailySummary rows={rows} updatedAt={updatedAt} />
+            <Heatmap rows={rows} />
           </div>
         </div>
       </div>
