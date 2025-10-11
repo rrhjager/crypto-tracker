@@ -531,10 +531,12 @@ function PageInner() {
                   const sym = String(c.symbol || '').toUpperCase()
                   const isFav = c._fav === true
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
-                  const status = (c.status as Status) || 'HOLD'
+
+                  // ★ ENIGE WIJZIGING: badge baseert zich op score i.p.v. c.status
+                  const statusByScore: Status = statusFromScore(scoreNum)
                   const badgeCls =
-                    status === 'BUY'  ? 'badge-buy'  :
-                    status === 'SELL' ? 'badge-sell' : 'badge-hold'
+                    statusByScore === 'BUY'  ? 'badge-buy'  :
+                    statusByScore === 'SELL' ? 'badge-sell' : 'badge-hold'
 
                   return (
                     <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
@@ -568,10 +570,10 @@ function PageInner() {
                         <button
                           type="button"
                           className={`${badgeCls} text-xs px-2 py-1 rounded`}
-                          title={`Status: ${status} · Score: ${scoreNum}`}
-                          aria-label={`Status ${status} met score ${scoreNum}`}
+                          title={`Status: ${statusByScore} · Score: ${scoreNum}`}
+                          aria-label={`Status ${statusByScore} met score ${scoreNum}`}
                         >
-                          {status} · {scoreNum}
+                          {statusByScore} · {scoreNum}
                         </button>
                       </td>
                     </tr>
