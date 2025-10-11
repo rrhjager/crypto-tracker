@@ -1,9 +1,9 @@
 // src/lib/taScore.ts
 export type Status = 'BUY' | 'HOLD' | 'SELL'
 
-export type MAStruct = { ma50: number | null; ma200: number | null }
-export type MACDStruct = { hist: number | null }
-export type VolumeStruct = { ratio: number | null }
+export type MAStruct    = { ma50: number | null; ma200: number | null }
+export type MACDStruct  = { hist: number | null }
+export type VolumeStruct= { ratio: number | null }
 
 export function statusFromScore(score: number): Status {
   if (score >= 66) return 'BUY'
@@ -13,15 +13,21 @@ export function statusFromScore(score: number): Status {
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 
+// ——— Agressiever profiel (identiek voor alle pagina’s) ———
+const AGGR = {
+  // MA: sneller naar extremen (was 0.20 spread-window; nu 0.12)
+  ma: { window: 0.12, bullBase: 62, bearBase: 38 }, // basis + range 40 blijft
+  // RSI: center 50, “gamma” wat hoger zodat extremer weegt
+  rsi: { center: 50, gamma: 1.30 },
+  // MACD: normalizeer hist t.o.v. MA50; strakker threshold
+  macd: { ref: 0.006, scale: 22 }, // 0.6% van MA50 ≈ sterk signaal
+  // Volume: center rond 1.0 met hogere gain
+  vol: { gain: 45 } // was ~50±30 → nu ±45
+}
+
 /**
- * Agressievere variant van de oude scoreberekening.
- * Zelfde interface, dus werkt overal 1-op-1 door.
- *
- * Wegingen: MA 45% · MACD 30% · RSI 15% · Volume 10%
- * - MA: asymmetrisch (bulls iets zwaarder beloond, bears harder afgestraft)
- * - MACD: ±30 band, lagere gevoeligheidsdrempel (0.005)
- * - RSI: steiler rond neutraal, dus <45 → duidelijk negatief, >55 → positief
- * - Volume: extra bonus/malus voor ratio >1.5 of <0.8
+ * Eén bron van waarheid voor de score (homepage, overzicht, detail).
+ * Weging: MA 35% · RSI 25% · MACD 25% · Volume 15%
  */
 export function computeScoreStatus(ind: {
   ma?: MAStruct | null
@@ -29,55 +35,55 @@ export function computeScoreStatus(ind: {
   macd?: MACDStruct | null
   volume?: VolumeStruct | null
 }): { score: number; status: Status } {
-  // 1️⃣ MA (45%)
+  // --- MA (35%)
   let maScore = 50
   if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    const m50 = ind.ma.ma50
-    const m200 = ind.ma.ma200
-    if (m50 > m200) {
-      const spread = clamp(m50 / Math.max(1e-9, m200) - 1, 0, 0.25)
-      // Bull: basis 65 → max 95
-      maScore = Math.min(95, 65 + (spread / 0.25) * 30)
+    const { ma50, ma200 } = ind.ma
+    const W = Math.max(1e-9, AGGR.ma.window)
+    if (ma50 > ma200) {
+      const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, AGGR.ma.window)
+      maScore = AGGR.ma.bullBase + (spread / W) * 40 // tot max 102 maar clamped later
+    } else if (ma50 < ma200) {
+      const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, AGGR.ma.window)
+      maScore = AGGR.ma.bearBase - (spread / W) * 40
+    }
+  }
+  maScore = clamp(maScore, 0, 100)
+
+  // --- RSI (25%) — projecteer 30..70 op 0..100 en maak agressiever
+  let rsiScore = 50
+  if (typeof ind.rsi === 'number') {
+    const base = clamp(((ind.rsi - 30) / 40) * 100, 0, 100) // 30..70 → 0..100
+    // aggressiever: boost afstand tot 50
+    const delta = (base - 50) * AGGR.rsi.gamma
+    rsiScore = clamp(50 + delta, 0, 100)
+  }
+
+  // --- MACD (25%) — normaliseer hist t.o.v. MA50
+  let macdScore = 50
+  const hist = ind.macd?.hist
+  const ref = ind.ma?.ma50 ?? null
+  if (typeof hist === 'number') {
+    if (ref && ref > 0) {
+      // rel = (hist/ma50)/ref → clamp -1..1 → 50 ± scale*rel
+      const rel = clamp((hist / ref) / Math.max(1e-9, AGGR.macd.ref), -1, 1)
+      macdScore = clamp(50 + rel * AGGR.macd.scale, 0, 100)
     } else {
-      const spread = clamp(m200 / Math.max(1e-9, m50) - 1, 0, 0.25)
-      // Bear: basis 35 → min 15
-      maScore = Math.max(15, 35 - (spread / 0.25) * 20)
+      macdScore = hist > 0 ? 65 : hist < 0 ? 35 : 50 // iets agressiever dan 60/40
     }
   }
 
-  // 2️⃣ RSI (15%)
-  let rsiScore = 50
-  if (typeof ind.rsi === 'number') {
-    const r = ind.rsi
-    if (r <= 30) rsiScore = 30
-    else if (r >= 70) rsiScore = 70
-    else if (r < 50) rsiScore = 50 - (50 - r) * 1.2 // steiler omlaag
-    else rsiScore = 50 + (r - 50) * 1.0
-    rsiScore = clamp(rsiScore, 0, 100)
-  }
-
-  // 3️⃣ MACD (30%)
-  let macdScore = 50
-  if (typeof ind.macd?.hist === 'number') {
-    const hist = ind.macd.hist
-    const t = 0.005 // agressiever
-    const rel = clamp(hist / t, -1, 1)
-    macdScore = Math.round(50 + rel * 30) // ±30 band
-  }
-
-  // 4️⃣ Volume (10%)
+  // --- Volume (15%) — ratio rond 1.0
   let volScore = 50
-  if (typeof ind.volume?.ratio === 'number') {
-    const ratio = ind.volume.ratio
-    const base = clamp(50 + ((ratio - 1) / 1) * 30, 0, 100)
-    const bonus = ratio > 1.5 ? 10 : ratio < 0.8 ? -10 : 0
-    volScore = clamp(base + bonus, 0, 100)
+  const ratio = ind.volume?.ratio
+  if (typeof ratio === 'number') {
+    // delta (±1) → 50 ± gain
+    const delta = clamp(ratio - 1, -1, 1)
+    volScore = clamp(50 + delta * AGGR.vol.gain, 0, 100)
   }
 
-  // 📊 Weging + output
   const score = Math.round(
-    clamp(0.45 * maScore + 0.30 * macdScore + 0.15 * rsiScore + 0.10 * volScore, 0, 100)
+    clamp(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore, 0, 100)
   )
-
   return { score, status: statusFromScore(score) }
 }

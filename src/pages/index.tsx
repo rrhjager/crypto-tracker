@@ -1,16 +1,16 @@
 // src/pages/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
+import { computeScoreStatus } from '@/lib/taScore' // ★ identieke score als crypto pages
 
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
-// compact, uniform for 9 tiles (similar to your screenshot)
-const CARD_CONTENT_H = 'h-[280px]'
+const CARD_CONTENT_H = 'h-[280px]' // compact 9 tiles
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -68,7 +68,7 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 }
 
 /* =======================
-   AANDELEN — aggregatie
+   AANDELEN — aggregatie (ongewijzigde logica, maar nu met cache-buster)
    ======================= */
 type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status?: Advice | string; points?: number | string | null }
 type RsiResp    = { symbol: string; period: number; rsi: number | null; status?: Advice | string; points?: number | string | null }
@@ -124,42 +124,8 @@ const toPtsSmart = (status?: Advice | string, pts?: number | string | null, fall
   return f == null ? 0 : clamp(f, -2, 2)
 }
 
-/* ✅ nu met echte cache hint voor CDN/browser */
-async function calcScoreForSymbol(symbol: string): Promise<number | null> {
-  try {
-    const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-      fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'force-cache' }),
-      fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'force-cache' }),
-      fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'force-cache' }),
-      fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'force-cache' }),
-    ])
-    if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-    const [ma, rsi, macd, vol] = await Promise.all([
-      rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-    ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-    const pMA   = toPtsSmart(ma?.status,   ma?.points,   () => deriveMaPoints(ma))
-    const pMACD = toPtsSmart(macd?.status, macd?.points, () => deriveMacdPoints(macd, ma))
-    const pRSI  = toPtsSmart(rsi?.status,  rsi?.points,  () => deriveRsiPoints(rsi))
-    const pVOL  = toPtsSmart(vol?.status,  vol?.points,  () => deriveVolPoints(vol))
-
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    const pct = clamp(Math.round(agg * 100), 0, 100)
-    return pct
-  } catch {
-    return null
-  }
-}
-
 /* =======================
-   CRYPTO — light score
+   CRYPTO — API response
    ======================= */
 type IndResp = {
   symbol: string
@@ -168,55 +134,6 @@ type IndResp = {
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
   error?: string
-}
-
-function statusFromOverall(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-
-function overallScore(ind?: IndResp): { score: number, status: Advice } {
-  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-
-  let maScore = 50
-  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    if (ind.ma.ma50 > ind.ma.ma200) {
-      const spread = Math.max(0, Math.min(0.2, ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1))
-      maScore = 60 + (spread / 0.2) * 40
-    } else if (ind.ma.ma50 < ind.ma.ma200) {
-      const spread = Math.max(0, Math.min(0.2, ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1))
-      maScore = 40 - (spread / 0.2) * 40
-    }
-  }
-
-  let rsiScore = 50
-  if (typeof ind.rsi === 'number') {
-    rsiScore = Math.max(0, Math.min(100, ((ind.rsi - 30) / 40) * 100))
-  }
-
-  let macdScore = 50
-  const hist = ind.macd?.hist
-  const ma50 = ind.ma?.ma50 ?? null
-  if (typeof hist === 'number') {
-    if (ma50 && ma50 > 0) {
-      const t = 0.01
-      const relClamped = Math.max(-1, Math.min(1, (hist / ma50) / t))
-      macdScore = Math.round(50 + relClamped * 20)
-    } else {
-      macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
-    }
-  }
-
-  let volScore = 50
-  const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') {
-    const delta = Math.max(-1, Math.min(1, (ratio - 1) / 1))
-    volScore = Math.max(0, Math.min(100, 50 + delta * 30))
-  }
-
-  const score = Math.round(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore)
-  return { score, status: statusFromOverall(score) }
 }
 
 // SYM → SYMUSDT (stablecoins overslaan)
@@ -347,7 +264,7 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
-/* ---------------- small UI primitives (no extra deps) ---------------- */
+/* ---------------- small UI primitives ---------------- */
 const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
   title, actionHref, actionLabel, children
 }) => (
@@ -381,14 +298,29 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
 export default function Homepage() {
   const router = useRouter()
 
-  // ---------------- NEW: loading flags ----------------
+  // minute tag voor cache-busting + periodieke refresh
+  const [minuteTag, setMinuteTag] = useState(Math.floor(Date.now() / 60_000))
+  useEffect(() => {
+    const id = setInterval(() => setMinuteTag(Math.floor(Date.now() / 60_000)), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  // luister naar localStorage updates van detailpagina
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (!e.key || !e.key.startsWith('ta:')) return
+      setMinuteTag(Math.floor(Date.now() / 60_000))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // loading flags
   const [loadingEq, setLoadingEq] = useState(true)
   const [loadingCoin, setLoadingCoin] = useState(true)
   const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(true)
   const [loadingNewsEq, setLoadingNewsEq] = useState(true)
   const [loadingCongress, setLoadingCongress] = useState(true)
   const [loadingAcademy, setLoadingAcademy] = useState(true)
-  // ----------------------------------------------------
 
   /* ---------- Prefetch routes ---------- */
   useEffect(() => {
@@ -400,92 +332,7 @@ export default function Homepage() {
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
-  /* ---------- WARM-UP CACHE ---------- */
-  useEffect(() => {
-    let aborted = false
-    const ric = (cb: () => void) => {
-      if (typeof window === 'undefined') return
-      const _ric = (window as any).requestIdleCallback as ((cb: any, opts?: any)=>any) | undefined
-      if (_ric) _ric(cb, { timeout: 100 }); else setTimeout(cb, 0)
-    }
-
-    ric(async () => {
-      try {
-        const hadEqBuy  = !!getCache<ScoredEq[]>('home:eq:topBuy')
-        const hadEqSell = !!getCache<ScoredEq[]>('home:eq:topSell')
-        const hadCBuy   = !!getCache<ScoredCoin[]>('home:coin:topBuy')
-        const hadCSell  = !!getCache<ScoredCoin[]>('home:coin:topSell')
-
-        // --- Equities warm ---
-        if (!(hadEqBuy && hadEqSell)) {
-          const WARM_MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-          const outBuy: ScoredEq[] = []
-          const outSell: ScoredEq[] = []
-
-          for (const market of WARM_MARKET_ORDER) {
-            if (aborted) return
-            const cons = constituentsForMarket(market)
-            if (!cons.length) continue
-            const symbols = cons.map(c => c.symbol)
-
-            const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
-            const rows = cons.map((c, i) => ({
-              symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
-            })).filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
-
-            if (rows.length) {
-              const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-              const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-              if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-              if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-            }
-          }
-
-          const order = (m: MarketLabel) => WARM_MARKET_ORDER.indexOf(m)
-          const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
-          const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
-          if (!aborted) {
-            if (!hadEqBuy)  setCache('home:eq:topBuy',  finalBuy)
-            if (!hadEqSell) setCache('home:eq:topSell', finalSell)
-          }
-        }
-
-        // --- Crypto warm ---
-        if (!(hadCBuy && hadCSell)) {
-          const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
-            .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
-            .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
-
-          const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-            try {
-              const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-              const r = await fetch(url, { cache: 'force-cache' })
-              if (!r.ok) throw new Error(`HTTP ${r.status}`)
-              const j = await r.json() as { results?: IndResp[] }
-              const ind = (j.results || [])[0]
-              const { score } = overallScore(ind)
-              try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
-              return { symbol: c.symbol, name: c.name, score }
-            } catch {
-              return { symbol: c.symbol, name: c.name, score: null as any }
-            }
-          })
-
-          const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
-          const buys  = [...rows].sort((a,b)=> b.score - a.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
-          const sells = [...rows].sort((a,b)=> a.score - b.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) as Advice }))
-          if (!aborted) {
-            if (!hadCBuy)  setCache('home:coin:topBuy',  buys)
-            if (!hadCSell) setCache('home:coin:topSell', sells)
-          }
-        }
-      } catch {}
-    })
-
-    return () => { aborted = true }
-  }, [])
-
-  // SWR warm-up (news) – blijft no-store
+  /* ---------- NEWS warm-up (SWR) ---------- */
   useEffect(() => {
     let aborted = false
     async function prime(key: string) {
@@ -517,7 +364,7 @@ export default function Homepage() {
             ? 'crypto OR bitcoin OR ethereum OR blockchain'
             : 'equities OR stocks OR stock market OR aandelen OR beurs'
         const locale = 'hl=en-US&gl=US&ceid=US:en'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}`, { cache:'no-store' })
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`, { cache:'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
@@ -537,7 +384,7 @@ export default function Homepage() {
     load('crypto', setNewsCrypto, setLoadingNewsCrypto)
     load('equities', setNewsEq, setLoadingNewsEq)
     return ()=>{aborted=true}
-  },[])
+  },[minuteTag])
 
   /* =======================
      EQUITIES — Top BUY/SELL
@@ -547,19 +394,45 @@ export default function Homepage() {
   const [topSell, setTopSell] = useState<ScoredEq[]>([])
   const [scoreErr, setScoreErr] = useState<string | null>(null)
 
+  async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
+    try {
+      const [rMa, rRsi, rMacd, rVol] = await Promise.all([
+        fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' }),
+        fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14&v=${v}`, { cache: 'no-store' }),
+        fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9&v=${v}`, { cache: 'no-store' }),
+        fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20&v=${v}`, { cache: 'no-store' }),
+      ])
+      if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
+
+      const [ma, rsi, macd, vol] = await Promise.all([
+        rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
+      ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
+
+      const pMA   = toPtsSmart(ma?.status,   ma?.points,   () => deriveMaPoints(ma))
+      const pMACD = toPtsSmart(macd?.status, macd?.points, () => deriveMacdPoints(macd, ma))
+      const pRSI  = toPtsSmart(rsi?.status,  rsi?.points,  () => deriveRsiPoints(rsi))
+      const pVOL  = toPtsSmart(vol?.status,  vol?.points,  () => deriveVolPoints(vol))
+
+      const nMA   = (pMA   + 2) / 4
+      const nMACD = (pMACD + 2) / 4
+      const nRSI  = (pRSI  + 2) / 4
+      const nVOL  = (pVOL  + 2) / 4
+
+      const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+      const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
+      const pct = clamp(Math.round(agg * 100), 0, 100)
+      return pct
+    } catch {
+      return null
+    }
+  }
+
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setLoadingEq(true) // NEW
+        setLoadingEq(true)
         setScoreErr(null)
-        const cacheKeyBuy  = 'home:eq:topBuy'
-        const cacheKeySell = 'home:eq:topSell'
-
-        const cachedBuy  = getCache<ScoredEq[]>(cacheKeyBuy)
-        const cachedSell = getCache<ScoredEq[]>(cacheKeySell)
-        if (cachedBuy)  setTopBuy(cachedBuy)
-        if (cachedSell) setTopSell(cachedSell)
 
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
@@ -569,7 +442,7 @@ export default function Homepage() {
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
 
-          const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym))
+          const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
           const rows = cons.map((c, i) => ({
             symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
           })).filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
@@ -589,17 +462,17 @@ export default function Homepage() {
         if (!aborted) {
           setTopBuy(finalBuy)
           setTopSell(finalSell)
-          setCache(cacheKeyBuy, finalBuy)
-          setCache(cacheKeySell, finalSell)
+          setCache('home:eq:topBuy',  finalBuy)
+          setCache('home:eq:topSell', finalSell)
         }
       } catch (e: any) {
         if (!aborted) setScoreErr(String(e?.message || e))
       } finally {
-        if (!aborted) setLoadingEq(false) // NEW
+        if (!aborted) setLoadingEq(false)
       }
     })()
     return () => { aborted = true }
-  }, [])
+  }, [minuteTag]) // ★ elke minuut herberekenen
 
   /* =======================
      CRYPTO — Top 5 BUY/SELL
@@ -608,34 +481,35 @@ export default function Homepage() {
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
   const [coinErr, setCoinErr] = useState<string | null>(null)
 
+  // pairs memo
+  const pairs = useMemo(() => {
+    return COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
+      .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
+      .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
+  }, [])
+
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setLoadingCoin(true) // NEW
+        setLoadingCoin(true)
         setCoinErr(null)
 
-        const cacheKeyB = 'home:coin:topBuy'
-        const cacheKeyS = 'home:coin:topSell'
-        const cB = getCache<ScoredCoin[]>(cacheKeyB)
-        const cS = getCache<ScoredCoin[]>(cacheKeyS)
-        if (cB) setCoinTopBuy(cB)
-        if (cS) setCoinTopSell(cS)
-
-        const pairs = COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
-          .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
-          .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
-
-        const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
+        const batchScores = await pool(pairs, 10, async ({ c, pair }) => {
           try {
-            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}`
-            const r = await fetch(url, { cache: 'force-cache' })
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}&v=${minuteTag}`
+            const r = await fetch(url, { cache: 'no-store' })
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
             const ind = (j.results || [])[0]
-            const { score } = overallScore(ind)
+            const { score } = computeScoreStatus({
+              ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
+            } as any)
+            // lokale hint voor snelle terugnavigatie
+            try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
             return { symbol: c.symbol, name: c.name, score }
           } catch {
+            // fallback naar lokale hint als die vers is
             try {
               const raw = localStorage.getItem(`ta:${pair}`)
               if (raw) {
@@ -661,27 +535,27 @@ export default function Homepage() {
         if (!aborted) {
           setCoinTopBuy(buys)
           setCoinTopSell(sells)
-          setCache(cacheKeyB, buys)
-          setCache(cacheKeyS, sells)
+          setCache('home:coin:topBuy',  buys)
+          setCache('home:coin:topSell', sells)
         }
       } catch (e:any) {
         if (!aborted) setCoinErr(String(e?.message || e))
       } finally {
-        if (!aborted) setLoadingCoin(false) // NEW
+        if (!aborted) setLoadingCoin(false)
       }
     })()
     return () => { aborted = true }
-  }, [])
+  }, [pairs, minuteTag])
 
-  /* ========= Academy (optional fetch + fallback) ========= */
+  /* ========= Academy ========= */
   type AcademyItem = { title: string; href: string }
   const [academy, setAcademy] = useState<AcademyItem[]>([])
   useEffect(() => {
     let aborted = false
     ;(async () => {
       try {
-        setLoadingAcademy(true) // NEW
-        const r = await fetch('/api/academy/list', { cache: 'force-cache' })
+        setLoadingAcademy(true)
+        const r = await fetch('/api/academy/list?v='+minuteTag, { cache: 'no-store' })
         if (r.ok) {
           const j = await r.json() as { items?: AcademyItem[] }
           if (!aborted && Array.isArray(j.items) && j.items.length) {
@@ -702,11 +576,11 @@ export default function Homepage() {
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
         ])
       }
-    })().finally(() => { if (!aborted) setLoadingAcademy(false) }) // NEW
+    })().finally(() => { if (!aborted) setLoadingAcademy(false) })
     return () => { aborted = true }
-  }, [])
+  }, [minuteTag])
 
-  /* ========= Congress Trading (LIVE list) ========= */
+  /* ========= Congress Trading ========= */
   type CongressTrade = {
     person?: string;
     ticker?: string;
@@ -723,10 +597,9 @@ export default function Homepage() {
     let aborted = false
     ;(async () => {
       try {
-        setLoadingCongress(true) // NEW
+        setLoadingCongress(true)
         setTradesErr(null)
-        // Use the SAME endpoint/shape as your Congress page
-        const r = await fetch('/api/market/congress?limit=30', { cache: 'no-store' })
+        const r = await fetch('/api/market/congress?limit=30&v='+minuteTag, { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json() as { items?: any[] }
         const arr = Array.isArray(j?.items) ? j.items : []
@@ -743,11 +616,11 @@ export default function Homepage() {
       } catch (e: any) {
         if (!aborted) setTradesErr(String(e?.message || e))
       } finally {
-        if (!aborted) setLoadingCongress(false) // NEW
+        if (!aborted) setLoadingCongress(false)
       }
     })()
     return () => { aborted = true }
-  }, [])
+  }, [minuteTag])
 
   /* ---- helpers for news (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
@@ -806,7 +679,6 @@ export default function Homepage() {
     }
   }
 
-  // UPDATED: renderNews accepteert nu een loading-flag
   const renderNews = (items: NewsItem[], keyPrefix: string, loading = false) => (
     <ul className={`grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
       {loading ? (
@@ -864,7 +736,6 @@ export default function Homepage() {
         {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-5 lg:grid-cols-3">
           {/* -------- Row 1 -------- */}
-          {/* 1) Intro (image removed, English copy, About us CTA) */}
           <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
@@ -999,7 +870,7 @@ export default function Homepage() {
             </ul>
           </Card>
 
-          {/* 6) Congress Trading — Latest (smaller type scale) */}
+          {/* 6) Congress Trading — Latest */}
           <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
@@ -1052,17 +923,14 @@ export default function Homepage() {
           </Card>
 
           {/* -------- Row 3 -------- */}
-          {/* 7) Crypto News */}
           <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
             {renderNews(newsCrypto, 'nC', loadingNewsCrypto)}
           </Card>
 
-          {/* 8) Equities News */}
           <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
             {renderNews(newsEq, 'nE', loadingNewsEq)}
           </Card>
 
-          {/* 9) Academy */}
           <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
             <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingAcademy ? (

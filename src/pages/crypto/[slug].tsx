@@ -3,9 +3,10 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import useSWR from 'swr'
-import { useMemo, useEffect } from 'react'
+import { useMemo, useEffect, useState } from 'react'
 import { COINS } from '@/lib/coins'
 import TradingViewChart from '@/components/TradingViewChart'
+import { computeScoreStatus, statusFromScore } from '@/lib/taScore'
 
 type IndResp = {
   symbol: string
@@ -13,12 +14,10 @@ type IndResp = {
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null; status?: string; points?: number|string|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null; status?: string; points?: number|string|null }
-  rsiStatus?: string
-  rsiPoints?: number|string|null
   error?: string
 }
 
-// ⬇️ wijziging: forceer no-store
+// ⬇️ no-store fetcher
 const fetcher = (u: string) => fetch(u, { cache: 'no-store' }).then(r => r.json())
 
 type Status = 'BUY'|'HOLD'|'SELL'
@@ -32,80 +31,20 @@ const lightPill =
   "hover:bg-white/15 hover:text-white transition";
 
 const clampNum = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
-const statusFromOverall = (score:number): Status =>
-  score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD'
 
-// Same improved mapping as list page
-function overallScore(ind?: IndResp): { score: number, status: Status } {
-  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-
-  // MA
-  let maScore = 50
-  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    if (ind.ma.ma50 > ind.ma.ma200) {
-      const spread = clampNum(ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1, 0, 0.2)
-      maScore = 60 + (spread / 0.2) * 40
-    } else if (ind.ma.ma50 < ind.ma.ma200) {
-      const spread = clampNum(ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1, 0, 0.2)
-      maScore = 40 - (spread / 0.2) * 40
-    }
-  }
-
-  // RSI
-  let rsiScore = 50
-  if (typeof ind.rsi === 'number') {
-    rsiScore = clampNum(((ind.rsi - 30) / 40) * 100, 0, 100)
-  }
-
-  // MACD — normalize histogram vs MA50
-  let macdScore = 50
-  const h = ind.macd?.hist
-  const ma50 = ind.ma?.ma50 ?? null
-  if (typeof h === 'number') {
-    if (ma50 && ma50 > 0) {
-      const t = 0.01
-      const relClamped = clampNum((h / ma50) / t, -1, 1)
-      macdScore = Math.round(50 + relClamped * 20)
-    } else {
-      macdScore = h > 0 ? 60 : h < 0 ? 40 : 50
-    }
-  }
-
-  // Volume — center around 1.0
-  let volScore = 50
-  const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') {
-    const delta = clampNum((ratio - 1) / 1, -1, 1)
-    volScore = clampNum(50 + delta * 30, 0, 100)
-  }
-
-  const score = Math.round(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore)
-  return { score, status: statusFromOverall(score) }
+// Binance-pair helper
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
 }
 
-function statusMA(ma50?: number|null, ma200?: number|null): Status {
-  if (ma50 == null || ma200 == null) return 'HOLD'
-  if (ma50 > ma200) return 'BUY'
-  if (ma50 < ma200) return 'SELL'
-  return 'HOLD'
-}
-function statusRSI(r?: number|null): Status {
-  if (r == null) return 'HOLD'
-  if (r > 70) return 'SELL'
-  if (r < 30) return 'BUY'
-  return 'HOLD'
-}
-function statusMACD(h?: number|null): Status {
-  if (h == null) return 'HOLD'
-  if (h > 0) return 'BUY'
-  if (h < 0) return 'SELL'
-  return 'HOLD'
-}
-function statusVolume(ratio?: number|null): Status {
-  if (ratio == null) return 'HOLD'
-  if (ratio > 1.2) return 'BUY'
-  if (ratio < 0.8) return 'SELL'
-  return 'HOLD'
+function saveLocalTA(symUSDT: string, score: number, status: Status) {
+  try {
+    localStorage.setItem(`ta:${symUSDT}`, JSON.stringify({ score, status, ts: Date.now() }))
+    window.dispatchEvent(new StorageEvent('storage', { key: `ta:${symUSDT}`, newValue: localStorage.getItem(`ta:${symUSDT}`) }))
+  } catch {}
 }
 
 function fmtNum(n: number | null | undefined, d = 2) {
@@ -124,21 +63,6 @@ function fmtInt(n: number | null | undefined) {
   return Math.round(n).toLocaleString('nl-NL')
 }
 
-// Binance-pair helper
-const toBinancePair = (symbol: string) => {
-  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-  if (!s || skip.has(s)) return null
-  return `${s}USDT`
-}
-
-function saveLocalTA(symUSDT: string, score: number, status: Status) {
-  try {
-    localStorage.setItem(`ta:${symUSDT}`, JSON.stringify({ score, status, ts: Date.now() }))
-    window.dispatchEvent(new StorageEvent('storage', { key: `ta:${symUSDT}`, newValue: localStorage.getItem(`ta:${symUSDT}`) }))
-  } catch {}
-}
-
 function PageInner() {
   const { query } = useRouter()
   const raw = String(query.slug || '')
@@ -146,35 +70,23 @@ function PageInner() {
 
   // 🔧 FLEXIBLE COIN RESOLUTION
   const coin = useMemo(() => {
-    // Build a small set of acceptable aliases from the incoming slug
     const aliases = new Set<string>()
-    const s = slug.replace(/_/g, '-') // normalize underscores
-
+    const s = slug.replace(/_/g, '-')
     aliases.add(s)
-    // bnb-usd <-> bnb
     if (s.endsWith('-usd')) aliases.add(s.slice(0, -4))
     else aliases.add(`${s}-usd`)
-
-    // usdt endings → -usd
     if (s.endsWith('usdt')) {
-      aliases.add(s.slice(0, -4))        // bnbusdt -> bnb
+      aliases.add(s.slice(0, -4))
       aliases.add(s.slice(0, -4) + '-usd')
     }
-
-    // hyphenless variant (bnbusd -> bnb-usd)
     aliases.add(s.replace(/-/g, ''))
     if (!s.includes('-')) aliases.add(s + '-usd')
 
-    // Try to match against COINS list
     return COINS.find((c: any) => {
-      const sym = String(c.symbol || '').toLowerCase()            // e.g. bnb-usd
-      const base = sym.replace(/-usd$/, '')                       // e.g. bnb
-      const alt = String(c.slug || '').toLowerCase() || ''        // optional custom slug
-      return (
-        aliases.has(sym) ||
-        aliases.has(base) ||
-        (alt && aliases.has(alt))
-      )
+      const sym = String(c.symbol || '').toLowerCase()
+      const base = sym.replace(/-usd$/, '')
+      const alt = String(c.slug || '').toLowerCase() || ''
+      return aliases.has(sym) || aliases.has(base) || (alt && aliases.has(alt))
     })
   }, [slug])
 
@@ -188,8 +100,12 @@ function PageInner() {
     return 'BINANCE:BTCUSDT'
   }, [coin, binance])
 
-  // ⬇️ wijziging: 1-minuut cache-buster (zorgt dat we niet vastplakken aan oude CDN/browser cache)
-  const minuteTag = Math.floor(Date.now() / 60_000)
+  // minute cache-buster
+  const [minuteTag, setMinuteTag] = useState(Math.floor(Date.now()/60_000))
+  useEffect(() => {
+    const id = setInterval(() => setMinuteTag(Math.floor(Date.now()/60_000)), 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   const { data } = useSWR<{ results: IndResp[] }>(
     binance ? `/api/crypto-light/indicators?symbols=${encodeURIComponent(binance)}&v=${minuteTag}` : null,
@@ -197,7 +113,9 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 120_000 }
   )
   const ind: IndResp | undefined = (data?.results || [])[0]
-  const overall = overallScore(ind)
+  const overall = computeScoreStatus({
+    ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
+  } as any)
 
   const { data: pxData } = useSWR<{ results: { symbol:string, price:number|null }[] }>(
     binance ? `/api/crypto-light/prices?symbols=${encodeURIComponent(binance)}&v=${minuteTag}` : null,
@@ -205,17 +123,6 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
   const price = pxData?.results?.[0]?.price ?? null
-
-  const newsQuery = useMemo(() => {
-    if (!coin) return null
-    return `${coin.name} ${coin.symbol} crypto`
-  }, [coin])
-
-  const { data: newsData } = useSWR<{ items: { title: string; link: string; source?: string; pubDate?: string }[] }>(
-    newsQuery ? `/api/news/google?q=${encodeURIComponent(newsQuery)}&hl=nl&gl=NL&ceid=NL:nl` : null,
-    fetcher,
-    { revalidateOnFocus: false, refreshInterval: 300_000 }
-  )
 
   useEffect(() => {
     if (!binance) return
@@ -227,9 +134,34 @@ function PageInner() {
       <main className="max-w-4xl mx-auto p-6">
         <h1 className="hero">Niet gevonden</h1>
         <p className="sub mb-6">Deze coin bestaat niet in je COINS-lijst.</p>
-        <Link href="/crypto" className={lightPill}>← Back to Crypto (light)</Link>
+        <Link href="/crypto" className={lightPill}>← Back to Crypto</Link>
       </main>
     )
+  }
+
+  const statusMA = (ma50?: number|null, ma200?: number|null): Status => {
+    if (ma50 == null || ma200 == null) return 'HOLD'
+    if (ma50 > ma200) return 'BUY'
+    if (ma50 < ma200) return 'SELL'
+    return 'HOLD'
+  }
+  const statusRSI = (r?: number|null): Status => {
+    if (r == null) return 'HOLD'
+    if (r > 70) return 'SELL'
+    if (r < 30) return 'BUY'
+    return 'HOLD'
+  }
+  const statusMACD = (h?: number|null): Status => {
+    if (h == null) return 'HOLD'
+    if (h > 0) return 'BUY'
+    if (h < 0) return 'SELL'
+    return 'HOLD'
+  }
+  const statusVolume = (ratio?: number|null): Status => {
+    if (ratio == null) return 'HOLD'
+    if (ratio > 1.2) return 'BUY'
+    if (ratio < 0.8) return 'SELL'
+    return 'HOLD'
   }
 
   return (
@@ -310,47 +242,8 @@ function PageInner() {
         />
       </section>
 
-      <section className="mt-6">
-        <div className="table-card p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-semibold">Laatste nieuws</h3>
-            {newsQuery ? (
-              <a
-                className="link text-sm"
-                href={`https://news.google.com/search?q=${encodeURIComponent(newsQuery)}&hl=nl&gl=NL&ceid=NL:nl`}
-                target="_blank" rel="noopener noreferrer"
-              >
-                Meer op Google News →
-              </a>
-            ) : null}
-          </div>
-
-          {!newsData && (
-            <div className="text-white/60 text-sm">Nieuws laden…</div>
-          )}
-
-          {newsData?.items?.length ? (
-            <ul className="space-y-3">
-              {newsData.items.map((it, idx) => (
-                <li key={idx} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-t border-white/5 pt-3 first:border-0 first:pt-0">
-                  <a href={it.link} target="_blank" rel="noopener noreferrer" className="link font-medium">
-                    {it.title}
-                  </a>
-                  <div className="text-xs text-white/60 sm:text-right">
-                    {it.source ? <span>{it.source}</span> : null}
-                    {it.pubDate ? <span className="ml-2">{new Date(it.pubDate).toLocaleString('nl-NL')}</span> : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : newsData && !newsData.items?.length ? (
-            <div className="text-white/60 text-sm">Geen nieuws gevonden.</div>
-          ) : null}
-        </div>
-      </section>
-
       <section className="mt-6 flex gap-3">
-        <Link href="/crypto" className={lightPill}>← Back to Crypto (light)</Link>
+        <Link href="/crypto" className={lightPill}>← Back to Crypto</Link>
         <Link href="/" className={lightPill}>Go to homepage</Link>
       </section>
     </main>
