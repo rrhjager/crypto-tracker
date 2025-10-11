@@ -8,6 +8,17 @@ import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore' // ★ identieke score als crypto pages
 
+/* ===== ▼▼▼ NIEUW: volledige constituents per beurs ▼▼▼ ===== */
+import { SP500 }    from '@/lib/sp500'
+import { NASDAQ }   from '@/lib/nasdaq'
+import { DOWJONES } from '@/lib/dowjones'
+import { DAX as DAX_FULL } from '@/lib/dax'
+import { FTSE100 }  from '@/lib/ftse100'
+import { NIKKEI225 } from '@/lib/nikkei225'
+import { HANGSENG }  from '@/lib/hangseng'
+import { SENSEX }    from '@/lib/sensex'
+/* ===== ▲▲▲ ======================================= ▲▲▲ ===== */
+
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
 const CARD_CONTENT_H = 'h-[280px]' // compact 9 tiles
@@ -205,10 +216,38 @@ const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
   ],
 }
 
+/* ===== ▼▼▼ GEWIJZIGD: gebruik volledige lijsten per markt (fallback naar STATIC_CONS) ▼▼▼ ===== */
 function constituentsForMarket(label: MarketLabel) {
   if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
+    return SP500.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'NASDAQ' && Array.isArray(NASDAQ) && NASDAQ.length)
+    return NASDAQ.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'Dow Jones' && Array.isArray(DOWJONES) && DOWJONES.length)
+    return DOWJONES.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'DAX' && Array.isArray(DAX_FULL) && DAX_FULL.length)
+    return DAX_FULL.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'FTSE 100' && Array.isArray(FTSE100) && FTSE100.length)
+    return FTSE100.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'Nikkei 225' && Array.isArray(NIKKEI225) && NIKKEI225.length)
+    return NIKKEI225.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'Hang Seng' && Array.isArray(HANGSENG) && HANGSENG.length)
+    return HANGSENG.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
+    return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+
+  // Fallback (houdt alles werkend als een lijst ontbreekt)
   return STATIC_CONS[label] || []
 }
+/* ===== ▲▲▲========================= Einde wijziging =========================▲▲▲ ===== */
 
 /* ------- crypto universum (Yahoo tickers) — TOP 50 ------- */
 const COINS: { symbol: string; name: string }[] = [
