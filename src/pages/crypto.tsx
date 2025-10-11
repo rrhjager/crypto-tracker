@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
 import ScoreBadge from '@/components/ScoreBadge' // blijft staan, maar we tonen nu status-badge
+import { computeScoreStatus } from '@/lib/taScore' // ★ NIEUW: identieke scorebron
 
 // ---------- helpers ----------
 const fetcher = (url: string) => fetch(url).then(r => r.json())
@@ -45,58 +46,20 @@ const toBinancePair = (symbol: string) => {
   return `${s}USDT`
 }
 
-// ---------- scoring op 4 indicatoren ----------
+// ---------- API shapes ----------
 type IndResp = {
   symbol: string
   ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  // NIEUW: door backend meegeleverd (optioneel)
+  // backend mag score/status meeleveren, maar we negeren die en rekenen met computeScoreStatus
   score?: number
   status?: Status
   error?: string
 }
 
-function scoreFromIndicators(ind?: IndResp): { score: number, status: Status } {
-  if (!ind || ind.error) return { score: 50, status: 'HOLD' }
-
-  // MA (35%)
-  let maScore = 50
-  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    if (ind.ma.ma50 > ind.ma.ma200) {
-      const spread = clamp(ind.ma.ma50 / Math.max(1e-9, ind.ma.ma200) - 1, 0, 0.2)
-      maScore = 60 + (spread / 0.2) * 40
-    } else if (ind.ma.ma50 < ind.ma.ma200) {
-      const spread = clamp(ind.ma.ma200 / Math.max(1e-9, ind.ma.ma50) - 1, 0, 0.2)
-      maScore = 40 - (spread / 0.2) * 40
-    } else {
-      maScore = 50
-    }
-  }
-
-  // RSI (25%)
-  let rsiScore = 50
-  if (typeof ind.rsi === 'number') rsiScore = clamp(((ind.rsi - 30) / 40) * 100, 0, 100)
-
-  // MACD (25%)
-  let macdScore = 50
-  const hist = ind.macd?.hist
-  if (typeof hist === 'number') macdScore = hist > 0 ? 70 : hist < 0 ? 30 : 50
-
-  // Volume (15%)
-  let volScore = 50
-  const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') volScore = clamp((ratio / 2) * 100, 0, 100)
-
-  const score = Math.round(clamp(
-    0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore,
-    0, 100
-  ))
-  return { score, status: statusFromScore(score) }
-}
-
-/* ====== NIEUW: detail→home localStorage handshake ====== */
+/* ====== detail→home localStorage handshake ====== */
 type LocalTA = { score: number; status: Status; ts: number }
 const TA_KEY_PREFIX = 'ta:' // sleutels zoals ta:BTCUSDT
 
@@ -122,16 +85,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-function saveLocalTA(symUSDT: string, score: number, status: Status) {
-  try {
-    const k = `${TA_KEY_PREFIX}${symUSDT}`
-    localStorage.setItem(k, JSON.stringify({ score, status, ts: Date.now() }))
-    // evt. notify — sommige browsers propagaten 'storage' alleen tussen tabs
-    window.dispatchEvent(new StorageEvent('storage', { key: k, newValue: localStorage.getItem(k) }))
-  } catch {}
-}
-
-/* ====== NIEUW: snellere, incrementele indicator-fetch ====== */
+/* ====== snellere, incrementele indicator-fetch ====== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -413,7 +367,7 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // ---- Indicators ophalen (INCREMENTEEL & SNELLER) ----
+  // ---- Indicators ophalen (BATCHED + elke 60s) ----
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -424,9 +378,8 @@ function PageInner() {
 
     async function runOnce() {
       try {
-        const chunks = chunk(symbols, 12) // parallel kleinere batches
-        await Promise.all(chunks.map(async (group, gi) => {
-          // kleine delay tussen groepen om burst te voorkomen
+        const groups = chunk(symbols, 12)
+        await Promise.all(groups.map(async (group, gi) => {
           if (gi) await new Promise(r => setTimeout(r, 120 * gi))
           const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
           try {
@@ -439,31 +392,13 @@ function PageInner() {
               return next
             })
             setIndUpdatedAt(Date.now())
-          } catch {
-            // retry één keer voor deze groep
-            if (aborted) return
-            try {
-              const j2 = await fetchJSON(url, { timeoutMs: 9000 })
-              const arr2: IndResp[] = Array.isArray(j2?.results) ? j2.results : []
-              if (aborted) return
-              setIndBySym(prev => {
-                const next = new Map(prev)
-                for (const it of arr2) next.set(it.symbol, it)
-                return next
-              })
-              setIndUpdatedAt(Date.now())
-            } catch {}
-          }
+          } catch {}
         }))
-      } finally {
-        if (!aborted) {
-          // noop
-        }
-      }
+      } finally {}
     }
 
     runOnce()
-    const id = setInterval(runOnce, 120_000) // dezelfde interval als voorheen
+    const id = setInterval(runOnce, 60_000) // ★ GEWIJZIGD: 60s refresh
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
@@ -488,32 +423,26 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // rows verrijken met indicator-score + prijs/perf
+  // rows verrijken met indicator-score (computeScoreStatus) + prijs/perf
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
       const ind  = c.binance ? indBySym.get(c.binance) : undefined
 
-      // 1) Probeer serverwaarden (status/score) — nu incrementeel binnenkomend
-      const serverScore = (ind?.score != null && Number.isFinite(Number(ind.score))) ? Number(ind.score) : null
-      const serverStatus = ind?.status as Status | undefined
+      // ★ GEWIJZIGD: score ALTIJD uit computeScoreStatus (zelfde als elders)
+      const result = computeScoreStatus({
+        ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
+      } as any)
+      let finalScore = Number(result?.score ?? 50)
+      let finalStatus: Status = statusFromScore(finalScore)
 
-      // 2) Fallback naar bestaande clientberekening
-      const calc = scoreFromIndicators(ind)
-
-      let finalScore = serverScore ?? calc.score
-      let finalStatus = serverStatus ?? calc.status
-
-      // 3) Override met localStorage (door detailpagina berekend) — blijft bestaan
-      const localKey = c.binance // bijv. "VETUSDT"
+      // Eventuele override met verse localStorage (detailpagina)
+      const localKey = c.binance
       if (localKey) {
         const ta = localTA.get(localKey)
-        if (ta) {
-          const fresh = (Date.now() - ta.ts) <= 10 * 60 * 1000 // 10 min
-          if (fresh || serverScore == null) {
-            finalScore = Number.isFinite(ta.score) ? ta.score : finalScore
-            finalStatus = (ta.status as Status) || finalStatus
-          }
+        if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
+          if (Number.isFinite(ta.score)) finalScore = ta.score
+          if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
         }
       }
 
@@ -557,7 +486,6 @@ function PageInner() {
           <h1 className="hero">Crypto Tracker (light)</h1>
           <p className="sub">Laatste update: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</p>
         </div>
-        {/* Nav-knoppen waren verwijderd; laten zo */}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
