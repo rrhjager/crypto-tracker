@@ -6,18 +6,18 @@ import { useRouter } from 'next/router'
 import { mutate } from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
-import { computeScoreStatus } from '@/lib/taScore' // ★ identieke score als crypto pages
+import { computeScoreStatus } from '@/lib/taScore'
 
-/* ===== ▼▼▼ NIEUW: volledige constituents per beurs ▼▼▼ ===== */
-import { SP500 }    from '@/lib/sp500'
-import { NASDAQ }   from '@/lib/nasdaq'
-import { DOWJONES } from '@/lib/dowjones'
+/* ===== ▼▼▼ volledige constituents per beurs ▼▼▼ ===== */
+import { SP500 }     from '@/lib/sp500'
+import { NASDAQ }    from '@/lib/nasdaq'
+import { DOWJONES }  from '@/lib/dowjones'
 import { DAX as DAX_FULL } from '@/lib/dax'
-import { FTSE100 }  from '@/lib/ftse100'
+import { FTSE100 }   from '@/lib/ftse100'
 import { NIKKEI225 } from '@/lib/nikkei225'
 import { HANGSENG }  from '@/lib/hangseng'
 import { SENSEX }    from '@/lib/sensex'
-/* ===== ▲▲▲ ======================================= ▲▲▲ ===== */
+/* ===== ▲▲▲ ================================= ▲▲▲ ===== */
 
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
@@ -79,7 +79,7 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 }
 
 /* =======================
-   AANDELEN — aggregatie (ongewijzigde logica, maar nu met cache-buster)
+   AANDELEN — aggregatie
    ======================= */
 type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status?: Advice | string; points?: number | string | null }
 type RsiResp    = { symbol: string; period: number; rsi: number | null; status?: Advice | string; points?: number | string | null }
@@ -277,30 +277,30 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'OP-USD',   name: 'Optimism' },
   { symbol: 'SUI-USD',  name: 'Sui' },
   { symbol: 'HBAR-USD', name: 'Hedera' },
-  { symbol: 'ALGO-USD', name: 'Algorand' },
-  { symbol: 'VET-USD',  name: 'VeChain' },
-  { symbol: 'EGLD-USD', name: 'MultiversX' },
-  { symbol: 'AAVE-USD', name: 'Aave' },
-  { symbol: 'INJ-USD',  name: 'Injective' },
-  { symbol: 'MKR-USD',  name: 'Maker' },
-  { symbol: 'RUNE-USD', name: 'THORChain' },
-  { symbol: 'IMX-USD',  name: 'Immutable' },
-  { symbol: 'FLOW-USD', name: 'Flow' },
-  { symbol: 'SAND-USD', name: 'The Sandbox' },
-  { symbol: 'MANA-USD', name: 'Decentraland' },
-  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
-  { symbol: 'QNT-USD',  name: 'Quant' },
-  { symbol: 'GRT-USD',  name: 'The Graph' },
-  { symbol: 'CHZ-USD',  name: 'Chiliz' },
-  { symbol: 'CRV-USD',  name: 'Curve DAO' },
-  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
-  { symbol: 'FTM-USD',  name: 'Fantom' },
-  { symbol: 'XTZ-USD',  name: 'Tezos' },
-  { symbol: 'LDO-USD',  name: 'Lido DAO' },
-  { symbol: 'SNX-USD',  name: 'Synthetix' },
-  { symbol: 'STX-USD',  name: 'Stacks' },
-  { symbol: 'AR-USD',   name: 'Arweave' },
-  { symbol: 'GMX-USD',  name: 'GMX' },
+  { symbol: 'ALGO-USD',  name: 'Algorand' },
+  { symbol: 'VET-USD',   name: 'VeChain' },
+  { symbol: 'EGLD-USD',  name: 'MultiversX' },
+  { symbol: 'AAVE-USD',  name: 'Aave' },
+  { symbol: 'INJ-USD',   name: 'Injective' },
+  { symbol: 'MKR-USD',   name: 'Maker' },
+  { symbol: 'RUNE-USD',  name: 'THORChain' },
+  { symbol: 'IMX-USD',   name: 'Immutable' },
+  { symbol: 'FLOW-USD',  name: 'Flow' },
+  { symbol: 'SAND-USD',  name: 'The Sandbox' },
+  { symbol: 'MANA-USD',  name: 'Decentraland' },
+  { symbol: 'AXS-USD',   name: 'Axie Infinity' },
+  { symbol: 'QNT-USD',   name: 'Quant' },
+  { symbol: 'GRT-USD',   name: 'The Graph' },
+  { symbol: 'CHZ-USD',   name: 'Chiliz' },
+  { symbol: 'CRV-USD',   name: 'Curve DAO' },
+  { symbol: 'ENJ-USD',   name: 'Enjin Coin' },
+  { symbol: 'FTM-USD',   name: 'Fantom' },
+  { symbol: 'XTZ-USD',   name: 'Tezos' },
+  { symbol: 'LDO-USD',   name: 'Lido DAO' },
+  { symbol: 'SNX-USD',   name: 'Synthetix' },
+  { symbol: 'STX-USD',   name: 'Stacks' },
+  { symbol: 'AR-USD',    name: 'Arweave' },
+  { symbol: 'GMX-USD',   name: 'GMX' },
 ]
 
 /* ---------------- small UI primitives ---------------- */
@@ -333,6 +333,13 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
   )
 }
 
+/* ---- requestIdleCallback poly (prefetch pas als de browser idle is) ---- */
+const ric: (cb: () => void) => number =
+  typeof window !== 'undefined' && 'requestIdleCallback' in window
+    ? // @ts-ignore
+      (cb) => (window as any).requestIdleCallback(cb, { timeout: 1000 })
+    : (cb) => window.setTimeout(cb, 1)
+
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -353,22 +360,34 @@ export default function Homepage() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // loading flags
-  const [loadingEq, setLoadingEq] = useState(true)
-  const [loadingCoin, setLoadingCoin] = useState(true)
-  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(true)
-  const [loadingNewsEq, setLoadingNewsEq] = useState(true)
-  const [loadingCongress, setLoadingCongress] = useState(true)
-  const [loadingAcademy, setLoadingAcademy] = useState(true)
+  /* ---------- Cache-first state-initialisatie (snelle first paint) ---------- */
+  const cachedEqBuy  = getCache<ScoredEq[]>('home:eq:topBuy') || []
+  const cachedEqSell = getCache<ScoredEq[]>('home:eq:topSell') || []
+  const cachedCb     = getCache<ScoredCoin[]>('home:coin:topBuy') || []
+  const cachedCs     = getCache<ScoredCoin[]>('home:coin:topSell') || []
+  const cachedNC     = getCache<NewsItem[]>('home:news:crypto') || []
+  const cachedNE     = getCache<NewsItem[]>('home:news:eq') || []
+  const cachedAcad   = getCache<{ title:string; href:string }[]>('home:academy') || []
+  const cachedTrades = getCache<any[]>('home:congress') || []
 
-  /* ---------- Prefetch routes ---------- */
+  // loading flags – als we cache hebben, start meteen als loaded (render direct)
+  const [loadingEq, setLoadingEq] = useState(cachedEqBuy.length===0 && cachedEqSell.length===0)
+  const [loadingCoin, setLoadingCoin] = useState(cachedCb.length===0 && cachedCs.length===0)
+  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(cachedNC.length===0)
+  const [loadingNewsEq, setLoadingNewsEq] = useState(cachedNE.length===0)
+  const [loadingCongress, setLoadingCongress] = useState(cachedTrades.length===0)
+  const [loadingAcademy, setLoadingAcademy] = useState(cachedAcad.length===0)
+
+  /* ---------- Prefetch routes: alleen wanneer idle ---------- */
   useEffect(() => {
-    const routes = [
-      '/crypto',
-      '/aex','/sp500','/nasdaq','/dowjones','/dax','/ftse100','/nikkei225','/hangseng','/sensex','/etfs',
-      '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors','/academy','/about'
-    ]
-    routes.forEach(r => router.prefetch(r).catch(()=>{}))
+    ric(() => {
+      const routes = [
+        '/crypto',
+        '/aex','/sp500','/nasdaq','/dowjones','/dax','/ftse100','/nikkei225','/hangseng','/sensex','/etfs',
+        '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors','/academy','/about'
+      ]
+      routes.forEach(r => router.prefetch(r).catch(()=>{}))
+    })
   }, [router])
 
   /* ---------- NEWS warm-up (SWR) ---------- */
@@ -391,8 +410,8 @@ export default function Homepage() {
   }, [])
 
   /* ========= NEWS ========= */
-  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>([])
-  const [newsEq, setNewsEq] = useState<NewsItem[]>([])
+  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(cachedNC)
+  const [newsEq, setNewsEq] = useState<NewsItem[]>(cachedNE)
   useEffect(()=>{
     let aborted=false
     async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void, setLoading:(f:boolean)=>void){
@@ -413,9 +432,12 @@ export default function Homepage() {
           published: x.pubDate || '',
           image: null,
         }))
-        if (!aborted) setter(arr)
+        if (!aborted) {
+          setter(arr)
+          setCache(`home:news:${topic==='crypto'?'crypto':'eq'}`, arr)
+        }
       }catch{
-        if (!aborted) setter([])
+        if (!aborted) setter(prev => prev || [])
       } finally {
         if (!aborted) setLoading(false)
       }
@@ -429,8 +451,8 @@ export default function Homepage() {
      EQUITIES — Top BUY/SELL
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-  const [topBuy, setTopBuy]   = useState<ScoredEq[]>([])
-  const [topSell, setTopSell] = useState<ScoredEq[]>([])
+  const [topBuy, setTopBuy]   = useState<ScoredEq[]>(cachedEqBuy)
+  const [topSell, setTopSell] = useState<ScoredEq[]>(cachedEqSell)
   const [scoreErr, setScoreErr] = useState<string | null>(null)
 
   async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
@@ -516,8 +538,8 @@ export default function Homepage() {
   /* =======================
      CRYPTO — Top 5 BUY/SELL
      ======================= */
-  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>([])
-  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>([])
+  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>(cachedCb)
+  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>(cachedCs)
   const [coinErr, setCoinErr] = useState<string | null>(null)
 
   // pairs memo
@@ -544,11 +566,9 @@ export default function Homepage() {
             const { score } = computeScoreStatus({
               ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
             } as any)
-            // lokale hint voor snelle terugnavigatie
             try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
             return { symbol: c.symbol, name: c.name, score }
           } catch {
-            // fallback naar lokale hint als die vers is
             try {
               const raw = localStorage.getItem(`ta:${pair}`)
               if (raw) {
@@ -588,7 +608,7 @@ export default function Homepage() {
 
   /* ========= Academy ========= */
   type AcademyItem = { title: string; href: string }
-  const [academy, setAcademy] = useState<AcademyItem[]>([])
+  const [academy, setAcademy] = useState<AcademyItem[]>(cachedAcad)
   useEffect(() => {
     let aborted = false
     ;(async () => {
@@ -598,13 +618,15 @@ export default function Homepage() {
         if (r.ok) {
           const j = await r.json() as { items?: AcademyItem[] }
           if (!aborted && Array.isArray(j.items) && j.items.length) {
-            setAcademy(j.items.slice(0, 8))
+            const items = j.items.slice(0, 8)
+            setAcademy(items)
+            setCache('home:academy', items)
             return
           }
         }
       } catch {}
-      if (!aborted) {
-        setAcademy([
+      if (!aborted && cachedAcad.length===0) {
+        const fallback = [
           { title: 'What is RSI? A practical guide', href: '/academy' },
           { title: 'MACD signals explained simply', href: '/academy' },
           { title: 'Position sizing 101', href: '/academy' },
@@ -613,7 +635,9 @@ export default function Homepage() {
           { title: 'Risk management checklists', href: '/academy' },
           { title: 'How to read volume properly', href: '/academy' },
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
-        ])
+        ]
+        setAcademy(fallback)
+        setCache('home:academy', fallback)
       }
     })().finally(() => { if (!aborted) setLoadingAcademy(false) })
     return () => { aborted = true }
@@ -629,7 +653,7 @@ export default function Homepage() {
     date?: string;
     url?: string;
   }
-  const [trades, setTrades] = useState<CongressTrade[]>([])
+  const [trades, setTrades] = useState<CongressTrade[]>(cachedTrades)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
 
   useEffect(() => {
@@ -651,7 +675,10 @@ export default function Homepage() {
           date: x.publishedISO || x.tradedISO || '',
           url: x.url || '',
         }))
-        if (!aborted) setTrades(norm)
+        if (!aborted) {
+          setTrades(norm)
+          setCache('home:congress', norm)
+        }
       } catch (e: any) {
         if (!aborted) setTradesErr(String(e?.message || e))
       } finally {
@@ -800,7 +827,7 @@ export default function Homepage() {
                   <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition text-[13px]">
                     Open crypto →
                   </Link>
-                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition text-[13px]">
+                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition">
                     Open AEX →
                   </Link>
                 </div>
@@ -991,7 +1018,7 @@ export default function Homepage() {
   )
 }
 
-// ISR
+// ISR (ongewijzigd)
 export async function getStaticProps() {
   return {
     props: {},
