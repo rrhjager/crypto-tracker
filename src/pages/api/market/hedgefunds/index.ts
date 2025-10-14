@@ -1,6 +1,7 @@
 // src/pages/api/market/hedgefunds/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { XMLParser } from 'fast-xml-parser'
+import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 
 export const config = { runtime: 'nodejs' }
 
@@ -23,7 +24,7 @@ type FundOut = {
   _source?: 'submissions'
 }
 
-/* -------------- funds (correct CIKs) — pruned -------------- */
+/* -------------- funds -------------- */
 const FUNDS: { name: string; cik: string }[] = [
   { name: 'Berkshire Hathaway',        cik: '0001067983' },
   { name: 'Bridgewater Associates',    cik: '0001350694' },
@@ -37,14 +38,11 @@ const FUNDS: { name: string; cik: string }[] = [
   { name: 'Balyasny Asset Management', cik: '0001218710' },
 ]
 
-/* -------------- http + cache -------------- */
+/* -------------- config -------------- */
 const UA = process.env.SEC_USER_AGENT || 'SignalHub/1.0 (contact: you@example.com)'
 const DELAY = Math.max(0, Number(process.env.SEC_FETCH_DELAY_MS || 500))
-
-const G: any = globalThis as any
-if (!G.__HF_CACHE__) {
-  G.__HF_CACHE__ = { data: null as null | { ts: number; out: FundOut[] }, ttlMs: 10 * 60 * 1000 }
-}
+const STALE_MS = 5 * 60_000  // 5 min: serve stale-while-revalidate
+const KV_TTL_SEC = 10 * 60   // 10 min in KV
 
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r,ms))
 
@@ -88,7 +86,7 @@ async function pickLatest13F(cikRaw:string){
   if (!rec) throw new Error('no recent filings')
   for (let i=0;i<rec.form.length;i++){
     const form = String(rec.form[i]||'')
-    if (!/^13F-HR/i.test(form)) continue // skip 13F-NT
+    if (!/^13F-HR/i.test(form)) continue
     const accession = String(rec.accessionNumber[i]||'').replace(/-/g,'')
     const reportDate = String(rec.reportDate?.[i] || rec.filingDate?.[i] || '')
     const filingHref = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accession}/`
@@ -97,7 +95,6 @@ async function pickLatest13F(cikRaw:string){
   throw new Error('no 13F-HR filing')
 }
 
-/** Return all plausible info-table files in priority order. */
 async function listInfoTableFiles(cik:string, acc:string){
   const j = await secJson(`https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${acc}/index.json`)
   const items: Array<{name:string,type?:string}> = j?.directory?.item || []
@@ -119,7 +116,6 @@ async function listInfoTableFiles(cik:string, acc:string){
 }
 
 function parseInfoTable(fileText: string): Holding[] {
-  // Try to isolate the table if it’s a big .txt submission
   let xml = fileText
   if (!/<informationTable[\s>]/i.test(xml)) {
     const m = fileText.match(/<informationTable[\s\S]*<\/informationTable>/i)
@@ -163,7 +159,6 @@ function parseInfoTable(fileText: string): Holding[] {
       rows.push({ issuer, symbol, valueUSD, shares, class: classTitle, cusip })
     }
   } catch {
-    // minimal regex fallback
     const blocks = fileText.split(/<\s*infoTable\s*>|<\s*infotable\s*>/i).slice(1)
     for (const b of blocks){
       const get = (tag:string)=> b.match(new RegExp(`<\\s*${tag}\\s*>([\\s\\S]*?)<\\s*/\\s*${tag}\\s*>`,'i'))?.[1]?.trim() || null
@@ -184,7 +179,7 @@ function parseInfoTable(fileText: string): Holding[] {
 async function fetchFund(f: {name:string;cik:string}): Promise<FundOut> {
   try {
     await sleep(DELAY)
-    const pick = await pickLatest13F(f.cik)                 // latest 13F-HR / 13F-HR/A
+    const pick = await pickLatest13F(f.cik)
     await sleep(DELAY)
     const candidates = await listInfoTableFiles(pick.cik, pick.accession)
 
@@ -195,7 +190,7 @@ async function fetchFund(f: {name:string;cik:string}): Promise<FundOut> {
         const txt = await secText(url)
         const parsed = parseInfoTable(txt)
         if (parsed.length) { rows = parsed; break }
-      } catch { /* try next candidate */ }
+      } catch {}
     }
 
     return {
@@ -211,27 +206,61 @@ async function fetchFund(f: {name:string;cik:string}): Promise<FundOut> {
   }
 }
 
-/* -------------- handler -------------- */
+/* -------------- helpers -------------- */
 function formatMoney(n?: number | null) {
   if (!Number.isFinite(n as number)) return '—'
   try { return new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', maximumFractionDigits: 0 }).format(n as number) }
   catch { return String(Math.round(n as number)) }
 }
 
+/* -------------- handler -------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const cache = G.__HF_CACHE__.data as null | { ts: number; out: FundOut[] }
-  const TTL = G.__HF_CACHE__.ttlMs as number
-
-  // nocache=1 → force fresh
-  const NO_CACHE = String(req.query.nocache ?? '') === '1'
-
-  if (!NO_CACHE && cache && (Date.now() - cache.ts) < TTL) {
-    return res.status(200).json({ items: cache.out, hint: 'cache' })
-  }
-
+  const nocache = String(req.query.nocache ?? '') === '1'
   const maxFunds = Math.min(FUNDS.length, Number(req.query.funds || FUNDS.length))
   const topN = Math.min(25, Math.max(5, Number(req.query.top || 12)))
+  const cacheKey = `hedgefunds:v1:${maxFunds}:${topN}`
 
+  res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1800')
+
+  // nocache=1 → force fresh
+  if (nocache) {
+    const out = await buildData(maxFunds, topN)
+    await kvSetJSON(cacheKey, { out, updatedAt: Date.now() }, KV_TTL_SEC)
+    return res.status(200).json({
+      items: out,
+      hint: 'fresh (nocache=1)',
+      sample: formatMoney(123456789),
+    })
+  }
+
+  // probeer KV-snapshot
+  const snap = await kvGetJSON<{ out: FundOut[]; updatedAt: number }>(cacheKey)
+  if (snap?.out) {
+    // SWR: refresh asynchroon
+    kvRefreshIfStale(cacheKey, snap.updatedAt, STALE_MS, async () => {
+      const fresh = await buildData(maxFunds, topN)
+      await kvSetJSON(cacheKey, { out: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
+    }).catch(() => {})
+
+    return res.status(200).json({
+      items: snap.out,
+      hint: 'KV snapshot (SWR refresh)',
+      sample: formatMoney(123456789),
+    })
+  }
+
+  // geen snapshot → fresh
+  const out = await buildData(maxFunds, topN)
+  await kvSetJSON(cacheKey, { out, updatedAt: Date.now() }, KV_TTL_SEC)
+  return res.status(200).json({
+    items: out,
+    hint: 'fresh fill',
+    sample: formatMoney(123456789),
+  })
+}
+
+/* ---------------- core builder (ongewijzigd) ---------------- */
+async function buildData(maxFunds: number, topN: number): Promise<FundOut[]> {
   const queue = FUNDS.slice(0, maxFunds)
   const out: FundOut[] = []
 
@@ -247,16 +276,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   })
   await Promise.all(workers)
 
-  // Filter: alleen fondsen met echte holdings en geen error
   const filtered = out.filter(x => (x.holdings && x.holdings.length > 0) && !x.error)
-
   filtered.sort((a,b)=> a.fund.localeCompare(b.fund))
-  G.__HF_CACHE__.data = { ts: Date.now(), out: filtered }
-
-  res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1800')
-  return res.status(200).json({
-    items: filtered,
-    hint: NO_CACHE ? 'fresh (nocache=1, filtered empty/failed)' : 'SEC 13F (filtered empty/failed). Cached 10 min.',
-    sample: formatMoney(123456789),
-  })
+  return filtered
 }

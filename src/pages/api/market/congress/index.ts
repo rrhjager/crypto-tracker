@@ -1,6 +1,6 @@
 // src/pages/api/market/congress/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCache, kvGetJSON, kvSetJSON } from '@/lib/kv'  // <-- zo
+import { withCache, kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 
 // Make sure this runs in the Node runtime on Vercel
 export const config = { runtime: 'nodejs', maxDuration: 60 }
@@ -16,6 +16,10 @@ type Item = {
   price: string
   side: 'BUY' | 'SELL' | '—'
 }
+
+/* ---------------- SWR/KV settings ---------------- */
+const STALE_MS = 180_000 // 3 min: serve stale-while-revalidate
+const KV_TTL_SEC = 600    // 10 min TTL in KV
 
 /* ---------------- utils ---------------- */
 const monthMap: Record<string, number> = {
@@ -66,7 +70,6 @@ function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
 
 /* -------- headless chromium (time-limited) -------- */
 async function getBrowser() {
-  // Edge envs often need sparticuz + puppeteer-core
   if (process.env.VERCEL || process.env.AWS_REGION) {
     const { default: chromium } = await import('@sparticuz/chromium')
     const puppeteer = await import('puppeteer-core')
@@ -246,32 +249,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const force = String(req.query.force || '') === '1'
   const cacheKey = `congress:v1:${limit}`
 
-  // If force: bypass cache, but on failure return stale cache if available
+  // CDN hints: snelle TTFB en SWR op de edge
+  res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
+
+  // FORCE: directe scrape + cache, met fallback naar stale
   if (force) {
     try {
       const fresh = await scrape(limit)
-      await kvSetJSON(cacheKey, fresh, 300) // 5 min ttl
-      res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
+      await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
       return res.status(200).json({ items: fresh, hint: 'Fresh scrape (force=1)' })
     } catch (e: any) {
-      const stale = await kvGetJSON<Item[]>(cacheKey)
-      if (stale?.length) {
-        return res.status(200).json({ items: stale, hint: 'Stale cache (scrape failed with force=1)' })
+      const staleAny = await kvGetJSON<any>(cacheKey)
+      // Compat: sta toe dat eerder alleen array was opgeslagen
+      const staleItems: Item[] = Array.isArray(staleAny) ? staleAny : (staleAny?.items || [])
+      if (staleItems?.length) {
+        return res.status(200).json({ items: staleItems, hint: 'Stale cache (scrape failed with force=1)' })
       }
       return res.status(502).json({ items: [], hint: 'Scrape failed (force=1)', detail: String(e?.message || e) })
     }
   }
 
-  // Normal path: try cache first, otherwise scrape + fill cache
+  // Normale route: serve snapshot uit KV en refresh asynchroon indien stale
   try {
-    const items = await withCache<Item[]>(cacheKey, 300, async () => await scrape(limit))
-    res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
-    return res.status(200).json({ items, hint: 'KV cache or fresh fill' })
+    const snap = await kvGetJSON<{ items: Item[]; updatedAt?: number } | Item[]>(cacheKey)
+
+    if (snap) {
+      // Back-compat: zowel oud array-formaat als nieuw object-formaat ondersteunen
+      const items: Item[] = Array.isArray(snap) ? snap : (snap.items || [])
+      const updatedAt = Array.isArray(snap) ? 0 : (snap.updatedAt || 0)
+
+      // SWR: asynchroon verversen als stale
+      kvRefreshIfStale(cacheKey, updatedAt, STALE_MS, async () => {
+        const fresh = await scrape(limit)
+        await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
+      }).catch(() => {})
+
+      return res.status(200).json({ items, hint: 'KV snapshot (SWR in background)' })
+    }
+
+    // Geen snapshot → scrape + vullen
+    const fresh = await withCache<Item[]>(cacheKey, KV_TTL_SEC, async () => await scrape(limit))
+    // withCache kan al in KV zetten; sla ook het SWR-object op (updatedAt) voor uniformiteit
+    await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
+    return res.status(200).json({ items: fresh, hint: 'Fresh fill' })
   } catch (e: any) {
-    // As a last resort, try stale cache
-    const stale = await kvGetJSON<Item[]>(cacheKey)
-    if (stale?.length) {
-      return res.status(200).json({ items: stale, hint: 'Stale cache (fresh failed)' })
+    // Laatste redmiddel: stale cache proberen
+    const staleAny = await kvGetJSON<any>(cacheKey)
+    const staleItems: Item[] = Array.isArray(staleAny) ? staleAny : (staleAny?.items || [])
+    if (staleItems?.length) {
+      return res.status(200).json({ items: staleItems, hint: 'Stale cache (fresh failed)' })
     }
     return res.status(502).json({ items: [], hint: 'Headless scrape failed', detail: String(e?.message || e) })
   }

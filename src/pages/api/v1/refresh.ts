@@ -18,6 +18,9 @@ const limit = pLimit(6); // 6 tegelijk is meestal safe
 
 export const config = { maxDuration: 60 };
 
+// ⬇️ NIEUW: snapshots verversen (Vercel KV) — fire-and-forget
+import { refreshAllSnapshots } from "@/lib/refreshSnapshots";
+
 async function safe<T>(p: Promise<T>, fb: T): Promise<T> { try { return await p; } catch { return fb; } }
 function qbool(v: any): boolean { const s = String(v ?? "").toLowerCase(); return s==="1"||s==="true"||s==="yes"||s==="y"; }
 function isNum(x:any): x is number { return typeof x==="number" && Number.isFinite(x); }
@@ -159,6 +162,9 @@ const BASELINE_APY: Record<string, number> = {
 // ───────────────────────────────────────────────
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // ⬇️ NIEUW: start snapshots-refresh parallel, zonder jouw flow te blokkeren
+    refreshAllSnapshots().catch(() => {});
+
     const DEBUG = qbool(req.query.debug);
     const FAST  = req.query.fast !== undefined ? qbool(req.query.fast) : true;
 

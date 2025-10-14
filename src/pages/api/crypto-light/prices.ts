@@ -3,6 +3,7 @@ export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { cache5min } from '@/lib/cacheHeaders'
+import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 
 // Zelfde alias-bron als indicators
 const CG_ALIASES: Record<string, string[]> = {
@@ -52,8 +53,7 @@ const CG_ALIASES: Record<string, string[]> = {
   JASMYUSDT:['jasmycoin'],
   FTMUSDT:  ['fantom'],
   PEPEUSDT: ['pepe'],
-
-  // ---- nieuw zoals gevraagd ----
+  // ---- extra die je ook in indicators gebruikt ----
   ICPUSDT:  ['internet-computer'],
   XLMUSDT:  ['stellar'],
   FILUSDT:  ['filecoin'],
@@ -110,111 +110,151 @@ async function fetchPerfFromChart(id: string) {
   return { w: pct(c7, last), m: pct(c30, last) }
 }
 
+/* ──────────────────────────────────────────────
+   SWR/KV settings
+   ────────────────────────────────────────────── */
+const STALE_MS = 20_000 // ~20s: serve stale-while-revalidate
+
+type PriceRow = { symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }
+type Payload = { results: PriceRow[] }
+
+/** Core compute (ongewijzigde logica) */
+async function compute(symbols: string[], debug = false) {
+  // 1) Eerste poging via eerste alias
+  const firstIdBySymbol = new Map<string, string>()
+  for (const sym of symbols) {
+    const aliases = CG_ALIASES[sym]
+    if (aliases?.length) firstIdBySymbol.set(sym, aliases[0])
+  }
+  const wantedFirstIds = Array.from(new Set(Array.from(firstIdBySymbol.values())))
+
+  const apiKey = process.env.COINGECKO_API_KEY || ''
+  const headers: Record<string,string> = { 'cache-control': 'no-cache' }
+  if (apiKey) headers['x-cg-demo-api-key'] = apiKey
+
+  const chunks = chunk(wantedFirstIds, 250)
+  const marketsRows: MarketsRow[] = []
+  const urls: string[] = []
+
+  for (const ids of chunks) {
+    const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(','))}&price_change_percentage=24h,7d,30d`
+    urls.push(url)
+    const r = await fetch(url, { headers })
+    if (!r.ok) continue
+    const j = (await r.json()) as any[]
+    for (const it of j || []) {
+      marketsRows.push({
+        id: String(it.id),
+        current_price: (it.current_price == null ? null : Number(it.current_price)),
+        price_change_percentage_24h_in_currency: numberOrNull(it.price_change_percentage_24h_in_currency),
+        price_change_percentage_7d_in_currency: numberOrNull(it.price_change_percentage_7d_in_currency),
+        price_change_percentage_30d_in_currency: numberOrNull(it.price_change_percentage_30d_in_currency),
+      })
+    }
+  }
+  const rowById = new Map<string, MarketsRow>()
+  for (const r of marketsRows) rowById.set(r.id, r)
+
+  // 2) Missing → fallback alias + simple/price + market_chart
+  const missingSymbols: string[] = []
+  for (const sym of symbols) {
+    const firstId = firstIdBySymbol.get(sym)
+    if (!firstId || !rowById.get(firstId)) missingSymbols.push(sym)
+  }
+
+  const fallbackIds: string[] = []
+  const chooseFallbackIdForSym = new Map<string, string>()
+  for (const sym of missingSymbols) {
+    const aliases = (CG_ALIASES[sym] || []).slice(1)
+    for (const id of aliases) {
+      if (!fallbackIds.includes(id)) {
+        fallbackIds.push(id)
+        chooseFallbackIdForSym.set(sym, id)
+        break
+      }
+    }
+  }
+
+  const sp = await fetchSimplePrice(fallbackIds)
+
+  const perfCache = new Map<string, { w: number|null, m: number|null }>()
+  for (const id of fallbackIds) {
+    perfCache.set(id, await fetchPerfFromChart(id))
+  }
+
+  const results: PriceRow[] = symbols.map((sym) => {
+    const firstId = firstIdBySymbol.get(sym)
+    const primary = firstId ? rowById.get(firstId) : undefined
+    if (primary) {
+      return {
+        symbol: sym,
+        price: primary.current_price ?? null,
+        d: primary.price_change_percentage_24h_in_currency ?? null,
+        w: primary.price_change_percentage_7d_in_currency ?? null,
+        m: primary.price_change_percentage_30d_in_currency ?? null,
+      }
+    }
+    const fbId = chooseFallbackIdForSym.get(sym)
+    if (fbId) {
+      const spRow = (sp as any)[fbId]
+      const perf = perfCache.get(fbId) || { w: null, m: null }
+      return {
+        symbol: sym,
+        price: spRow?.usd ?? null,
+        d: spRow?.usd_24h_change ?? null,
+        w: perf.w,
+        m: perf.m,
+      }
+    }
+    return { symbol: sym, price: null, d: null, w: null, m: null }
+  })
+
+  if (debug) {
+    return { debug: { urls, markets_count: marketsRows.length, missing: missingSymbols }, results }
+  }
+  return { results }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // ✅ Cache headers toegevoegd (5 minuten geldig, daarna SWR 30 min)
+    // ✅ CDN cache headers (blijven hetzelfde)
     cache5min(res, 300, 1800)
 
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
 
-    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    // Normaliseer voor consistente KV-key: trim, uppercase, uniek, gesorteerd
+    const symbols = symbolsParam
+      .split(',')
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean)
 
-    // 1) Eerste poging via eerste alias
-    const firstIdBySymbol = new Map<string, string>()
-    for (const sym of symbols) {
-      const aliases = CG_ALIASES[sym]
-      if (aliases?.length) firstIdBySymbol.set(sym, aliases[0])
-    }
-    const wantedFirstIds = Array.from(new Set(Array.from(firstIdBySymbol.values())))
+    const norm = Array.from(new Set(symbols)).sort()
+    const kvKey = `cl:prices:v1:${norm.join(',')}`
 
-    const apiKey = process.env.COINGECKO_API_KEY || ''
-    const headers: Record<string,string> = { 'cache-control': 'no-cache' }
-    if (apiKey) headers['x-cg-demo-api-key'] = apiKey
-
-    const chunks = chunk(wantedFirstIds, 250)
-    const marketsRows: MarketsRow[] = []
-    const urls: string[] = []
-
-    for (const ids of chunks) {
-      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(','))}&price_change_percentage=24h,7d,30d`
-      urls.push(url)
-      const r = await fetch(url, { headers })
-      if (!r.ok) continue
-      const j = (await r.json()) as any[]
-      for (const it of j || []) {
-        marketsRows.push({
-          id: String(it.id),
-          current_price: (it.current_price == null ? null : Number(it.current_price)),
-          price_change_percentage_24h_in_currency: numberOrNull(it.price_change_percentage_24h_in_currency),
-          price_change_percentage_7d_in_currency: numberOrNull(it.price_change_percentage_7d_in_currency),
-          price_change_percentage_30d_in_currency: numberOrNull(it.price_change_percentage_30d_in_currency),
-        })
-      }
-    }
-    const rowById = new Map<string, MarketsRow>()
-    for (const r of marketsRows) rowById.set(r.id, r)
-
-    // 2) Missing → fallback alias + simple/price + market_chart
-    const missingSymbols: string[] = []
-    for (const sym of symbols) {
-      const firstId = firstIdBySymbol.get(sym)
-      if (!firstId || !rowById.get(firstId)) missingSymbols.push(sym)
-    }
-
-    const fallbackIds: string[] = []
-    const chooseFallbackIdForSym = new Map<string, string>()
-    for (const sym of missingSymbols) {
-      const aliases = (CG_ALIASES[sym] || []).slice(1)
-      for (const id of aliases) {
-        if (!fallbackIds.includes(id)) {
-          fallbackIds.push(id)
-          chooseFallbackIdForSym.set(sym, id)
-          break
-        }
-      }
-    }
-
-    const sp = await fetchSimplePrice(fallbackIds)
-
-    const perfCache = new Map<string, { w: number|null, m: number|null }>()
-    for (const id of fallbackIds) {
-      perfCache.set(id, await fetchPerfFromChart(id))
-    }
-
-    const results = symbols.map((sym) => {
-      const firstId = firstIdBySymbol.get(sym)
-      const primary = firstId ? rowById.get(firstId) : undefined
-      if (primary) {
-        return {
-          symbol: sym,
-          price: primary.current_price ?? null,
-          d: primary.price_change_percentage_24h_in_currency ?? null,
-          w: primary.price_change_percentage_7d_in_currency ?? null,
-          m: primary.price_change_percentage_30d_in_currency ?? null,
-        }
-      }
-      const fbId = chooseFallbackIdForSym.get(sym)
-      if (fbId) {
-        const spRow = (sp as any)[fbId]
-        const perf = perfCache.get(fbId) || { w: null, m: null }
-        return {
-          symbol: sym,
-          price: spRow?.usd ?? null,
-          d: spRow?.usd_24h_change ?? null,
-          w: perf.w,
-          m: perf.m,
-        }
-      }
-      return { symbol: sym, price: null, d: null, w: null, m: null }
-    })
-
+    // Debug requests → altijd live berekenen (zodat debug-info klopt)
     if (debug) {
-      return res.status(200).json({ debug: { urls, markets_count: marketsRows.length, missing: missingSymbols }, results })
+      const out = await compute(norm, true)
+      return res.status(200).json(out)
     }
 
-    return res.status(200).json({ results })
+    // 1) Razendsnel: snapshot uit KV
+    const snap = await kvGetJSON<{ value: Payload; updatedAt: number }>(kvKey)
+    if (snap?.value) {
+      // 2) SWR: asynchroon refreshen als stale
+      kvRefreshIfStale(kvKey, snap.updatedAt, STALE_MS, async () => {
+        const value = await compute(norm, false) as Payload
+        await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
+      }).catch(() => {})
+
+      return res.status(200).json(snap.value)
+    }
+
+    // 3) Geen snapshot → live compute + cachen
+    const value = await compute(norm, false) as Payload
+    await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
+    return res.status(200).json(value)
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
   }

@@ -2,6 +2,7 @@
 export const config = { runtime: 'nodejs' }
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { withCache } from '@/lib/kv' // ✅ KV-cache (gratis tier)
 
 // Superlichte XML parser voor Google News RSS (zonder extra deps)
 function parseRss(xml: string) {
@@ -37,29 +38,41 @@ function parseRss(xml: string) {
   return items
 }
 
+// Losse fetch-functie zodat withCache eromheen kan
+async function fetchGoogleNews(q: string) {
+  const params = new URLSearchParams({
+    q,
+    hl: 'en-US',
+    gl: 'US',
+    ceid: 'US:en',
+  })
+  const url = `https://news.google.com/rss/search?${params.toString()}`
+  const r = await fetch(url, {
+    headers: {
+      'cache-control': 'no-cache',
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+    },
+    cache: 'no-store',
+  })
+  if (!r.ok) throw new Error(`Fetch failed: HTTP ${r.status}`)
+  const xml = await r.text()
+  const items = parseRss(xml).slice(0, 12)
+  return items
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const q = String(req.query.q || '').trim()
     if (!q) return res.status(400).json({ error: 'Missing ?q=search+terms' })
 
-    // 👉 US English feed
-    const params = new URLSearchParams({
-      q,
-      hl: 'en-US',
-      gl: 'US',
-      ceid: 'US:en',
-    })
-    const url = `https://news.google.com/rss/search?${params.toString()}`
-    const r = await fetch(url, {
-      headers: {
-        'cache-control': 'no-cache',
-        'user-agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-      },
-    })
-    if (!r.ok) return res.status(r.status).json({ error: `Fetch failed: HTTP ${r.status}` })
-    const xml = await r.text()
-    const items = parseRss(xml).slice(0, 12)
+    // ✅ 5 min KV-cache per query; daarna stale-while-revalidate via CDN
+    const cacheKey = `news:google:v1:${q.toLowerCase()}`
+    const items = await withCache<{ title: string; link: string; source?: string; pubDate?: string }[]>(
+      cacheKey,
+      300, // 5 min TTL in KV
+      () => fetchGoogleNews(q)
+    )
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800')
     return res.status(200).json({ items })

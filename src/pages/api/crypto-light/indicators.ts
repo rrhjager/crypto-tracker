@@ -4,6 +4,9 @@ export const config = { runtime: 'nodejs' }
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { cache5min } from '@/lib/cacheHeaders'
 
+// ⬇️ NIEUW: KV snapshot helpers
+import { getOrRefreshSnap, snapKey } from '@/lib/kvSnap'
+
 // ---------- helpers (general) ----------
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
@@ -327,38 +330,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
 
-    const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
+    // Unieke KV key per batch (debug gescheiden):
+    const kvKey = snapKey.cryptoInd(encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
 
-    const batches = chunk(symbols, 3)
-    const results: any[] = []
+    // ⬇️ De volledige bestaande berekening in compute() (ongewijzigd)
+    const compute = async () => {
+      const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
 
-    for (let bi = 0; bi < batches.length; bi++) {
-      const group = batches[bi]
-      const groupResults = await Promise.all(group.map(async (sym) => {
-        const got = await fetchMarketDataFor(sym)
-        dbg?.used.push({ symbol: sym, ok: got.ok, source: (got as any).source ?? null })
-        if (got.ok === false) return { symbol: sym, error: got.error }
+      const batches = chunk(symbols, 3)
+      const results: any[] = []
 
-        try {
-          const ind = computeIndicators(got.data.closes, got.data.volumes)
-          const { score, status } = taScoreFrom({
-            ma: ind.ma,
-            rsi: ind.rsi,
-            macd: ind.macd,
-            volume: ind.volume,
-          })
-          return { symbol: sym, ...ind, score, status }
-        } catch (e: any) {
-          return { symbol: sym, error: e?.message || 'Compute failed' }
-        }
-      }))
-      results.push(...groupResults)
-      if (bi < batches.length - 1) await sleep(650)
+      for (let bi = 0; bi < batches.length; bi++) {
+        const group = batches[bi]
+        const groupResults = await Promise.all(group.map(async (sym) => {
+          const got = await fetchMarketDataFor(sym)
+          dbg?.used.push({ symbol: sym, ok: got.ok, source: (got as any).source ?? null })
+          if (got.ok === false) return { symbol: sym, error: got.error }
+
+          try {
+            const ind = computeIndicators(got.data.closes, got.data.volumes)
+            const { score, status } = taScoreFrom({
+              ma: ind.ma,
+              rsi: ind.rsi,
+              macd: ind.macd,
+              volume: ind.volume,
+            })
+            return { symbol: sym, ...ind, score, status }
+          } catch (e: any) {
+            return { symbol: sym, error: e?.message || 'Compute failed' }
+          }
+        }))
+        results.push(...groupResults)
+        if (bi < batches.length - 1) await sleep(650)
+      }
+
+      if (debug) return { debug: dbg, results }
+      return { results }
     }
 
-    if (debug) return res.status(200).json({ debug: dbg, results })
-    return res.status(200).json({ results })
+    // ⬇️ Serve-from-KV met background revalidate (ms-responses)
+    const { data } = await getOrRefreshSnap(kvKey, compute)
+
+    return res.status(200).json(data)
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })
   }
