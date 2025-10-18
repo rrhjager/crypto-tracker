@@ -1,6 +1,7 @@
+// src/pages/api/indicators/macd/[symbol].ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
-import { getYahooDailyOHLC } from '@/lib/providers/quote'
+import { macd } from '@/lib/ta'
+import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 
 type Resp = {
   symbol: string
@@ -10,89 +11,96 @@ type Resp = {
   macd: number | null
   signal: number | null
   hist: number | null
-  status?: 'BUY' | 'SELL' | 'HOLD'
-  points?: number | string | null
+  status: 'BUY' | 'HOLD' | 'SELL'
+  points: number
 }
 
-const TTL_SEC = 300
-const REVALIDATE_SEC = 25
+async function okJson<T>(r: Response): Promise<T> {
+  const j = await r.json()
+  return j as T
+}
 
-function extractCloses(data: any): number[] {
-  if (!data) return []
-  if (Array.isArray(data)) {
-    return data
-      .map((c) => (c && typeof c.close === 'number' ? c.close : null))
-      .filter((x): x is number => typeof x === 'number')
+const STALE_MS = 20_000 // ~20s SWR-refresh
+
+async function compute(raw: string, fastIn: number, slowIn: number, signalIn: number): Promise<Resp> {
+  const fast = Number.isFinite(fastIn) ? fastIn : 12
+  const slow = Number.isFinite(slowIn) ? slowIn : 26
+  const signalPeriod = Number.isFinite(signalIn) ? signalIn : 9
+
+  // 1 jaar, dag-candles — zelfde bron als je bestaande endpoint
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(raw)}?interval=1d&range=1y`
+  const r = await fetch(url, { cache: 'no-store' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const j: any = await okJson(r)
+
+  const closes: number[] = (j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [])
+    .map((v: any) => Number(v))
+    .filter((v: number) => Number.isFinite(v))
+
+  const { macd: m, signal: s, hist: h } = macd(closes, fast, slow, signalPeriod)
+
+  const macdLast = m.at(-1)
+  const signalLast = s.at(-1)
+  const histLast = h.at(-1)
+
+  // Simple interpretatie (ongewijzigd)
+  let status: 'BUY' | 'HOLD' | 'SELL' = 'HOLD'
+  let points = 0
+  if (Number.isFinite(macdLast) && Number.isFinite(signalLast)) {
+    if ((macdLast as number) > (signalLast as number)) { status = 'BUY'; points = 1 }
+    else if ((macdLast as number) < (signalLast as number)) { status = 'SELL'; points = -1 }
+    else { status = 'HOLD'; points = 0 }
   }
-  if (Array.isArray(data.closes)) {
-    return data.closes.filter((x: any) => typeof x === 'number')
+
+  return {
+    symbol: raw,
+    fast,
+    slow,
+    signalPeriod,
+    macd: Number.isFinite(macdLast) ? (macdLast as number) : null,
+    signal: Number.isFinite(signalLast) ? (signalLast as number) : null,
+    hist: Number.isFinite(histLast) ? (histLast as number) : null,
+    status,
+    points,
   }
-  return []
 }
 
-function ema(values: number[], p: number): number[] {
-  if (values.length === 0) return []
-  const k = 2 / (p + 1)
-  const out: number[] = []
-  let prev = values[0]
-  out.push(prev)
-  for (let i = 1; i < values.length; i++) {
-    const cur = values[i] * k + prev * (1 - k)
-    out.push(cur)
-    prev = cur
-  }
-  return out
-}
-
-function macdFromCloses(closes: number[], fast = 12, slow = 26, signalP = 9) {
-  if (closes.length < slow + signalP) return { macd: null, signal: null, hist: null }
-  const emaFast = ema(closes, fast)
-  const emaSlow = ema(closes, slow)
-  const macdLine = emaFast.map((v, i) => v - (emaSlow[i] ?? v))
-  const signalLine = ema(macdLine, signalP)
-  const macd = macdLine[macdLine.length - 1]
-  const signal = signalLine[signalLine.length - 1]
-  const hist = macd - signal
-  return { macd: +macd.toFixed(4), signal: +signal.toFixed(4), hist: +hist.toFixed(4) }
-}
-
-function statusFromHist(hist: number | null): { status: Resp['status']; points: number } {
-  if (hist == null) return { status: 'HOLD', points: 0 }
-  if (hist > 0) return { status: 'BUY', points: 1 }
-  if (hist < 0) return { status: 'SELL', points: -1 }
-  return { status: 'HOLD', points: 0 }
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Resp | { error: string }>
+) {
   try {
-    const symbol = String(req.query.symbol || '').trim()
-    const fast = Math.max(2, Number(req.query.fast || 12))
-    const slow = Math.max(fast + 1, Number(req.query.slow || 26))
-    const signalPeriod = Math.max(2, Number(req.query.signal || 9))
-    if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
+    const raw = String(req.query.symbol || '').trim()
+    const fast = Number(req.query.fast || 12)
+    const slow = Number(req.query.slow || 26)
+    const signalPeriod = Number(req.query.signal || 9)
+    if (!raw) {
+      res.status(400).json({ error: 'symbol is required' } as any)
+      return
+    }
 
-    const key = `ind:macd:${symbol}:${fast}:${slow}:${signalPeriod}`
-    const snapKey = `${key}__snap`
+    // KV key bevat ook de parameters, zodat varianten niet door elkaar gaan
+    const kvKey = `ind:macd:${raw.toUpperCase()}:${Number.isFinite(fast)?fast:12}:${Number.isFinite(slow)?slow:26}:${Number.isFinite(signalPeriod)?signalPeriod:9}`
 
-    const data = await kvRefreshIfStale<Resp>(
-      key,
-      TTL_SEC,
-      REVALIDATE_SEC,
-      async () => {
-        const ohlc = await getYahooDailyOHLC(symbol, '1y')
-        const closes = extractCloses(ohlc)
+    // 1) Directe snapshot uit KV voor snelle response
+    const snap = await kvGetJSON<{ value: Resp; updatedAt: number }>(kvKey)
 
-        const { macd, signal, hist } = macdFromCloses(closes, fast, slow, signalPeriod)
-        const { status, points } = statusFromHist(hist)
-        const value: Resp = { symbol, fast, slow, signalPeriod, macd, signal, hist, status, points }
-        await kvSetJSON(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
-        return value
-      }
-    )
+    if (snap && snap.value) {
+      // 2) SWR: asynchroon verversen als stale
+      kvRefreshIfStale(kvKey, snap.updatedAt, STALE_MS, async () => {
+        const value = await compute(raw, fast, slow, signalPeriod)
+        await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
+      }).catch(() => {})
 
-    if (!data) return res.status(500).json({ error: 'Failed to compute MACD' })
-    return res.status(200).json(data)
+      res.status(200).json(snap.value)
+      return
+    }
+
+    // 3) Geen snapshot → berekenen en cachen
+    const value = await compute(raw, fast, slow, signalPeriod)
+    await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
+    res.status(200).json(value)
   } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+    res.status(500).json({ error: String(e?.message || e) } as any)
   }
 }

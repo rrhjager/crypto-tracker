@@ -7,16 +7,9 @@ import { kv } from '@vercel/kv'
  */
 export async function kvGetJSON<T>(key: string): Promise<T | undefined> {
   try {
-    const raw = await kv.get(key) // Upstash kan string of native JSON teruggeven
-    if (raw == null) return undefined
-    if (typeof raw === 'string') {
-      try {
-        return JSON.parse(raw) as T
-      } catch {
-        return undefined
-      }
-    }
-    return raw as T
+    const raw = await kv.get<string>(key)
+    if (!raw) return undefined
+    return typeof raw === 'string' ? (JSON.parse(raw) as T) : ((raw as unknown) as T)
   } catch {
     return undefined
   }
@@ -29,28 +22,33 @@ const tsKey = (key: string) => `${key}__ts`
  * Sla JSON op in Vercel KV.
  * - Optionele TTL in seconden (ex: 300 = 5 min).
  * - Schrijft óók een sidecar timestamp key (zelfde TTL) om staleness te kunnen schatten.
- *
- * NB: generiek gemaakt zodat aanroep als kvSetJSON<MyType>(...) geldig is.
+ * - Fouten worden opgeslokt: we willen nooit een request laten falen door KV-writes.
  */
-export async function kvSetJSON<T>(key: string, value: T, ttlSec?: number) {
-  const payload = JSON.stringify(value)
-  const now = Date.now()
-
-  if (ttlSec && Number.isFinite(ttlSec)) {
-    const ex = Math.max(1, Math.floor(ttlSec))
-    await Promise.all([
-      kv.set(key, payload, { ex }),
-      kv.set(tsKey(key), String(now), { ex }),
-    ])
-  } else {
-    await Promise.all([kv.set(key, payload), kv.set(tsKey(key), String(now))])
+export async function kvSetJSON(key: string, value: unknown, ttlSec?: number) {
+  try {
+    const payload = JSON.stringify(value)
+    const now = Date.now()
+    if (ttlSec && Number.isFinite(ttlSec)) {
+      const ex = Math.max(1, Math.floor(ttlSec))
+      await Promise.allSettled([
+        kv.set(key, payload, { ex }),
+        kv.set(tsKey(key), String(now), { ex }),
+      ])
+    } else {
+      await Promise.allSettled([
+        kv.set(key, payload),
+        kv.set(tsKey(key), String(now)),
+      ])
+    }
+  } catch {
+    // never throw
   }
 }
 
 /**
  * Cache wrapper:
  * - Probeert eerst KV (indien aanwezig).
- * - Zo niet, roept `fn()` aan, slaat het resultaat op met TTL, en geeft dat terug.
+ * - Zo niet, roept `fn()` aan en **probeert** op te slaan met TTL (fouten worden genegeerd).
  */
 export async function withCache<T>(
   key: string,
@@ -59,8 +57,9 @@ export async function withCache<T>(
 ): Promise<T> {
   const cached = await kvGetJSON<T>(key)
   if (cached !== undefined) return cached
+
   const fresh = await fn()
-  await kvSetJSON<T>(key, fresh, ttlSec)
+  await kvSetJSON(key, fresh, ttlSec) // errors ignored
   return fresh
 }
 
@@ -70,7 +69,7 @@ async function getTtlSeconds(key: string): Promise<number | null> {
     const t = await (kv as any).ttl?.(key)
     if (typeof t !== 'number') return null
     if (t >= 0) return t
-    return null // -1 no-expire of -2 missing => onbekend
+    return null
   } catch {
     return null
   }
@@ -92,7 +91,12 @@ async function getSidecarTs(key: string): Promise<number | undefined> {
  * kvRefreshIfStale:
  * - Retourneert direct de huidige (cached) waarde als die bestaat.
  * - Als de resterende TTL ≤ `revalidateSeconds`, start een **background refresh** (fire-and-forget).
- * - Als er géén cache is, haalt ‘ie synchronously fresh data op (en slaat op) en retourneert die.
+ * - Als er géén cache is, haalt ‘ie synchronously fresh data op (en **probeert** te cachen) en retourneert die.
+ *
+ * @param key KV key
+ * @param ttlSeconds TTL waarmee we opslaan (seconds)
+ * @param revalidateSeconds drempel waarbij we een background refresh starten (bijv. 15–30)
+ * @param refresher async functie die fresh data teruggeeft
  */
 export async function kvRefreshIfStale<T>(
   key: string,
@@ -100,10 +104,13 @@ export async function kvRefreshIfStale<T>(
   revalidateSeconds: number,
   refresher: () => Promise<T>
 ): Promise<T | null> {
+  // 1) Huidige cache lezen
   const current = await kvGetJSON<T>(key)
 
+  // 2) Resterende TTL bepalen
   let remaining: number | null = await getTtlSeconds(key)
 
+  // 3) Als TTL onbekend is, schat via sidecar ts + ttlSeconds
   if (remaining == null && ttlSeconds > 0) {
     const ts = await getSidecarTs(key)
     if (ts) {
@@ -112,16 +119,18 @@ export async function kvRefreshIfStale<T>(
     }
   }
 
+  // 4) Geen cache? → direct fresh ophalen en retourneren (writes zijn best-effort)
   if (current === undefined) {
     try {
       const fresh = await refresher()
-      await kvSetJSON<T>(key, fresh, ttlSeconds)
+      await kvSetJSON(key, fresh, ttlSeconds)
       return fresh
     } catch {
       return null
     }
   }
 
+  // 5) SWR: background refresh
   const shouldRevalidate =
     current !== undefined &&
     typeof remaining === 'number' &&
@@ -131,12 +140,13 @@ export async function kvRefreshIfStale<T>(
     ;(async () => {
       try {
         const fresh = await refresher()
-        await kvSetJSON<T>(key, fresh, ttlSeconds)
+        await kvSetJSON(key, fresh, ttlSeconds)
       } catch {
-        // Laat oude cache staan
+        /* keep old cache */
       }
     })()
   }
 
+  // 6) Geef cached waarde terug
   return current ?? null
 }
