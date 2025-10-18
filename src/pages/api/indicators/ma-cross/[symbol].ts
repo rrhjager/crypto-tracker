@@ -1,88 +1,77 @@
-// src/pages/api/indicators/ma-cross/[symbol].ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { sma } from '@/lib/ta'
 import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
+import { getYahooDailyOHLC } from '@/lib/providers/quote'
 
-type Resp = {
-  symbol: string
-  ma50: number | null
-  ma200: number | null
-  status: 'BUY' | 'HOLD' | 'SELL'
-  points: number
+type Resp = { symbol: string; ma50: number|null; ma200: number|null; status?: 'BUY'|'SELL'|'HOLD'; points?: number|null|string }
+
+const TTL_SEC = 300        // 5m cache in KV
+const REVALIDATE_SEC = 30  // treshold om background refresh te trigggeren
+
+// Eenvoudige SMA
+function sma(vals: number[], n: number): number | null {
+  if (!Array.isArray(vals) || vals.length < n) return null
+  const slice = vals.slice(-n)
+  const sum = slice.reduce((a, b) => a + b, 0)
+  return sum / n
 }
 
-async function okJson<T>(r: Response): Promise<T> {
-  const j = await r.json()
-  return j as T
-}
-
-const STALE_MS = 20_000 // ~20s: snelle SWR-verversing zonder extra cron
-
-async function compute(symbol: string): Promise<Resp> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1y`
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  const j: any = await okJson(r)
-
-  const closes: number[] = (j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [])
-    .map((v: any) => Number(v))
-    .filter((v: number) => Number.isFinite(v))
-
-  const ma50Arr = sma(closes, 50)
-  const ma200Arr = sma(closes, 200)
-  const ma50 = ma50Arr.at(-1)
-  const ma200 = ma200Arr.at(-1)
-
-  let status: 'BUY' | 'HOLD' | 'SELL' = 'HOLD'
+// Ma-cross berekening
+function computeMaCross(closes: number[]): { ma50: number|null; ma200: number|null; status: 'BUY'|'SELL'|'HOLD'; points: number } {
+  const ma50 = sma(closes, 50)
+  const ma200 = sma(closes, 200)
+  let status: 'BUY'|'SELL'|'HOLD' = 'HOLD'
   let points = 0
-  if (Number.isFinite(ma50) && Number.isFinite(ma200)) {
-    if ((ma50 as number) > (ma200 as number)) { status = 'BUY';  points = 2 }
-    else if ((ma50 as number) < (ma200 as number)) { status = 'SELL'; points = -2 }
-    else { status = 'HOLD'; points = 0 }
+  if (ma50 != null && ma200 != null) {
+    if (ma50 > ma200) { status = 'BUY';  points =  2 }
+    else if (ma50 < ma200) { status = 'SELL'; points = -2 }
   }
-
-  return {
-    symbol,
-    ma50: Number.isFinite(ma50) ? (ma50 as number) : null,
-    ma200: Number.isFinite(ma200) ? (ma200 as number) : null,
-    status,
-    points,
-  }
+  return { ma50, ma200, status, points }
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<Resp | { error: string }>
-) {
+// Normaliseer OHLC → closes[]
+function toCloses(ohlc: any): number[] {
+  if (!ohlc) return []
+  // vorm 1: array van bars
+  if (Array.isArray(ohlc)) {
+    return ohlc
+      .map((b: any) => (typeof b?.close === 'number' ? b.close : null))
+      .filter((x: any) => typeof x === 'number') as number[]
+  }
+  // vorm 2: object met arrays
+  if (Array.isArray(ohlc.closes)) {
+    return ohlc.closes.filter((x: any) => typeof x === 'number') as number[]
+  }
+  return []
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const raw = String(req.query.symbol || '').trim()
-    if (!raw) {
-      res.status(400).json({ error: 'symbol is required' } as any)
-      return
-    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase()
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
 
-    const kvKey = `ind:ma:${raw.toUpperCase()}`
+    const key = `ind:ma:${symbol}`
+    const snapKey = `ind:ma:snap:${symbol}`
 
-    // 1) Probeer directe hit uit KV (ms-response)
-    const snap = await kvGetJSON<{ value: Resp; updatedAt: number }>(kvKey)
+    const data = await kvRefreshIfStale<Resp>(
+      key,
+      TTL_SEC,
+      REVALIDATE_SEC,
+      async () => {
+        const ohlc = await getYahooDailyOHLC(symbol, '1y')
+        const closes = toCloses(ohlc)
+        if (closes.length < 50) throw new Error('Not enough data')
 
-    // 2) Als snapshot bestaat: serveer direct, en refresh asynchroon indien stale
-    if (snap && snap.value) {
-      // kick SWR refresh (achtergrond) als verouderd
-      kvRefreshIfStale(kvKey, snap.updatedAt, STALE_MS, async () => {
-        const value = await compute(raw)
-        await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
-      }).catch(() => {})
+        const { ma50, ma200, status, points } = computeMaCross(closes)
+        const value: Resp = { symbol, ma50, ma200, status, points }
+        // snapshot voor snelle fallback elders
+        await kvSetJSON(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
+        return value
+      }
+    )
 
-      res.status(200).json(snap.value)
-      return
-    }
-
-    // 3) Geen snapshot → compute nu (éénmalig) en cache
-    const value = await compute(raw)
-    await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
-    res.status(200).json(value)
+    if (!data) return res.status(500).json({ error: 'Failed to compute' })
+    res.status(200).json(data)
   } catch (e: any) {
-    res.status(500).json({ error: String(e?.message || e) } as any)
+    res.status(500).json({ error: String(e?.message || e) })
   }
 }
