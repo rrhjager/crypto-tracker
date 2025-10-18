@@ -1,88 +1,56 @@
 // src/pages/api/indicators/ma-cross/[symbol].ts
+export const config = { runtime: 'nodejs' }
+
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { sma } from '@/lib/ta'
 import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
+import { getYahooDailyCloses } from '@/lib/providers/quote' // your yahoo helper
+import { maCross } from '@/lib/ta'
 
-type Resp = {
-  symbol: string
-  ma50: number | null
-  ma200: number | null
-  status: 'BUY' | 'HOLD' | 'SELL'
-  points: number
-}
+type Resp = { symbol: string; ma50: number|null; ma200: number|null; status?: 'BUY'|'SELL'|'HOLD'; points?: number|null|string }
+type Snap = { updatedAt: number; value: Resp }
 
-async function okJson<T>(r: Response): Promise<T> {
-  const j = await r.json()
-  return j as T
-}
+const TTL_SEC = 60 * 5       // 5 min cache in KV
+const REVALIDATE_SEC = 20     // SWR background refresh when ≤ 20s remain
 
-const STALE_MS = 20_000 // ~20s: snelle SWR-verversing zonder extra cron
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const symbol = decodeURIComponent(String(req.query.symbol || '')).trim()
+  if (!symbol) return res.status(400).json({ error: 'missing symbol' })
 
-async function compute(symbol: string): Promise<Resp> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1y`
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  const j: any = await okJson(r)
+  const kvKey   = `ind:ma:${symbol}`
+  const snapKey = `ind:snap:ma:${symbol}`
 
-  const closes: number[] = (j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [])
-    .map((v: any) => Number(v))
-    .filter((v: number) => Number.isFinite(v))
-
-  const ma50Arr = sma(closes, 50)
-  const ma200Arr = sma(closes, 200)
-  const ma50 = ma50Arr.at(-1)
-  const ma200 = ma200Arr.at(-1)
-
-  let status: 'BUY' | 'HOLD' | 'SELL' = 'HOLD'
-  let points = 0
-  if (Number.isFinite(ma50) && Number.isFinite(ma200)) {
-    if ((ma50 as number) > (ma200 as number)) { status = 'BUY';  points = 2 }
-    else if ((ma50 as number) < (ma200 as number)) { status = 'SELL'; points = -2 }
-    else { status = 'HOLD'; points = 0 }
-  }
-
-  return {
-    symbol,
-    ma50: Number.isFinite(ma50) ? (ma50 as number) : null,
-    ma200: Number.isFinite(ma200) ? (ma200 as number) : null,
-    status,
-    points,
-  }
-}
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<Resp | { error: string }>
-) {
   try {
-    const raw = String(req.query.symbol || '').trim()
-    if (!raw) {
-      res.status(400).json({ error: 'symbol is required' } as any)
-      return
+    // ==== 1) try KV + SWR ====
+    const resp = await kvRefreshIfStale<Resp>(
+      kvKey,
+      TTL_SEC,
+      REVALIDATE_SEC,
+      async () => {
+        const closes = await getYahooDailyCloses(symbol, 270) // ~1y
+        const { ma50, ma200, status, points } = maCross(closes)
+        const value: Resp = { symbol, ma50, ma200, status, points }
+        // best effort: snapshot (used on home for "minuteTag" backfill)
+        await kvSetJSON<Snap>(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
+        return value
+      }
+    )
+
+    if (resp) {
+      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+      return res.status(200).json(resp)
     }
 
-    const kvKey = `ind:ma:${raw.toUpperCase()}`
+    // ==== 2) fall back to direct compute (and still try to cache) ====
+    const closes = await getYahooDailyCloses(symbol, 270)
+    const { ma50, ma200, status, points } = maCross(closes)
+    const value: Resp = { symbol, ma50, ma200, status, points }
 
-    // 1) Probeer directe hit uit KV (ms-response)
-    const snap = await kvGetJSON<{ value: Resp; updatedAt: number }>(kvKey)
+    await kvSetJSON<Resp>(kvKey, value, TTL_SEC)
+    await kvSetJSON<Snap>(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
 
-    // 2) Als snapshot bestaat: serveer direct, en refresh asynchroon indien stale
-    if (snap && snap.value) {
-      // kick SWR refresh (achtergrond) als verouderd
-      kvRefreshIfStale(kvKey, snap.updatedAt, STALE_MS, async () => {
-        const value = await compute(raw)
-        await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
-      }).catch(() => {})
-
-      res.status(200).json(snap.value)
-      return
-    }
-
-    // 3) Geen snapshot → compute nu (éénmalig) en cache
-    const value = await compute(raw)
-    await kvSetJSON(kvKey, { value, updatedAt: Date.now() })
-    res.status(200).json(value)
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+    return res.status(200).json(value)
   } catch (e: any) {
-    res.status(500).json({ error: String(e?.message || e) } as any)
+    return res.status(500).json({ error: String(e?.message || e) })
   }
 }
