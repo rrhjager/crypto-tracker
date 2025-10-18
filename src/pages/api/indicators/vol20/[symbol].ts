@@ -1,72 +1,35 @@
+// src/pages/api/indicators/vol20/[symbol].ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvRefreshIfStale } from '@/lib/kv'
+import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
+import { vol20 } from '@/lib/ta'
+import { TTL_SEC, REVALIDATE_SEC, RANGE } from '../_config'
 
-type Resp = {
-  symbol: string
-  period: number
-  volume: number|null
-  avg20: number|null
-  ratio: number|null
-  status?: 'BUY'|'SELL'|'HOLD'
-  points?: number|null|string
-}
+type Resp = { symbol: string; period: number; volume: number|null; avg20: number|null; ratio: number|null; status?: 'BUY'|'SELL'|'HOLD'; points?: number|null|string }
+type Snap = { updatedAt: number; value: Resp }
 
-const TTL_SEC = 300
-const REVALIDATE_SEC = 30
-
-function toVolumes(ohlc: any): number[] {
-  if (!ohlc) return []
-  if (Array.isArray(ohlc)) {
-    return ohlc
-      .map((b: any) => (typeof b?.volume === 'number' ? b.volume : null))
-      .filter((x: any) => typeof x === 'number') as number[]
-  }
-  if (Array.isArray(ohlc.volumes)) {
-    return ohlc.volumes.filter((x: any) => typeof x === 'number') as number[]
-  }
-  return []
-}
-
-function avgN(vals: number[], n: number): number | null {
-  if (!Array.isArray(vals) || vals.length < n) return null
-  const slice = vals.slice(-n)
-  return slice.reduce((a, b) => a + b, 0) / n
-}
+export const config = { runtime: 'nodejs' }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const symbol = String(req.query.symbol || '').trim().toUpperCase()
-    const period = Number(req.query.period || 20) || 20
-    if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
+    const symbol = String(req.query.symbol || '').trim()
+    const key = `ind:vol:${symbol}`
+    const snapKey = `snap:vol:${symbol}`
 
-    const key = `ind:vol20:${symbol}:${period}`
+    const data = await kvRefreshIfStale<Resp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
+      const ohlc = await getYahooDailyOHLC(symbol, RANGE)
+      const volumes = ohlc.map(x => x.volume)
+      const v = vol20(volumes)
+      const value: Resp = { symbol, period: v.period, volume: v.volume, avg20: v.avg20, ratio: v.ratio, status: v.status, points: v.points }
+      await kvSetJSON(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
+      return value
+    })
 
-    const data = await kvRefreshIfStale<Resp>(
-      key,
-      TTL_SEC,
-      REVALIDATE_SEC,
-      async () => {
-        const ohlc = await getYahooDailyOHLC(symbol, '1y')
-        const vols = toVolumes(ohlc)
-        if (vols.length < period) throw new Error('Not enough data')
-
-        const volume = vols[vols.length - 1] ?? null
-        const avg20 = avgN(vols, period)
-        const ratio = (typeof volume === 'number' && typeof avg20 === 'number' && avg20 > 0) ? volume / avg20 : null
-        let status: 'BUY'|'SELL'|'HOLD' = 'HOLD'
-        let points = 0
-        if (typeof ratio === 'number') {
-          if (ratio > 1.2) { status = 'BUY'; points =  1 }
-          else if (ratio < 0.8) { status = 'SELL'; points = -1 }
-        }
-        return { symbol, period, volume, avg20, ratio, status, points }
-      }
-    )
-
-    if (!data) return res.status(500).json({ error: 'Failed to compute' })
-    res.status(200).json(data)
+    if (data) return res.status(200).json(data)
+    const snap = await kvGetJSON<Snap>(snapKey)
+    if (snap?.value) return res.status(200).json(snap.value)
+    return res.status(500).json({ error: 'unable to compute' })
   } catch (e: any) {
-    res.status(500).json({ error: String(e?.message || e) })
+    return res.status(500).json({ error: String(e?.message || e) })
   }
 }

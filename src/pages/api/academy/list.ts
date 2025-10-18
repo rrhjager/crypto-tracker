@@ -1,49 +1,35 @@
 // src/pages/api/academy/list.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import fs from 'fs/promises'
-import path from 'path'
+import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
-// pages/api draait standaard op Node, maar we houden het simpel en robuust.
+export const config = { runtime: 'nodejs' }
 
 type Item = { title: string; href: string }
+type Resp = { items: Item[] }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+const FALLBACK: Item[] = [
+  { title: 'What is RSI? A practical guide', href: '/academy' },
+  { title: 'MACD signals explained simply', href: '/academy' },
+  { title: 'Position sizing 101', href: '/academy' },
+  { title: 'Support & resistance basics', href: '/academy' },
+  { title: 'Trend vs. mean reversion', href: '/academy' },
+  { title: 'Risk management checklists', href: '/academy' },
+  { title: 'How to read volume properly', href: '/academy' },
+  { title: 'Backtesting pitfalls to avoid', href: '/academy' },
+]
+
+export default async function handler(_req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
   try {
-    const root = process.cwd()
-    const candidates = [
-      path.join(root, 'content', 'academy'),
-      path.join(root, 'src', 'content', 'academy'),
-      path.join(root, 'public', 'academy'),
-    ]
+    const key = 'academy:list'
+    const cached = await kvGetJSON<Resp>(key)
+    if (cached?.items?.length) return res.status(200).json(cached)
 
-    let dir = ''
-    for (const p of candidates) {
-      try {
-        const s = await fs.stat(p)
-        if (s.isDirectory()) { dir = p; break }
-      } catch {}
-    }
-
-    if (!dir) {
-      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
-      return res.status(200).json({ items: [] as Item[] })
-    }
-
-    const files = await fs.readdir(dir).catch(() => [])
-    const items: Item[] = []
-    for (const f of files) {
-      if (!/\.mdx?$|\.md$|\.json$/.test(f)) continue
-      const slug = f.replace(/\.(mdx?|json)$/, '')
-      const title = slug.replace(/-/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase())
-      items.push({ title, href: `/academy/${slug}` })
-    }
-
-    items.sort((a, b) => a.title.localeCompare(b.title))
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
-    return res.status(200).json({ items })
-  } catch {
-    // Nooit 500 teruggeven — laat de homepage fallback zien
-    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120')
-    return res.status(200).json({ items: [] as Item[] })
+    // TODO: if you have a real content source, fetch it here and kvSetJSON(key, { items }, 300)
+    const payload = { items: FALLBACK }
+    await kvSetJSON(key, payload, 300)
+    return res.status(200).json(payload)
+  } catch (e: any) {
+    // last-ditch fallback: never break the page
+    return res.status(200).json({ items: FALLBACK })
   }
 }

@@ -1,192 +1,153 @@
 // src/lib/ta.ts
 
-/** Simple moving average of the last `len` values (inclusive of most-recent). */
-function sma(series: number[], len: number): number | null {
-  if (!Array.isArray(series) || series.length < len || len <= 0) return null;
-  let sum = 0;
-  for (let i = series.length - len; i < series.length; i++) sum += series[i];
-  return sum / len;
-}
+export function maCross(closes: number[]) {
+  const ma = (arr: number[], n: number) =>
+    arr.length >= n ? arr.slice(-n).reduce((a, b) => a + b, 0) / n : NaN
 
-/** Exponential moving average (Wilder/EMA) over the whole series; returns the *last* value. */
-function emaLast(series: number[], len: number): number | null {
-  if (!Array.isArray(series) || series.length === 0 || len <= 0) return null;
-  const k = 2 / (len + 1);
-  let ema: number | null = null;
+  const ma50  = ma(closes, 50)
+  const ma200 = ma(closes, 200)
 
-  // Seed with SMA of first `len` points when possible, else first value
-  if (series.length >= len) {
-    let seed = 0;
-    for (let i = 0; i < len; i++) seed += series[i];
-    ema = seed / len;
-    for (let i = len; i < series.length; i++) {
-      ema = series[i] * k + (ema as number) * (1 - k);
+  const valid50  = Number.isFinite(ma50)
+  const valid200 = Number.isFinite(ma200)
+
+  let status: 'BUY' | 'SELL' | 'HOLD' | undefined
+  let points: number | undefined
+
+  if (valid50 && valid200) {
+    if (ma50 > ma200) {
+      status = 'BUY'
+      const spread = Math.min(0.2, Math.max(0, ma50 / Math.max(1e-9, ma200) - 1))
+      const score = 60 + (spread / 0.2) * 40 // 60..100
+      points = ((score / 100) * 4) - 2
+    } else if (ma50 < ma200) {
+      status = 'SELL'
+      const spread = Math.min(0.2, Math.max(0, ma200 / Math.max(1e-9, ma50) - 1))
+      const score = 40 - (spread / 0.2) * 40 // 0..40
+      points = ((score / 100) * 4) - 2
+    } else {
+      status = 'HOLD'
+      points = 0
     }
-  } else {
-    ema = series[0];
-    for (let i = 1; i < series.length; i++) {
-      ema = series[i] * k + (ema as number) * (1 - k);
-    }
-  }
-  return typeof ema === 'number' && Number.isFinite(ema) ? ema : null;
-}
-
-/** ===== MA Cross (50/200 by default) ===== */
-export function maCross(
-  closes: number[],
-  shortLen = 50,
-  longLen = 200
-): { ma50: number | null; ma200: number | null; status?: 'BUY' | 'SELL' | 'HOLD'; points?: number | null } {
-  const maShort = sma(closes, shortLen);
-  const maLong = sma(closes, longLen);
-
-  let status: 'BUY' | 'SELL' | 'HOLD' | undefined;
-  if (maShort != null && maLong != null) {
-    if (maShort > maLong) status = 'BUY';
-    else if (maShort < maLong) status = 'SELL';
-    else status = 'HOLD';
   }
 
   return {
-    ma50: shortLen === 50 ? maShort : null,
-    ma200: longLen === 200 ? maLong : null,
+    ma50:  valid50  ? Number(ma50.toFixed(6))  : null,
+    ma200: valid200 ? Number(ma200.toFixed(6)) : null,
     status,
-    points: undefined,
-  };
+    points: points != null ? Math.max(-2, Math.min(2, Number(points.toFixed(3)))) : null
+  }
 }
 
-/** ===== RSI (Wilder’s) ===== */
-export function rsi(
-  closes: number[],
-  period = 14
-): { rsi: number | null; status?: 'BUY' | 'SELL' | 'HOLD'; points?: number | null } {
-  if (!Array.isArray(closes) || closes.length < period + 1) {
-    return { rsi: null };
-  }
-  const gains: number[] = [];
-  const losses: number[] = [];
-  for (let i = 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    gains.push(Math.max(0, diff));
-    losses.push(Math.max(0, -diff));
+export function rsi14(closes: number[]) {
+  const n = 14
+  if (closes.length < n + 1) {
+    return { period: n, rsi: null, status: undefined as any, points: null as number | null }
   }
 
-  // Initial averages
-  let avgGain = 0;
-  let avgLoss = 0;
-  for (let i = 0; i < period; i++) {
-    avgGain += gains[i];
-    avgLoss += losses[i];
+  let gains = 0, losses = 0
+  for (let i = 1; i <= n; i++) {
+    const diff = closes[i] - closes[i - 1]
+    if (diff >= 0) gains += diff; else losses -= diff
   }
-  avgGain /= period;
-  avgLoss /= period;
+  let avgGain = gains / n
+  let avgLoss = losses / n
 
-  // Wilder smoothing across the rest
-  for (let i = period; i < gains.length; i++) {
-    avgGain = (avgGain * (period - 1) + gains[i]) / period;
-    avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-  }
-
-  const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
-  const value = 100 - 100 / (1 + rs);
-  let status: 'BUY' | 'SELL' | 'HOLD' | undefined;
-  if (Number.isFinite(value)) {
-    if (value <= 30) status = 'BUY';
-    else if (value >= 70) status = 'SELL';
-    else status = 'HOLD';
+  for (let i = n + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1]
+    const gain = diff > 0 ? diff : 0
+    const loss = diff < 0 ? -diff : 0
+    avgGain = (avgGain * (n - 1) + gain) / n
+    avgLoss = (avgLoss * (n - 1) + loss) / n
   }
 
-  return { rsi: Number.isFinite(value) ? value : null, status, points: undefined };
-}
+  const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss
+  const rsi = 100 - 100 / (1 + rs)
+  const val = Number(rsi.toFixed(2))
 
-/** ===== MACD (EMA 12/26, signal 9) ===== */
-export function macd(
-  closes: number[],
-  fast = 12,
-  slow = 26,
-  signalPeriod = 9
-): {
-  macd: number | null;
-  signal: number | null;
-  hist: number | null;
-  status?: 'BUY' | 'SELL' | 'HOLD';
-  points?: number | null;
-} {
-  if (!Array.isArray(closes) || closes.length < Math.max(fast, slow) + signalPeriod) {
-    return { macd: null, signal: null, hist: null };
-  }
+  let status: 'BUY' | 'SELL' | 'HOLD' | undefined
+  if (val <= 30) status = 'BUY'
+  else if (val >= 70) status = 'SELL'
+  else status = 'HOLD'
 
-  // Build full EMA series (needed for signal EMA over MACD line)
-  const kFast = 2 / (fast + 1);
-  const kSlow = 2 / (slow + 1);
-
-  const emaFastSeries: number[] = [];
-  const emaSlowSeries: number[] = [];
-
-  // Seed EMAs with SMA of first len points when possible
-  const seed = (len: number) => {
-    if (closes.length >= len) {
-      let s = 0;
-      for (let i = 0; i < len; i++) s += closes[i];
-      return s / len;
-    }
-    return closes[0];
-  };
-
-  let emaF = seed(fast);
-  let emaS = seed(slow);
-  emaFastSeries.push(emaF);
-  emaSlowSeries.push(emaS);
-
-  for (let i = 1; i < closes.length; i++) {
-    emaF = closes[i] * kFast + emaF * (1 - kFast);
-    emaS = closes[i] * kSlow + emaS * (1 - kSlow);
-    emaFastSeries.push(emaF);
-    emaSlowSeries.push(emaS);
-  }
-
-  const macdLine: number[] = new Array(closes.length);
-  for (let i = 0; i < closes.length; i++) macdLine[i] = emaFastSeries[i] - emaSlowSeries[i];
-
-  const signalLast = emaLast(macdLine.slice(-Math.max(slow + signalPeriod, 1)), signalPeriod);
-  const macdLast = macdLine[macdLine.length - 1];
-  const hist = signalLast != null && Number.isFinite(macdLast) ? macdLast - signalLast : null;
-
-  let status: 'BUY' | 'SELL' | 'HOLD' | undefined;
-  if (hist != null) {
-    status = hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD';
-  }
+  const score = Math.max(0, Math.min(100, ((val - 30) / 40) * 100))
+  const points = ((score / 100) * 4) - 2
 
   return {
-    macd: Number.isFinite(macdLast) ? macdLast : null,
-    signal: signalLast ?? null,
-    hist,
+    period: n,
+    rsi: val,
     status,
-    points: undefined,
-  };
+    points: Math.max(-2, Math.min(2, Number(points.toFixed(3))))
+  }
 }
 
-/** ===== Volume 20-day ratio (last volume vs 20d SMA) ===== */
-export function vol20(
-  volumes: (number | null | undefined)[],
-  period = 20
-): { volume: number | null; avg20: number | null; ratio: number | null; status?: 'BUY' | 'SELL' | 'HOLD'; points?: number | null } {
-  if (!Array.isArray(volumes) || volumes.length < period) {
-    return { volume: null, avg20: null, ratio: null };
+export function macd(closes: number[], fast = 12, slow = 26, signalPeriod = 9) {
+  const ema = (arr: number[], p: number) => {
+    const k = 2 / (p + 1)
+    let emaVal = arr[0]
+    const out = [emaVal]
+    for (let i = 1; i < arr.length; i++) {
+      emaVal = arr[i] * k + emaVal * (1 - k)
+      out.push(emaVal)
+    }
+    return out
   }
-  // Normalize: ensure numeric, drop nulls by treating as 0
-  const norm = volumes.map(v => (typeof v === 'number' && Number.isFinite(v) ? v : 0));
 
-  const last = norm[norm.length - 1];
-  const avg = sma(norm, period);
+  if (closes.length < slow + signalPeriod) {
+    return { fast, slow, signalPeriod, macd: null, signal: null, hist: null, status: undefined as any, points: null as any }
+  }
 
-  const ratio = avg && avg > 0 ? last / avg : null;
-  let status: 'BUY' | 'SELL' | 'HOLD' | undefined;
+  const emaFast = ema(closes, fast)
+  const emaSlow = ema(closes, slow)
+  const macdLine = closes.map((_, i) => emaFast[i] - emaSlow[i])
+  const signal = ema(macdLine.slice(slow - 1), signalPeriod)
+  const align = macdLine.slice(slow - 1)
+  const hist = align[align.length - 1] - signal[signal.length - 1]
+
+  let status: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
+  if (hist > 0) status = 'BUY'
+  else if (hist < 0) status = 'SELL'
+
+  // normalize ~ lightweight
+  const ref = Math.abs(align[align.length - 1]) || 1
+  const rel = Math.max(-1, Math.min(1, hist / ref))
+  const score = 50 + rel * 20
+  const points = ((score / 100) * 4) - 2
+
+  return {
+    fast, slow, signalPeriod,
+    macd: Number(align[align.length - 1].toFixed(6)),
+    signal: Number(signal[signal.length - 1].toFixed(6)),
+    hist: Number(hist.toFixed(6)),
+    status,
+    points: Math.max(-2, Math.min(2, Number(points.toFixed(3))))
+  }
+}
+
+export function vol20(volumes: number[]) {
+  const n = 20
+  if (volumes.length < n) {
+    return { period: n, volume: null, avg20: null, ratio: null, status: undefined as any, points: null as any }
+  }
+  const cur = volumes[volumes.length - 1]
+  const avg = volumes.slice(-n).reduce((a, b) => a + b, 0) / n
+  const ratio = avg ? cur / avg : null
+
+  let status: 'BUY'|'SELL'|'HOLD' = 'HOLD'
   if (ratio != null) {
-    if (ratio >= 1.2) status = 'BUY';
-    else if (ratio <= 0.8) status = 'SELL';
-    else status = 'HOLD';
+    if (ratio >= 1.5) status = 'BUY'
+    else if (ratio <= 0.7) status = 'SELL'
   }
 
-  return { volume: Number.isFinite(last) ? last : null, avg20: avg, ratio, status, points: undefined };
+  const delta = ratio == null ? 0 : Math.max(-1, Math.min(1, (ratio - 1) / 1))
+  const score = Math.max(0, Math.min(100, 50 + delta * 30))
+  const points = ((score / 100) * 4) - 2
+
+  return {
+    period: n,
+    volume: Number(cur.toFixed(0)),
+    avg20: Number(avg.toFixed(0)),
+    ratio: ratio != null ? Number(ratio.toFixed(3)) : null,
+    status,
+    points: Math.max(-2, Math.min(2, Number(points.toFixed(3))))
+  }
 }

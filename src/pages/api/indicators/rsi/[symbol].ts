@@ -1,70 +1,35 @@
+// src/pages/api/indicators/rsi/[symbol].ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvRefreshIfStale } from '@/lib/kv'
+import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
+import { rsi14 } from '@/lib/ta'
+import { TTL_SEC, REVALIDATE_SEC, RANGE } from '../_config'
 
 type Resp = { symbol: string; period: number; rsi: number|null; status?: 'BUY'|'SELL'|'HOLD'; points?: number|null|string }
+type Snap = { updatedAt: number; value: Resp }
 
-const TTL_SEC = 300
-const REVALIDATE_SEC = 30
-
-function toCloses(ohlc: any): number[] {
-  if (!ohlc) return []
-  if (Array.isArray(ohlc)) {
-    return ohlc
-      .map((b: any) => (typeof b?.close === 'number' ? b.close : null))
-      .filter((x: any) => typeof x === 'number') as number[]
-  }
-  if (Array.isArray(ohlc.closes)) {
-    return ohlc.closes.filter((x: any) => typeof x === 'number') as number[]
-  }
-  return []
-}
-
-function computeRSI(closes: number[], period = 14): number | null {
-  if (!Array.isArray(closes) || closes.length <= period) return null
-  let gains = 0, losses = 0
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1]
-    if (diff >= 0) gains += diff
-    else losses -= diff
-  }
-  const avgGain = gains / period
-  const avgLoss = losses / period
-  if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  return 100 - (100 / (1 + rs))
-}
+export const config = { runtime: 'nodejs' }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const symbol = String(req.query.symbol || '').trim().toUpperCase()
-    const period = Number(req.query.period || 14) || 14
-    if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
+    const symbol = String(req.query.symbol || '').trim()
+    const key = `ind:rsi:${symbol}`
+    const snapKey = `snap:rsi:${symbol}`
 
-    const key = `ind:rsi:${symbol}:${period}`
+    const data = await kvRefreshIfStale<Resp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
+      const ohlc = await getYahooDailyOHLC(symbol, RANGE)
+      const closes = ohlc.map(x => x.close)
+      const r = rsi14(closes)
+      const value: Resp = { symbol, period: r.period, rsi: r.rsi, status: r.status, points: r.points }
+      await kvSetJSON(snapKey, { updatedAt: Date.now(), value }, TTL_SEC)
+      return value
+    })
 
-    const data = await kvRefreshIfStale<Resp>(
-      key,
-      TTL_SEC,
-      REVALIDATE_SEC,
-      async () => {
-        const ohlc = await getYahooDailyOHLC(symbol, '1y')
-        const closes = toCloses(ohlc)
-        if (closes.length <= period) throw new Error('Not enough data')
-        const rsi = computeRSI(closes, period)
-        let status: 'BUY'|'SELL'|'HOLD' = 'HOLD'
-        let points: number = 0
-        if (rsi != null) {
-          if (rsi < 30) { status = 'BUY'; points =  1 }
-          else if (rsi > 70) { status = 'SELL'; points = -1 }
-        }
-        return { symbol, period, rsi, status, points }
-      }
-    )
-
-    if (!data) return res.status(500).json({ error: 'Failed to compute' })
-    res.status(200).json(data)
+    if (data) return res.status(200).json(data)
+    const snap = await kvGetJSON<Snap>(snapKey)
+    if (snap?.value) return res.status(200).json(snap.value)
+    return res.status(500).json({ error: 'unable to compute' })
   } catch (e: any) {
-    res.status(500).json({ error: String(e?.message || e) })
+    return res.status(500).json({ error: String(e?.message || e) })
   }
 }
