@@ -17,6 +17,19 @@ type Resp = {
 const TTL_SEC = 300
 const REVALIDATE_SEC = 25
 
+function extractCloses(data: any): number[] {
+  if (!data) return []
+  if (Array.isArray(data)) {
+    return data
+      .map((c) => (c && typeof c.close === 'number' ? c.close : null))
+      .filter((x): x is number => typeof x === 'number')
+  }
+  if (Array.isArray(data.closes)) {
+    return data.closes.filter((x: any) => typeof x === 'number')
+  }
+  return []
+}
+
 function ema(values: number[], p: number): number[] {
   if (values.length === 0) return []
   const k = 2 / (p + 1)
@@ -67,9 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       REVALIDATE_SEC,
       async () => {
         const ohlc = await getYahooDailyOHLC(symbol, '1y')
-        const closes = (ohlc || [])
-          .map((c: any) => (typeof c?.close === 'number' ? c.close : null))
-          .filter((x: any) => typeof x === 'number') as number[]
+        const closes = extractCloses(ohlc)
 
         const { macd, signal, hist } = macdFromCloses(closes, fast, slow, signalPeriod)
         const { status, points } = statusFromHist(hist)

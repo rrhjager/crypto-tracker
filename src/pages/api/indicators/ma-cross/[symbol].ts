@@ -32,6 +32,21 @@ function maCrossFromCloses(closes: number[]) {
   return { ma50, ma200, status, points }
 }
 
+/** --- NEW: normalize helper (accepteert array of object) --- */
+function extractCloses(data: any): number[] {
+  if (!data) return []
+  if (Array.isArray(data)) {
+    // array van candles { close: number }
+    return data
+      .map((c) => (c && typeof c.close === 'number' ? c.close : null))
+      .filter((x): x is number => typeof x === 'number')
+  }
+  if (Array.isArray(data.closes)) {
+    return data.closes.filter((x: any) => typeof x === 'number')
+  }
+  return []
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const symbol = String(req.query.symbol || '').trim()
@@ -45,10 +60,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       TTL_SEC,
       REVALIDATE_SEC,
       async () => {
-        const ohlc = await getYahooDailyOHLC(symbol, '1y') // werkt met jouw helper
-        const closes = (ohlc || [])
-          .map((c: any) => (typeof c?.close === 'number' ? c.close : null))
-          .filter((x: any) => typeof x === 'number') as number[]
+        const ohlc = await getYahooDailyOHLC(symbol, '1y') // jouw helper
+        const closes = extractCloses(ohlc)
 
         if (closes.length < 50) {
           const empty: Resp = { symbol, ma50: null, ma200: null, status: 'HOLD', points: 0 }

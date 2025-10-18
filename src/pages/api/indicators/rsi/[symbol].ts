@@ -13,6 +13,19 @@ type Resp = {
 const TTL_SEC = 300
 const REVALIDATE_SEC = 25
 
+function extractCloses(data: any): number[] {
+  if (!data) return []
+  if (Array.isArray(data)) {
+    return data
+      .map((c) => (c && typeof c.close === 'number' ? c.close : null))
+      .filter((x): x is number => typeof x === 'number')
+  }
+  if (Array.isArray(data.closes)) {
+    return data.closes.filter((x: any) => typeof x === 'number')
+  }
+  return []
+}
+
 function rsiFromCloses(closes: number[], period = 14): number | null {
   if (closes.length <= period) return null
   const gains: number[] = []
@@ -22,8 +35,8 @@ function rsiFromCloses(closes: number[], period = 14): number | null {
     gains.push(Math.max(0, diff))
     losses.push(Math.max(0, -diff))
   }
-  const g = gains.slice(-(period)).reduce((a, b) => a + b, 0) / period
-  const l = losses.slice(-(period)).reduce((a, b) => a + b, 0) / period
+  const g = gains.slice(-period).reduce((a, b) => a + b, 0) / period
+  const l = losses.slice(-period).reduce((a, b) => a + b, 0) / period
   if (l === 0) return 100
   const rs = g / l
   return +((100 - 100 / (1 + rs)).toFixed(2))
@@ -51,9 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       REVALIDATE_SEC,
       async () => {
         const ohlc = await getYahooDailyOHLC(symbol, '6mo')
-        const closes = (ohlc || [])
-          .map((c: any) => (typeof c?.close === 'number' ? c.close : null))
-          .filter((x: any) => typeof x === 'number') as number[]
+        const closes = extractCloses(ohlc)
 
         if (closes.length <= period) {
           const empty: Resp = { symbol, period, rsi: null, status: 'HOLD', points: 0 }
