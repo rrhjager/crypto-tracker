@@ -13,6 +13,9 @@ import CookieConsent from '@/components/CookieConsent'
 // Linksonder subtiele advertentie-popup (wegklikbaar, keert terug)
 import AdPopup from '@/components/AdPopup'
 
+// ✅ NIEUW: centrale SWR-config (pauzeert bij hidden tab, 60s interval, dedupe)
+import { swrConfig } from '@/lib/swr'
+
 type NextPageWithLayout = NextPage & {
   getLayout?: (page: React.ReactElement) => React.ReactNode
 }
@@ -50,11 +53,11 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
   return (
     <SWRConfig
       value={{
+        // 🔁 Gebruik de centrale, zuinige defaults (60s, geen refresh when hidden, dedupe)
+        ...swrConfig,
+
+        // behoud jouw fetcher en provider/retry-gedrag 1-op-1
         fetcher: defaultFetcher,
-        revalidateOnFocus: true,
-        revalidateIfStale: true,
-        revalidateOnReconnect: true,
-        dedupingInterval: 2000,
         provider: () => new Map(),
         onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
           const status = (error as any)?.status ?? 0
