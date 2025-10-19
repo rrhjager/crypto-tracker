@@ -1,219 +1,126 @@
 // src/pages/stocks/[symbol].tsx
-import { useRouter } from 'next/router'
+import Head from 'next/head'
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
-import StockIndicatorCard from '@/components/StockIndicatorCard'
+import { useRouter } from 'next/router'
+import useSWR from 'swr'
 import ScoreBadge from '@/components/ScoreBadge'
-import { AEX } from '@/lib/aex'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
+const toPtsFromStatus = (s?: Advice) => s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0
+const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
 
-type MaCrossResp = {
+type SnapItem = {
   symbol: string
-  ma50: number | null
-  ma200: number | null
-  status: Advice
-  points: number
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
 }
-type RsiResp = {
-  symbol: string
-  period: number
-  rsi: number | null
-  status: Advice
-  points: number
-}
-type MacdResp = {
-  symbol: string
-  fast: number
-  slow: number
-  signalPeriod: number
-  macd: number | null
-  signal: number | null
-  hist: number | null
-  status: Advice
-  points: number
-}
-type Vol20Resp = {
-  symbol: string
-  period: number
-  volume: number | null
-  avg20: number | null
-  ratio: number | null
-  status: Advice
-  points: number
+type SnapResp = { items: SnapItem[]; updatedAt: number }
+
+function fmt(v: number | null | undefined, d = 2) {
+  return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
 
 export default function StockDetail() {
   const router = useRouter()
-  const symbol = (router.query.symbol as string) || ''
-  const meta = useMemo(() => AEX.find(t => t.symbol === symbol), [symbol])
+  const sym = String(router.query.symbol || '').toUpperCase()
 
-  const [ma, setMa] = useState<MaCrossResp | null>(null)
-  const [rsi, setRsi] = useState<RsiResp | null>(null)
-  const [macd, setMacd] = useState<MacdResp | null>(null)
-  const [vol20, setVol20] = useState<Vol20Resp | null>(null)
+  const { data, error } = useSWR<SnapResp>(
+    sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
 
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  const item = data?.items?.[0]
+  const ma    = item?.ma
+  const rsi   = item?.rsi
+  const macd  = item?.macd
+  const vol   = item?.volume
 
-  useEffect(() => {
-    if (!symbol) return
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoading(true)
-        setErr(null)
-
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-        ])
-
-        if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
-        if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
-        if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
-        if (!rVol.ok) throw new Error(`VOL HTTP ${rVol.status}`)
-
-        const [jMa, jRsi, jMacd, jVol] = await Promise.all([
-          rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-        ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        if (!aborted) {
-          setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol)
-        }
-      } catch (e: any) {
-        if (!aborted) setErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoading(false)
-      }
-    })()
-    return () => { aborted = true }
-  }, [symbol])
-
-  // Samengesteld totaal-advies (MA 40%, MACD 30%, RSI 20%, Volume 10%)
-  const totalScore = useMemo(() => {
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
-
+  // Zelfde score-wegingsmodel als op de lijst
+  const score = (() => {
+    const toNorm = (p: number) => (p + 2) / 4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const pMA   = toPts(ma?.status,   ma?.points)
-    const pMACD = toPts(macd?.status, macd?.points)
-    const pRSI  = toPts(rsi?.status,  rsi?.points)
-    const pVOL  = toPts(vol20?.status,vol20?.points)
-
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    return Math.round(agg * 100)
-  }, [ma, macd, rsi, vol20])
+    const pMA = toPtsFromStatus(ma?.status)
+    const pMACD = toPtsFromStatus(macd?.status)
+    const pRSI = toPtsFromStatus(rsi?.status)
+    const pVOL = toPtsFromStatus(vol?.status)
+    const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+    return Math.round(Math.max(0, Math.min(1, agg)) * 100)
+  })()
 
   return (
-    <main className="min-h-screen bg-ink text-white">
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-        {/* Header zonder extra badge (alleen naam + ticker) */}
-        <header className="space-y-1">
-          <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
-          <p className="sub">{symbol}</p>
-        </header>
+    <>
+      <Head><title>{sym.replace('.AS','')} — SignalHub</title></Head>
+      <main className="min-h-screen">
+        <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
+          <h1 className="hero">{sym.replace('.AS','')}</h1>
+        </section>
 
-        {/* Één plek voor totaal-advies (zoals crypto) */}
-        <div className="table-card flex items-center justify-between">
-          <div className="font-semibold">Totaal advies</div>
-          {!loading && !err ? (
-            <ScoreBadge score={totalScore} />
-          ) : (
-            <span className="badge badge-hold">HOLD · 50</span>
-          )}
-        </div>
+        <section className="max-w-6xl mx-auto px-4 pb-16">
+          {error && <div className="mb-3 text-red-600 text-sm">Fout bij laden: {String((error as any)?.message || error)}</div>}
 
-        <div className="grid md:grid-cols-2 gap-4">
-          {/* MA */}
-          <StockIndicatorCard
-            title="MA50 vs MA200 (Golden/Death Cross)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : (ma?.ma50 != null && ma?.ma200 != null)
-                    ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
-                    : 'Nog onvoldoende data om MA50/MA200 te bepalen'
-            }
-          />
+          {/* Totaal advies */}
+          <div className="table-card p-4 mb-4">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-gray-900">Totaal advies</div>
+              <div className="origin-left scale-95">
+                <ScoreBadge score={score} />
+              </div>
+            </div>
+          </div>
 
-          {/* RSI */}
-          <StockIndicatorCard
-            title="RSI (14)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : (rsi?.rsi != null)
-                    ? `RSI: ${rsi.rsi.toFixed(2)}`
-                    : 'Onvoldoende data voor RSI'
-            }
-          />
+          <div className="grid md:grid-cols-2 gap-4">
+            {/* MA */}
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-gray-900">MA50 vs MA200 (Golden/Death Cross)</div>
+                <span className="badge badge-hold">{ma?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                MA50: {fmt(ma?.ma50)} · MA200: {fmt(ma?.ma200)}
+              </div>
+            </div>
 
-          {/* MACD */}
-          <StockIndicatorCard
-            title="MACD (12/26/9)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : (macd?.macd != null && macd?.signal != null)
-                    ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
-                    : 'Onvoldoende data voor MACD'
-            }
-          />
+            {/* RSI */}
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-gray-900">RSI ({rsi?.period ?? 14})</div>
+                <span className="badge badge-hold">{rsi?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-gray-700">RSI: {fmt(rsi?.rsi)}</div>
+            </div>
 
-          {/* Volume vs 20d */}
-          <StockIndicatorCard
-            title="Volume vs 20d gemiddelde"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : (vol20?.volume != null && vol20?.avg20 != null)
-                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
-                    : 'Onvoldoende data voor volume'
-            }
-          />
-        </div>
+            {/* MACD */}
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-gray-900">MACD (12/26/9)</div>
+                <span className="badge badge-hold">{macd?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                MACD: {fmt(macd?.macd)} · Signaal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
+              </div>
+            </div>
 
-        <div className="flex gap-3">
-          {/* custom grijze buttons (geen .btn classes) */}
-          <Link
-            href="/stocks"
-            className="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-gray-200 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-300 shadow-sm"
-          >
-            ← Back to AEX list
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-gray-200 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-300 shadow-sm"
-          >
-            Go to homepage
-          </Link>
-        </div>
-      </div>
-    </main>
+            {/* Volume */}
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold text-gray-900">Volume vs 20d gemiddelde</div>
+                <span className="badge badge-hold">{vol?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-gray-700">
+                Vol: {fmt(vol?.volume, 0)} · Gem(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 flex gap-3">
+            <Link href="/stocks" className="btn">← Back to AEX list</Link>
+            <Link href="/" className="btn-secondary">Go to homepage</Link>
+          </div>
+        </section>
+      </main>
+    </>
   )
 }
