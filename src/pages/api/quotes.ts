@@ -23,7 +23,7 @@ type Resp = {
   }
 }
 
-const CACHE_TTL_MS = 20_000; // 20s SWR-cache
+const CACHE_TTL_MS = 20_000; // 20s in-memory cache binnen dezelfde serverless instance
 const cache = new Map<string, { t: number; q: Quote }>()
 
 function setCache(q: Quote) {
@@ -115,6 +115,9 @@ async function mapWithPool<T, R>(arr: T[], n: number, fn: (t: T) => Promise<R>):
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
+  // ➜ Toegevoegd: CDN/edge cache, zodat veel hits niet eens je functie raken
+  res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=120')
+
   try {
     const raw = String(req.query.symbols || '').trim()
     if (!raw) return res.status(400).json({ error: 'symbols query param is required (comma-separated)' })
