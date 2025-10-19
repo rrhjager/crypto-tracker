@@ -452,13 +452,14 @@ export default function Homepage() {
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  // ✅ Snellere 1-call-per-symbool endpoint i.p.v. 4 losse indicator-calls
+  // >>> Sneller: 1 API-call per symbool (gecachete server-score) i.p.v. 4 losse indicator-calls
   async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
     try {
       const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
       if (!r.ok) return null
       const j = await r.json() as { score?: number|null }
-      return (Number.isFinite(j?.score as number) ? Number(j!.score) : null)
+      if (Number.isFinite(j?.score as number)) return Math.round(Number(j.score))
+      return null
     } catch {
       return null
     }
@@ -479,7 +480,7 @@ export default function Homepage() {
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
 
-          // iets lagere concurrency om piek te beperken (stabieler/sneller op echte netwerken)
+          // Concurrency bewust gematigd i.v.m. API-limits + snellere server-cache
           const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
           const rows = cons.map((c, i) => ({
             symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
@@ -875,7 +876,7 @@ export default function Homepage() {
                         </div>
                       </div>
                     }
-                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                    right={<div className="origin-right scale-90 sm:cale-100"><ScoreBadge score={r.score} /></div>}
                   />
                 </li>
               ))}
@@ -895,7 +896,7 @@ export default function Homepage() {
                     href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
-                        <div className="text-white/60 text=[11px] mb-0.5">{r.market}</div>
+                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
                         <div className="font-medium truncate text-[13px]">
                           {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                         </div>
