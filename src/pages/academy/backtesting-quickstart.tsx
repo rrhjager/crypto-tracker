@@ -20,7 +20,7 @@ export default function BacktestingQuickstart() {
           <h1 className="text-3xl font-extrabold tracking-tight text-white">Backtesting quickstart</h1>
           <div className="prose prose-invert prose-sm sm:prose-base max-w-none mt-4">
             <p>
-              Backtesting is the practice of running a strategy on historical data to understand behavior and frame expectations. The goal is not to find the perfect setting for the past but to design a simple robust plan that holds up across many environments. Keep rules clear for entries, exits, position size and how you handle missing data or gaps.
+              Backtesting is the practice of running a strategy on historical data to understand behavior and frame expectations. The goal is not to find the perfect setting for the past, but to design a simple robust plan that holds up across many environments. Keep rules clear for entries, exits, position size and how you handle missing data or gaps.
             </p>
             <p className="mt-3">
               Split history into a design set and a validation set. Look beyond return. Study the depth and duration of drawdowns, the relation between gains and losses, the distribution of outcomes and your exposure per theme. Favor methods that remain acceptable across a range of parameters rather than a fragile peak that only works in one case.
