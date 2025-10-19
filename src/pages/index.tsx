@@ -495,7 +495,38 @@ export default function Homepage() {
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
 
+        // --- NIEUW: probeer eerst de lichte snapshot endpoint per markt ---
+        async function trySnapshot(market: MarketLabel) {
+          try {
+            const url = `/api/indicators/snapshot?market=${encodeURIComponent(market)}&v=${minuteTag}`
+            const r = await fetch(url, { cache: 'no-store' })
+            if (!r.ok) return null
+            const j = await r.json() as { items?: Array<{ symbol:string; name?:string; score?:number }> }
+            const items = Array.isArray(j?.items) ? j.items : []
+            if (!items.length) return null
+            // kies hoogste en laagste score
+            const withScores = items.filter(it => Number.isFinite(it.score as number)) as Array<{symbol:string; name?:string; score:number}>
+            if (!withScores.length) return null
+            const sorted = [...withScores].sort((a,b)=> b.score - a.score)
+            const top = sorted[0]
+            const bot = sorted[sorted.length-1]
+            return {
+              top: top ? { symbol: top.symbol, name: top.name || top.symbol, market, score: Math.round(top.score) } : null,
+              bot: bot ? { symbol: bot.symbol, name: bot.name || bot.symbol, market, score: Math.round(bot.score) } : null,
+            }
+          } catch { return null }
+        }
+
         for (const market of MARKET_ORDER) {
+          // 1) probeer snapshot
+          const snap = await trySnapshot(market)
+          if (snap && (snap.top || snap.bot)) {
+            if (snap.top) outBuy.push({ ...snap.top, signal: statusFromScore(snap.top.score) })
+            if (snap.bot) outSell.push({ ...snap.bot, signal: statusFromScore(snap.bot.score) })
+            continue
+          }
+
+          // 2) FALLBACK: je originele per-symbool berekening (ongewijzigd)
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
