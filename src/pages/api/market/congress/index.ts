@@ -1,8 +1,7 @@
-// src/pages/api/market/congress/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { withCache, kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
+import { kvRefreshIfStale, kvSetJSON, kvGetJSON } from '@/lib/kv'
 
-// Make sure this runs in the Node runtime on Vercel
+// Zorg voor Node runtime (puppeteer werkt niet op edge)
 export const config = { runtime: 'nodejs', maxDuration: 60 }
 
 type Item = {
@@ -17,9 +16,13 @@ type Item = {
   side: 'BUY' | 'SELL' | '—'
 }
 
-/* ---------------- SWR/KV settings ---------------- */
-const STALE_MS = 180_000 // 3 min: serve stale-while-revalidate
-const KV_TTL_SEC = 600    // 10 min TTL in KV
+/* ---------------- Cache-instellingen ---------------- */
+// Edge CDN: snelle TTFB en weinig function hits
+const EDGE_S_MAXAGE = 900;   // 15 min
+const EDGE_SWR      = 3600;  // 60 min
+// KV snapshot: 60 min geldig; 5 min ervoor revalidate
+const KV_TTL_SEC    = 3600;  // 60 min
+const KV_REVALIDATE = 300;   // 5 min vóór TTL
 
 /* ---------------- utils ---------------- */
 const monthMap: Record<string, number> = {
@@ -41,9 +44,9 @@ function toISO(raw?: string | null): string | null {
   if (!raw) return null
   return (
     parseDayMonthYear(raw) ||
-    (raw.match(/\b(\d{4})-(\d{2})-(\d{2})\b/) ? raw.slice(0,10) : (
-      isNaN(new Date(raw).getTime()) ? null : new Date(raw).toISOString().slice(0,10)
-    ))
+    (raw.match(/\b(\d{4})-(\d{2})-(\d{2})\b/) ? raw.slice(0,10) :
+      (isNaN(new Date(raw).getTime()) ? null : new Date(raw).toISOString().slice(0,10))
+    )
   )
 }
 const nl = (iso?: string | null) =>
@@ -68,7 +71,7 @@ function normalizeSide(s?: string | null): 'BUY' | 'SELL' | '—' {
   return '—'
 }
 
-/* -------- headless chromium (time-limited) -------- */
+/* -------- Headless Chromium (met databesparing) -------- */
 async function getBrowser() {
   if (process.env.VERCEL || process.env.AWS_REGION) {
     const { default: chromium } = await import('@sparticuz/chromium')
@@ -81,7 +84,14 @@ async function getBrowser() {
     }
     const headlessOpt: boolean = typeof chr.headless === 'boolean' ? (chr.headless as boolean) : true
     const browser = await puppeteer.default.launch({
-      args: chr.args ?? [],
+      args: [
+        ...(chr.args ?? []),
+        // Minder data: blokkeer extensies, GPU, etc.
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-setuid-sandbox',
+        '--no-sandbox'
+      ],
       defaultViewport: chr.defaultViewport ?? null,
       executablePath: await chr.executablePath(),
       headless: headlessOpt,
@@ -101,22 +111,58 @@ function withTimeout<T>(p: Promise<T>, ms: number, msg = 'timeout'): Promise<T> 
   })
 }
 
+// Abort/skip zware assets om data te besparen
+async function enableNetworkThrift(page: any) {
+  // Puppeteer v20+: page.route; oudere: setRequestInterception
+  if (page.route) {
+    await page.route('**/*', (route: any) => {
+      const req = route.request()
+      const type = req.resourceType()
+      // blokkeer media/beelden/fonts/CSS/3rd-party analytics
+      const url = req.url()
+      const is3p = /google-analytics|googletagmanager|facebook|twitter|doubleclick|adservice|hotjar|segment|mixpanel|sentry|cloudflareinsights/i.test(url)
+      if (['image','media','font','stylesheet'].includes(type) || is3p) {
+        return route.abort()
+      }
+      return route.continue()
+    })
+  } else {
+    await page.setRequestInterception(true)
+    page.on('request', (req: any) => {
+      const type = req.resourceType()
+      const url = req.url()
+      const is3p = /google-analytics|googletagmanager|facebook|twitter|doubleclick|adservice|hotjar|segment|mixpanel|sentry|cloudflareinsights/i.test(url)
+      if (['image','media','font','stylesheet'].includes(type) || is3p) {
+        req.abort()
+      } else {
+        req.continue()
+      }
+    })
+  }
+}
+
 /* ---------------- scrape core ---------------- */
 async function scrape(limit: number): Promise<Item[]> {
   const browser = await withTimeout(getBrowser(), 25_000, 'browser timeout')
   try {
     const page = await browser.newPage()
-    await page.setViewport({ width: 1480, height: 1200, deviceScaleFactor: 1 })
+    await page.setViewport({ width: 1366, height: 1024, deviceScaleFactor: 1 })
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
     )
+
+    // Grote besparing: blokkeer zware assets
+    await enableNetworkThrift(page)
 
     const out: Item[] = []
     let pageNum = 1
 
     while (out.length < limit && pageNum <= 5) {
       const url = `https://www.capitoltrades.com/trades?page=${pageNum}&sort=-transaction_date`
-      await withTimeout(page.goto(url, { waitUntil: 'networkidle0', timeout: 45_000 }), 50_000, 'goto timeout')
+      await withTimeout(page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 }), 50_000, 'goto timeout')
+
+      // wacht kort tot tabel DOM klaar is
+      await page.waitForSelector('table tbody tr', { timeout: 10_000 }).catch(() => {})
 
       const rows = await page.evaluate(() => {
         const clean = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim()
@@ -205,12 +251,7 @@ async function scrape(limit: number): Promise<Item[]> {
         }
 
         const ticker = r.issuerCell || '—'
-        const side = ((): 'BUY' | 'SELL' | '—' => {
-          const t = (r.sideRaw || '').toLowerCase()
-          if (/\bbuy|purchase|acquisition|acquire|bought\b/i.test(t)) return 'BUY'
-          if (/\bsell|sale|disposal|dispose|sold\b/i.test(t)) return 'SELL'
-          return '—'
-        })()
+        const side = normalizeSide(r.sideRaw)
 
         out.push({
           publishedISO: pubISO,
@@ -247,20 +288,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const limitQ = Number(req.query.limit)
   const limit = Number.isFinite(limitQ) ? Math.min(Math.max(limitQ, 1), 100) : 25
   const force = String(req.query.force || '') === '1'
-  const cacheKey = `congress:v1:${limit}`
+  const CACHE_KEY = `congress:v2:${limit}`
 
   // CDN hints: snelle TTFB en SWR op de edge
-  res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600')
+  res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
 
-  // FORCE: directe scrape + cache, met fallback naar stale
+  // force=1 → altijd fresh scrape + cache (debug)
   if (force) {
     try {
       const fresh = await scrape(limit)
-      await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
+      try { await kvSetJSON(CACHE_KEY, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC) } catch {}
       return res.status(200).json({ items: fresh, hint: 'Fresh scrape (force=1)' })
     } catch (e: any) {
-      const staleAny = await kvGetJSON<any>(cacheKey)
-      // Compat: sta toe dat eerder alleen array was opgeslagen
+      const staleAny = await kvGetJSON<any>(CACHE_KEY)
       const staleItems: Item[] = Array.isArray(staleAny) ? staleAny : (staleAny?.items || [])
       if (staleItems?.length) {
         return res.status(200).json({ items: staleItems, hint: 'Stale cache (scrape failed with force=1)' })
@@ -269,32 +309,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // Normale route: serve snapshot uit KV en refresh asynchroon indien stale
   try {
-    const snap = await kvGetJSON<{ items: Item[]; updatedAt?: number } | Item[]>(cacheKey)
+    // Serve KV; vlak vóór TTL in bg verversen (goedkoop)
+    const snap = await kvRefreshIfStale<{ items: Item[]; updatedAt: number }>(
+      CACHE_KEY,
+      KV_TTL_SEC,
+      KV_REVALIDATE,
+      async () => {
+        const items = await scrape(limit)
+        const payload = { items, updatedAt: Date.now() }
+        try { await kvSetJSON(CACHE_KEY, payload, KV_TTL_SEC) } catch {}
+        return payload
+      }
+    )
 
-    if (snap) {
-      // Back-compat: zowel oud array-formaat als nieuw object-formaat ondersteunen
-      const items: Item[] = Array.isArray(snap) ? snap : (snap.items || [])
-      const updatedAt = Array.isArray(snap) ? 0 : (snap.updatedAt || 0)
-
-      // SWR: asynchroon verversen als stale
-      kvRefreshIfStale(cacheKey, updatedAt, STALE_MS, async () => {
-        const fresh = await scrape(limit)
-        await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
-      }).catch(() => {})
-
-      return res.status(200).json({ items, hint: 'KV snapshot (SWR in background)' })
+    if (snap?.items) {
+      return res.status(200).json({ items: snap.items, hint: 'KV snapshot (SWR refresh)' })
     }
 
-    // Geen snapshot → scrape + vullen
-    const fresh = await withCache<Item[]>(cacheKey, KV_TTL_SEC, async () => await scrape(limit))
-    // withCache kan al in KV zetten; sla ook het SWR-object op (updatedAt) voor uniformiteit
-    await kvSetJSON(cacheKey, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
-    return res.status(200).json({ items: fresh, hint: 'Fresh fill' })
+    // Eerste keer: fresh + store
+    const items = await scrape(limit)
+    try { await kvSetJSON(CACHE_KEY, { items, updatedAt: Date.now() }, KV_TTL_SEC) } catch {}
+    return res.status(200).json({ items, hint: 'Fresh fill' })
   } catch (e: any) {
-    // Laatste redmiddel: stale cache proberen
-    const staleAny = await kvGetJSON<any>(cacheKey)
+    // laatste redmiddel: stale proberen
+    const staleAny = await kvGetJSON<any>(CACHE_KEY)
     const staleItems: Item[] = Array.isArray(staleAny) ? staleAny : (staleAny?.items || [])
     if (staleItems?.length) {
       return res.status(200).json({ items: staleItems, hint: 'Stale cache (fresh failed)' })

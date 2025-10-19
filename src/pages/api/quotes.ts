@@ -23,29 +23,37 @@ type Resp = {
   }
 }
 
-const CACHE_TTL_MS = 20_000; // 20s in-memory cache binnen dezelfde serverless instance
+const CACHE_TTL_MS = 20_000
 const cache = new Map<string, { t: number; q: Quote }>()
 
-function setCache(q: Quote) {
-  if (!q?.symbol) return
-  cache.set(q.symbol, { t: Date.now(), q })
-}
+function setCache(q: Quote) { if (q?.symbol) cache.set(q.symbol, { t: Date.now(), q }) }
 function getCache(sym: string): Quote | null {
-  const hit = cache.get(sym)
-  if (!hit) return null
-  if (Date.now() - hit.t > CACHE_TTL_MS) return null
-  return hit.q
+  const hit = cache.get(sym); if (!hit) return null
+  return (Date.now() - hit.t > CACHE_TTL_MS) ? null : hit.q
 }
 
-async function okJson<T>(r: Response): Promise<T> {
-  const j = await r.json()
-  return j as T
-}
+async function okJson<T>(r: Response): Promise<T> { return await r.json() as T }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
+// --- NEW: map “BTC” → “BTC-USD” (maar laat ABN.AS, AAPL, EURUSD=X etc. met rust)
+const CRYPTO_TICKERS = new Set([
+  'BTC','ETH','SOL','XRP','ADA','DOGE','AVAX','BNB','MATIC','DOT','LINK','LTC','TRX','ATOM','ETC','XMR','FIL','NEAR'
+])
+function mapToYahooSymbol(input: string): string {
+  const s = (input || '').toUpperCase().trim()
+  // Als het al een pair of exchange-symbool is, laat staan
+  if (s.includes('-') || s.includes('.') || s.endsWith('=X')) return s
+  // Bekende bare crypto tickers -> USD-paar
+  if (CRYPTO_TICKERS.has(s)) return `${s}-USD`
+  // Heuristiek: 2-6 letters/cijfers zonder suffix => waarschijnlijk crypto → -USD
+  if (/^[A-Z0-9]{2,6}$/.test(s)) return `${s}-USD`
+  return s
+}
+
 /** Pak laatste en voorlaatste geldige close uit chart API en bereken change/% */
-async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
-  // Probeer een paar combinaties; 1d interval is vaak het meest robuust
+async function fetchQuoteFromChart(symbolInput: string): Promise<Quote> {
+  const symbol = mapToYahooSymbol(symbolInput)
+
   const combos: Array<[string, string]> = [
     ['1d', '1mo'],
     ['1d', '3mo'],
@@ -63,7 +71,6 @@ async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
       const series = res?.indicators?.quote?.[0] || {}
       const closes: number[] = (series.close || []).map(Number)
 
-      // laatste twee geldige closes zoeken (van achter naar voren)
       let last: number | null = null
       let prev: number | null = null
       for (let i = closes.length - 1; i >= 0; i--) {
@@ -79,7 +86,7 @@ async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
       const changePct = prev != null && prev !== 0 ? (change as number) / prev * 100 : null
 
       const q: Quote = {
-        symbol,
+        symbol: symbolInput,            // ← geef originele symbool terug als key
         longName: meta?.longName ?? undefined,
         shortName: meta?.symbol ?? undefined,
         regularMarketPrice: last,
@@ -91,11 +98,9 @@ async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
       return q
     } catch (e: any) {
       errs.push(`[chart ${interval}/${range}] ${String(e?.message || e)}`)
-      // kleine backoff en door
       await sleep(120)
     }
   }
-  // alles mislukt
   throw new Error(errs.join(' | '))
 }
 
@@ -115,7 +120,7 @@ async function mapWithPool<T, R>(arr: T[], n: number, fn: (t: T) => Promise<R>):
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
-  // ➜ Toegevoegd: CDN/edge cache, zodat veel hits niet eens je functie raken
+  // CDN/edge cache: veel hits raken je functie dan niet
   res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=120')
 
   try {
@@ -144,7 +149,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             return q
           } catch (e: any) {
             errors.push(`${sym}: ${String(e?.message || e)}`)
-            // return lege quote zodat UI niet crasht
             return {
               symbol: sym,
               regularMarketPrice: null,

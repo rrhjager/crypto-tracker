@@ -1,7 +1,6 @@
-// src/pages/api/market/hedgefunds/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { XMLParser } from 'fast-xml-parser'
-import { kvGetJSON, kvSetJSON, kvRefreshIfStale } from '@/lib/kv'
+import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 
 export const config = { runtime: 'nodejs' }
 
@@ -38,11 +37,18 @@ const FUNDS: { name: string; cik: string }[] = [
   { name: 'Balyasny Asset Management', cik: '0001218710' },
 ]
 
-/* -------------- config -------------- */
-const UA = process.env.SEC_USER_AGENT || 'SignalHub/1.0 (contact: you@example.com)'
+/* -------------- perf & cache config -------------- */
+// Edge CDN: meeste hits raken je functie niet
+const EDGE_S_MAXAGE   = 900;   // 15 min
+const EDGE_SWR        = 3600;  // 60 min
+// KV snapshot: 60 min geldig; 5 min ervoor in bg verversen
+const KV_TTL_SEC      = 3600;  // 60 min
+const KV_REVALIDATE   = 300;   // 5 min
+// SEC beleefdheidsinstellingen
+const UA    = process.env.SEC_USER_AGENT || 'SignalHub/1.0 (contact: you@example.com)'
 const DELAY = Math.max(0, Number(process.env.SEC_FETCH_DELAY_MS || 500))
-const STALE_MS = 5 * 60_000  // 5 min: serve stale-while-revalidate
-const KV_TTL_SEC = 10 * 60   // 10 min in KV
+// Bounded concurrency voor fonds-queue
+const WORKERS = 2
 
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r,ms))
 
@@ -57,10 +63,16 @@ async function httpGet(url: string, init?: RequestInit, retries = 2): Promise<Re
       },
       cache: 'no-store',
     })
-    if (r.status === 429 && retries > 0) { await sleep(1200); return httpGet(url, init, retries - 1) }
+    if (r.status === 429 && retries > 0) {
+      await sleep(1200)
+      return httpGet(url, init, retries - 1)
+    }
     return r
   } catch {
-    if (retries > 0) { await sleep(800); return httpGet(url, init, retries - 1) }
+    if (retries > 0) {
+      await sleep(800)
+      return httpGet(url, init, retries - 1)
+    }
     return new Response(null, { status: 520 })
   }
 }
@@ -213,59 +225,13 @@ function formatMoney(n?: number | null) {
   catch { return String(Math.round(n as number)) }
 }
 
-/* -------------- handler -------------- */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const nocache = String(req.query.nocache ?? '') === '1'
-  const maxFunds = Math.min(FUNDS.length, Number(req.query.funds || FUNDS.length))
-  const topN = Math.min(25, Math.max(5, Number(req.query.top || 12)))
-  const cacheKey = `hedgefunds:v1:${maxFunds}:${topN}`
-
-  res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1800')
-
-  // nocache=1 → force fresh
-  if (nocache) {
-    const out = await buildData(maxFunds, topN)
-    await kvSetJSON(cacheKey, { out, updatedAt: Date.now() }, KV_TTL_SEC)
-    return res.status(200).json({
-      items: out,
-      hint: 'fresh (nocache=1)',
-      sample: formatMoney(123456789),
-    })
-  }
-
-  // probeer KV-snapshot
-  const snap = await kvGetJSON<{ out: FundOut[]; updatedAt: number }>(cacheKey)
-  if (snap?.out) {
-    // SWR: refresh asynchroon
-    kvRefreshIfStale(cacheKey, snap.updatedAt, STALE_MS, async () => {
-      const fresh = await buildData(maxFunds, topN)
-      await kvSetJSON(cacheKey, { out: fresh, updatedAt: Date.now() }, KV_TTL_SEC)
-    }).catch(() => {})
-
-    return res.status(200).json({
-      items: snap.out,
-      hint: 'KV snapshot (SWR refresh)',
-      sample: formatMoney(123456789),
-    })
-  }
-
-  // geen snapshot → fresh
-  const out = await buildData(maxFunds, topN)
-  await kvSetJSON(cacheKey, { out, updatedAt: Date.now() }, KV_TTL_SEC)
-  return res.status(200).json({
-    items: out,
-    hint: 'fresh fill',
-    sample: formatMoney(123456789),
-  })
-}
-
-/* ---------------- core builder (ongewijzigd) ---------------- */
+/* ---------------- core builder (identieke logica, bounded) ---------------- */
 async function buildData(maxFunds: number, topN: number): Promise<FundOut[]> {
   const queue = FUNDS.slice(0, maxFunds)
   const out: FundOut[] = []
 
   let idx = 0
-  const workers = Array.from({ length: 2 }).map(async () => {
+  const workers = Array.from({ length: Math.max(1, Math.min(WORKERS, queue.length)) }).map(async () => {
     while (idx < queue.length) {
       const me = idx++
       const f = queue[me]
@@ -279,4 +245,66 @@ async function buildData(maxFunds: number, topN: number): Promise<FundOut[]> {
   const filtered = out.filter(x => (x.holdings && x.holdings.length > 0) && !x.error)
   filtered.sort((a,b)=> a.fund.localeCompare(b.fund))
   return filtered
+}
+
+/* -------------- handler -------------- */
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const nocache = String(req.query.nocache ?? '') === '1'
+  const maxFunds = Math.min(FUNDS.length, Number(req.query.funds || FUNDS.length))
+  const topN = Math.min(25, Math.max(5, Number(req.query.top || 12)))
+
+  // Edge cache voor snelle hits zonder function CPU
+  res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
+
+  const CACHE_KEY = `hedgefunds:v2:${maxFunds}:${topN}`
+
+  // nocache=1 → force fresh (handig voor testen)
+  if (nocache) {
+    const fresh = await buildData(maxFunds, topN)
+    try { await kvSetJSON(CACHE_KEY, { items: fresh, updatedAt: Date.now() }, KV_TTL_SEC) } catch {}
+    return res.status(200).json({
+      items: fresh,
+      hint: 'fresh (nocache=1)',
+      sample: formatMoney(123456789),
+    })
+  }
+
+  try {
+    // Serve from KV; vlak voor TTL bg-refresh
+    const snap = await kvRefreshIfStale<{ items: FundOut[]; updatedAt: number }>(
+      CACHE_KEY,
+      KV_TTL_SEC,
+      KV_REVALIDATE,
+      async () => {
+        const items = await buildData(maxFunds, topN)
+        const payload = { items, updatedAt: Date.now() }
+        try { await kvSetJSON(CACHE_KEY, payload, KV_TTL_SEC) } catch {}
+        return payload
+      }
+    )
+
+    if (snap?.items) {
+      return res.status(200).json({
+        items: snap.items,
+        hint: 'KV snapshot (SWR refresh)',
+        sample: formatMoney(123456789),
+      })
+    }
+
+    // Fallback (eerste keer): build & store
+    const items = await buildData(maxFunds, topN)
+    try { await kvSetJSON(CACHE_KEY, { items, updatedAt: Date.now() }, KV_TTL_SEC) } catch {}
+    return res.status(200).json({
+      items,
+      hint: 'fresh fill',
+      sample: formatMoney(123456789),
+    })
+  } catch (e:any) {
+    return res.status(200).json({
+      items: [],
+      hint: 'SEC fetch failed',
+      detail: String(e?.message || e),
+      sample: formatMoney(123456789),
+    })
+  }
 }
