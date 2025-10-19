@@ -2,16 +2,16 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-// ===== 1) Publieke API-routes die je frontend mag gebruiken =====
+// 1) Publieke API-routes die je frontend mag gebruiken
 const PUBLIC_ALLOW = [
   '/api/quotes',
   '/api/indicators/ret-batch',
   '/api/indicators/snapshot',
   '/api/indicators/snapshot-list',
-  '/api/crypto-light/indicators', // laat staan als je deze gebruikt
+  '/api/crypto-light/indicators', // ← aan laten als /crypto live is
 ]
 
-// ===== 2) Interne routes (cron/warmup/health) =====
+// 2) Interne routes (cron/warmup/health)
 const INTERNAL_ALLOW = [
   '/api/internal/',
   '/api/warm-cache',
@@ -19,7 +19,7 @@ const INTERNAL_ALLOW = [
   '/api/kv-health',
 ]
 
-// ===== 3) Bot/preview user-agents blokkeren =====
+// 3) Bot/preview user-agents blokkeren
 const BOT_UA = [
   'bot','crawler','spider','crawling','preview',
   'facebookexternalhit','twitterbot','slackbot','discordbot','embedly',
@@ -27,7 +27,7 @@ const BOT_UA = [
 ]
 const isBot = (ua: string | null) => ua ? BOT_UA.some(k => ua.toLowerCase().includes(k)) : false
 
-// ===== 4) Alleen jouw domein mag de API consumeren =====
+// 4) Alleen jouw domeinen
 function isSameOrigin(req: NextRequest) {
   const host = req.headers.get('host') || ''
   const origin = req.headers.get('origin') || ''
@@ -39,41 +39,34 @@ function isSameOrigin(req: NextRequest) {
   return okHost && okOrigin && okReferer
 }
 
-// ===== 5) Query-sanity: limiter voor symbols & markt =====
+// 5) Query-sanity: limiter voor symbols & markt
 const MARKET_ALLOW = new Set([
   'AEX','DAX','FTSE 100','S&P 500','NASDAQ','Dow Jones',
   'Nikkei 225','Hang Seng','Sensex'
 ])
-
-function countSymbols(param: string | null) {
-  if (!param) return 0
-  return param.split(',').map(s => s.trim()).filter(Boolean).length
-}
+const countSymbols = (p: string | null) => p ? p.split(',').map(s => s.trim()).filter(Boolean).length : 0
 
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl
 
-  // Alleen API beschermen; HTML/SEO blijven vrij
+  // Alleen API beschermen
   if (!pathname.startsWith('/api/')) return NextResponse.next()
 
-  // Preflight/HEAD doorlaten
+  // Preflight/HEAD
   if (req.method === 'OPTIONS' || req.method === 'HEAD') return NextResponse.next()
 
-  // Interne paden altijd toestaan
-  if (INTERNAL_ALLOW.some(pfx => pathname.startsWith(pfx))) {
-    return NextResponse.next()
-  }
+  // Interne paden vrij
+  if (INTERNAL_ALLOW.some(pfx => pathname.startsWith(pfx))) return NextResponse.next()
 
-  // Publieke API alléén wat we whitelisten
-  const allowed = PUBLIC_ALLOW.some(pfx => pathname.startsWith(pfx))
-  if (!allowed) {
+  // Whitelist
+  if (!PUBLIC_ALLOW.some(pfx => pathname.startsWith(pfx))) {
     return new NextResponse('Forbidden (not allowed)', {
       status: 403,
       headers: { 'Cache-Control': 'public, max-age=31536000, immutable' }
     })
   }
 
-  // Bots blokkeren (edge-gecached 403)
+  // Bots blokkeren
   if (isBot(req.headers.get('user-agent'))) {
     return new NextResponse('Forbidden for bots', {
       status: 403,
@@ -81,7 +74,7 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // Alleen jouw site (origin/referer/host) mag de allowed API gebruiken
+  // Alleen jouw site
   if (!isSameOrigin(req)) {
     return new NextResponse('Forbidden (origin)', {
       status: 403,
@@ -89,26 +82,21 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // === Fix 4: limiter op querygrootte / symbol count ===
-  // Voorkomt dure misbruik-calls met honderden tickers of vreemde markten
+  // === Limiter op query-grootte (quotes/snapshot/ret-batch/crypto-light) ===
   const isQuotes = pathname.startsWith('/api/quotes')
   const isSnap   = pathname.startsWith('/api/indicators/snapshot-list')
   const isRet    = pathname.startsWith('/api/indicators/ret-batch')
+  const isCrypto = pathname.startsWith('/api/crypto-light/indicators')
 
-  if (isQuotes || isSnap || isRet) {
-    // Max 60 symbols per request (ruim boven je lijsten)
+  if (isQuotes || isSnap || isRet || isCrypto) {
     const symCount = countSymbols(searchParams.get('symbols'))
-    if (symCount > 60) {
-      return new NextResponse('Too many symbols (max 60)', { status: 400 })
-    }
+    if (symCount > 60) return new NextResponse('Too many symbols (max 60)', { status: 400 })
 
-    // Beperk markten tot bekende waarden wanneer ?market= wordt gebruikt
     const market = searchParams.get('market')
     if (market && !MARKET_ALLOW.has(market)) {
       return new NextResponse('Unknown market', { status: 400 })
     }
 
-    // Bescherm tegen extreem lange querystrings (URL floods)
     const rawQuery = req.url.split('?', 2)[1] || ''
     if (rawQuery.length > 2048) {
       return new NextResponse('Query too long', { status: 414 })
