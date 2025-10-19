@@ -452,34 +452,13 @@ export default function Homepage() {
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
+  // ✅ Snellere 1-call-per-symbool endpoint i.p.v. 4 losse indicator-calls
   async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
     try {
-      const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-        fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' }),
-        fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14&v=${v}`, { cache: 'no-store' }),
-        fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9&v=${v}`, { cache: 'no-store' }),
-        fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20&v=${v}`, { cache: 'no-store' }),
-      ])
-      if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-      const [ma, rsi, macd, vol] = await Promise.all([
-        rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-      ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-      const pMA   = toPtsSmart(ma?.status,   ma?.points,   () => deriveMaPoints(ma))
-      const pMACD = toPtsSmart(macd?.status, macd?.points, () => deriveMacdPoints(macd, ma))
-      const pRSI  = toPtsSmart(rsi?.status,  rsi?.points,  () => deriveRsiPoints(rsi))
-      const pVOL  = toPtsSmart(vol?.status,  vol?.points,  () => deriveVolPoints(vol))
-
-      const nMA   = (pMA   + 2) / 4
-      const nMACD = (pMACD + 2) / 4
-      const nRSI  = (pRSI  + 2) / 4
-      const nVOL  = (pVOL  + 2) / 4
-
-      const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-      const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-      const pct = clamp(Math.round(agg * 100), 0, 100)
-      return pct
+      const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
+      if (!r.ok) return null
+      const j = await r.json() as { score?: number|null }
+      return (Number.isFinite(j?.score as number) ? Number(j!.score) : null)
     } catch {
       return null
     }
@@ -495,38 +474,7 @@ export default function Homepage() {
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
 
-        // --- NIEUW: probeer eerst de lichte snapshot endpoint per markt ---
-        async function trySnapshot(market: MarketLabel) {
-          try {
-            const url = `/api/indicators/snapshot?market=${encodeURIComponent(market)}&v=${minuteTag}`
-            const r = await fetch(url, { cache: 'no-store' })
-            if (!r.ok) return null
-            const j = await r.json() as { items?: Array<{ symbol:string; name?:string; score?:number }> }
-            const items = Array.isArray(j?.items) ? j.items : []
-            if (!items.length) return null
-            // kies hoogste en laagste score
-            const withScores = items.filter(it => Number.isFinite(it.score as number)) as Array<{symbol:string; name?:string; score:number}>
-            if (!withScores.length) return null
-            const sorted = [...withScores].sort((a,b)=> b.score - a.score)
-            const top = sorted[0]
-            const bot = sorted[sorted.length-1]
-            return {
-              top: top ? { symbol: top.symbol, name: top.name || top.symbol, market, score: Math.round(top.score) } : null,
-              bot: bot ? { symbol: bot.symbol, name: bot.name || bot.symbol, market, score: Math.round(bot.score) } : null,
-            }
-          } catch { return null }
-        }
-
         for (const market of MARKET_ORDER) {
-          // 1) probeer snapshot
-          const snap = await trySnapshot(market)
-          if (snap && (snap.top || snap.bot)) {
-            if (snap.top) outBuy.push({ ...snap.top, signal: statusFromScore(snap.top.score) })
-            if (snap.bot) outSell.push({ ...snap.bot, signal: statusFromScore(snap.bot.score) })
-            continue
-          }
-
-          // 2) FALLBACK: je originele per-symbool berekening (ongewijzigd)
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
@@ -947,7 +895,7 @@ export default function Homepage() {
                     href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
-                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
+                        <div className="text-white/60 text=[11px] mb-0.5">{r.market}</div>
                         <div className="font-medium truncate text-[13px]">
                           {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
                         </div>

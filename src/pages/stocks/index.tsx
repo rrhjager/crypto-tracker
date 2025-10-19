@@ -2,6 +2,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 
@@ -14,11 +15,8 @@ type Quote = {
   regularMarketChangePercent: number | null
   currency?: string
 }
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
+// ---------- util helpers (ongewijzigd) ----------
 function num(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
@@ -29,7 +27,6 @@ function fmtPrice(v: number | null | undefined, ccy?: string) {
   } catch {}
   return (v as number).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
 
@@ -39,12 +36,17 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
+// Zet BUY/HOLD/SELL om naar punten -2..+2 (zoals je oude toPts fallback deed)
+const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
+
 export default function Stocks() {
   const symbols = useMemo(() => AEX.map(x => x.symbol), [])
+
+  // =========================
+  // 1) Quotes (batch, ongewijzigd, 20s poll)
+  // =========================
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
-
-  // Quotes (poll)
   useEffect(() => {
     let timer: any, aborted = false
     async function load() {
@@ -65,83 +67,70 @@ export default function Stocks() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // Samengesteld advies per symbool (scores 0..100)
-  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
-  useEffect(() => {
-    let aborted = false
+  // =========================
+  // 2) SNAPSHOT-LIST (N→1 call) — 30s ververs, “fris” uit edge
+  // =========================
+  type SnapItem = {
+    symbol: string
+    ma?: { ma50: number | null; ma200: number | null; status?: Advice }
+    rsi?: { period: number; rsi: number | null; status?: Advice }
+    macd?: { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+    volume?: { volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+  }
+  type SnapResp = { items: SnapItem[]; updatedAt: number }
 
+  const snapUrl = useMemo(() =>
+    `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
+    [symbols]
+  )
+
+  const { data: snap, error: snapErr, isLoading: snapLoading } = useSWR<SnapResp>(
+    snapUrl,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
+
+  // Bouw map per symbool voor snelle lookup in UI
+  const snapBySym = useMemo(() => {
+    const m: Record<string, SnapItem> = {}
+    snap?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    return m
+  }, [snap])
+
+  // =========================
+  // 3) Aggregeer naar jouw score 0..100 met dezelfde weging
+  // =========================
+  const scoreMap = useMemo(() => {
     const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
+    const toNorm = (pts: number) => (pts + 2) / 4 // -2..+2  →  0..1
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
 
-    async function calcFor(sym: string): Promise<number | null> {
-      try {
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(sym)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(sym)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(sym)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(sym)}?period=20`, { cache: 'no-store' }),
-        ])
-        if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
+    const map: Record<string, number> = {}
+    for (const sym of symbols) {
+      const it = snapBySym[sym]
+      if (!it) continue
 
-        const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
+      const pMA   = toPtsFromStatus(it.ma?.status)
+      const pMACD = toPtsFromStatus(it.macd?.status)
+      const pRSI  = toPtsFromStatus(it.rsi?.status)
+      const pVOL  = toPtsFromStatus(it.volume?.status)
 
-        const pMA   = toPts(ma?.status,   ma?.points)
-        const pMACD = toPts(macd?.status, macd?.points)
-        const pRSI  = toPts(rsi?.status,  rsi?.points)
-        const pVOL  = toPts(vol?.status,  vol?.points)
+      const nMA   = toNorm(pMA)
+      const nMACD = toNorm(pMACD)
+      const nRSI  = toNorm(pRSI)
+      const nVOL  = toNorm(pVOL)
 
-        const nMA   = (pMA   + 2) / 4
-        const nMACD = (pMACD + 2) / 4
-        const nRSI  = (pRSI  + 2) / 4
-        const nVOL  = (pVOL  + 2) / 4
-
-        const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-        return Math.round(agg * 100)
-      } catch {
-        return null
-      }
+      const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
+      map[sym] = Math.round(clamp(agg, 0, 1) * 100)
     }
+    return map
+  }, [symbols, snapBySym])
 
-    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-      const out: R[] = new Array(arr.length) as any
-      let i = 0
-      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= arr.length) break
-          out[idx] = await fn(arr[idx], idx)
-        }
-      })
-      await Promise.all(workers)
-      return out
-    }
-
-    ;(async () => {
-      const list = AEX.map(x => x.symbol)
-      const results = await pool(list, 4, async (sym, idx) => {
-        if (idx) await sleep(80)
-        return await calcFor(sym)
-      })
-      if (!aborted) {
-        const map: Record<string, number> = {}
-        results.forEach((s, i) => { if (Number.isFinite(s as number)) map[list[i]] = s as number })
-        setScoreMap(map)
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
-  // 7d / 30d procent-verandering (batch)
+  // =========================
+  // 4) 7d / 30d procent-verandering (batch — ongewijzigd)
+  // =========================
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
-
   useEffect(() => {
     let aborted = false
     const list = AEX.map(x => x.symbol)
@@ -164,7 +153,9 @@ export default function Stocks() {
     return () => { aborted = true }
   }, [])
 
-  // Hydration-safe klokje
+  // =========================
+  // 5) Hydration-safe klokje (ongewijzigd)
+  // =========================
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
@@ -173,7 +164,9 @@ export default function Stocks() {
     return () => clearInterval(id)
   }, [])
 
-  // Samenvatting
+  // =========================
+  // 6) Samenvatting/heatmap logica (ongewijzigd, maar gebruikt nu scoreMap)
+  // =========================
   const summary = useMemo(() => {
     const withScore = AEX.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
@@ -199,7 +192,6 @@ export default function Stocks() {
     return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
-  // Heatmap
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = AEX.map(a => {
@@ -210,6 +202,9 @@ export default function Stocks() {
     return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
   }, [scoreMap, filter])
 
+  // =========================
+  // 7) UI (ongewijzigd)
+  // =========================
   return (
     <>
       <Head><title>AEX Tracker — SignalHub</title></Head>
@@ -221,19 +216,20 @@ export default function Stocks() {
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
+          {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
             {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-[13px]">
                 <colgroup>
-                  <col className="w-10" />                 {/* # */}
-                  <col className="w-[40%]" />              {/* Aandeel */}
-                  <col className="w-[14%]" />              {/* Prijs */}
-                  <col className="w-[14%]" />              {/* 24h */}
-                  <col className="w-[12%]" />              {/* 7d */}
-                  <col className="w-[12%]" />              {/* 30d */}
-                  <col className="w-[18%]" />              {/* Status */}
+                  <col className="w-10" />
+                  <col className="w-[40%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[18%]" />
                 </colgroup>
 
                 <thead className="bg-gray-50">
@@ -303,7 +299,7 @@ export default function Stocks() {
               </table>
             </div>
 
-            {/* Rechterkolom */}
+            {/* Rechterkolom (ongewijzigd) */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               {/* Dagelijkse samenvatting */}
               <div className="table-card p-4">
