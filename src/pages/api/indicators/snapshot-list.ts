@@ -1,160 +1,207 @@
-// /src/pages/api/indicators/snapshot-list.ts
+// src/pages/api/indicators/snapshot-list.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
-import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
+import { maCross, rsi14, macd, vol20 } from '@/lib/ta'
 
-// Strakke, "verse" cache voor deze route: max 30s oud uit edge
-const EDGE_MAX_AGE = 30       // seconden
-const TTL_SEC = 60            // KV TTL per ticker
-const REVALIDATE_SEC = 15     // bij <=15s resterend: achtergrond refresh
+import { AEX } from '@/lib/aex'
+import { SP500 } from '@/lib/sp500'
+import { NASDAQ } from '@/lib/nasdaq'
+import { DOWJONES } from '@/lib/dowjones'
+import { DAX as DAX_FULL } from '@/lib/dax'
+import { FTSE100 } from '@/lib/ftse100'
+import { NIKKEI225 } from '@/lib/nikkei225'
+import { HANGSENG } from '@/lib/hangseng'
+import { SENSEX } from '@/lib/sensex'
 
-type Bar = { close?: number; volume?: number }
-type SnapResp = {
-  symbol: string
-  ma: { ma50: number | null; ma200: number | null; status?: 'BUY'|'SELL'|'HOLD' }
-  rsi: { period: number; rsi: number | null; status?: 'BUY'|'SELL'|'HOLD' }
-  macd: { macd: number | null; signal: number | null; hist: number | null; status?: 'BUY'|'SELL'|'HOLD' }
-  volume: { volume: number | null; avg20d: number | null; ratio: number | null; status?: 'BUY'|'SELL'|'HOLD' }
+type Advice = 'BUY' | 'HOLD' | 'SELL'
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
+type Item = { symbol: string; name?: string; score: number | null }
+
+const RANGE = '1y'
+const TTL_MIN_BARS = 60
+
+/* ---------- helpers (exact als homepage) ---------- */
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+const scoreToPts = (s: number) => clamp((s / 100) * 4 - 2, -2, 2)
+const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
+const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
+const toPtsSmart = (
+  status?: Advice | string,
+  pts?: number | string | null,
+  fallback: () => number | null = () => null
+) => {
+  if (isFiniteNum(pts)) return clamp(toNum(pts), -2, 2)
+  const s = String(status || '').toUpperCase()
+  if (s === 'BUY')  return  2
+  if (s === 'SELL') return -2
+  const f = fallback()
+  return f == null ? 0 : clamp(f, -2, 2)
 }
 
-const RANGE: '1y'|'2y' = '1y'
-
-// --- helpers (gekopieerd uit snapshot-logic, veilig en lokaal) ---
-const normCloses = (ohlc: Bar[]) =>
-  Array.isArray(ohlc) ? ohlc.map(x => (typeof x?.close === 'number' ? x.close! : NaN)).filter(Number.isFinite) as number[] : []
-
-const normVolumes = (ohlc: Bar[]) =>
-  Array.isArray(ohlc) ? ohlc.map(x => (typeof x?.volume === 'number' ? x.volume! : NaN)).filter(Number.isFinite) as number[] : []
-
-const sma = (arr: number[], p: number): number | null => {
-  if (!Array.isArray(arr) || arr.length < p) return null
-  const s = arr.slice(-p)
-  return s.reduce((a, b) => a + b, 0) / p
-}
-
-// Wilder RSI(14)
-function rsiWilder(closes: number[], period = 14): number | null {
-  if (closes.length < period + 1) return null
-  let gains = 0, losses = 0
-  for (let i = 1; i <= period; i++) {
-    const d = closes[i] - closes[i - 1]
-    if (d >= 0) gains += d; else losses -= d
+function deriveMaPoints(ma?: { ma50: number|null; ma200: number|null }): number | null {
+  const ma50 = ma?.ma50, ma200 = ma?.ma200
+  if (ma50 == null || ma200 == null) return null
+  let maScore = 50
+  if (ma50 > ma200) {
+    const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, 0.2)
+    maScore = 60 + (spread / 0.2) * 40
+  } else if (ma50 < ma200) {
+    const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, 0.2)
+    maScore = 40 - (spread / 0.2) * 40
   }
-  let avgGain = gains / period
-  let avgLoss = losses / period
-  for (let i = period + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1]
-    const gain = d > 0 ? d : 0
-    const loss = d < 0 ? -d : 0
-    avgGain = (avgGain * (period - 1) + gain) / period
-    avgLoss = (avgLoss * (period - 1) + loss) / period
+  return scoreToPts(maScore)
+}
+function deriveRsiPoints(r: number | null | undefined): number | null {
+  if (typeof r !== 'number') return null
+  const rsiScore = clamp(((r - 30) / 40) * 100, 0, 100)
+  return scoreToPts(rsiScore)
+}
+function deriveMacdPoints(hist: number | null | undefined, ma50?: number | null): number | null {
+  if (typeof hist !== 'number') return null
+  if (ma50 && ma50 > 0) {
+    const t = 0.01
+    const relClamped = clamp((hist / ma50) / t, -1, 1)
+    const macdScore = 50 + relClamped * 20
+    return scoreToPts(macdScore)
   }
-  if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  return 100 - (100 / (1 + rs))
+  const macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
+  return scoreToPts(macdScore)
+}
+function deriveVolPoints(ratio: number | null | undefined): number | null {
+  if (typeof ratio !== 'number') return null
+  const delta = clamp((ratio - 1) / 1, -1, 1)
+  const volScore = clamp(50 + delta * 30, 0, 100)
+  return scoreToPts(volScore)
 }
 
-function macdLast(closes: number[], fast = 12, slow = 26, signal = 9) {
-  if (closes.length < slow + signal) return { macd: null, signal: null, hist: null }
-  const ema = (period: number) => {
-    const k = 2 / (period + 1)
-    let prev = closes.slice(0, period).reduce((a, b) => a + b, 0) / period
-    for (let i = period; i < closes.length; i++) prev = closes[i] * k + prev * (1 - k)
-    return prev
-  }
-  const emaFast = (() => {
-    const k = 2 / (fast + 1)
-    let prev = closes.slice(0, fast).reduce((a, b) => a + b, 0) / fast
-    for (let i = fast; i < closes.length; i++) prev = closes[i] * k + prev * (1 - k)
-    return prev
-  })()
-  const emaSlow = (() => {
-    const k = 2 / (slow + 1)
-    let prev = closes.slice(0, slow).reduce((a, b) => a + b, 0) / slow
-    for (let i = slow; i < closes.length; i++) prev = closes[i] * k + prev * (1 - k)
-    return prev
-  })()
-  const macd = emaFast - emaSlow
-
-  // signal-ema over MACD-reeks – hier benaderen we met "laatste" benadering, ok voor snapshot
-  // Voor volle precisie zou je de complete reeks itereren; voor UI-status volstaat dit.
-  const signalVal = (() => {
-    const k = 2 / (signal + 1)
-    let prev = macd
-    for (let i = 0; i < signal; i++) prev = macd * k + prev * (1 - k)
-    return prev
-  })()
-
-  const hist = macd - signalVal
-  return { macd, signal: signalVal, hist }
+/* ---------- universum helpers ---------- */
+const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
+  AEX: [],
+  'S&P 500': SP500 as any,
+  NASDAQ: NASDAQ as any,
+  'Dow Jones': DOWJONES as any,
+  DAX: DAX_FULL as any,
+  'FTSE 100': FTSE100 as any,
+  'Nikkei 225': NIKKEI225 as any,
+  'Hang Seng': HANGSENG as any,
+  Sensex: SENSEX as any,
 }
 
-async function computeOne(symbol: string): Promise<SnapResp> {
-  const ohlc = await getYahooDailyOHLC(symbol, RANGE)
-  const closes = normCloses(ohlc)
-  const vols = normVolumes(ohlc)
-
-  const ma50 = sma(closes, 50)
-  const ma200 = sma(closes, 200)
-  const maStatus =
-    typeof ma50 === 'number' && typeof ma200 === 'number'
-      ? ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD'
-      : undefined
-
-  const rsi = rsiWilder(closes, 14)
-  const { macd, signal, hist } = macdLast(closes, 12, 26, 9)
-
-  const volume = vols.length ? vols[vols.length - 1] : null
-  const last20 = vols.slice(-20)
-  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
-  const ratio =
-    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
-      ? volume / avg20d
-      : null
-
-  const volStatus =
-    typeof ratio === 'number' ? (ratio > 1.3 ? 'BUY' : ratio < 0.7 ? 'SELL' : 'HOLD') : undefined
-  const rsiStatus =
-    typeof rsi === 'number' ? (rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD') : undefined
-  const macdStatus =
-    typeof macd === 'number' && typeof signal === 'number'
-      ? macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD'
-      : undefined
-
-  return {
-    symbol,
-    ma:    { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
-    rsi:   { period: 14, rsi: rsi ?? null, status: rsiStatus },
-    macd:  { macd: macd ?? null, signal: signal ?? null, hist: hist ?? null, status: macdStatus },
-    volume:{ volume: volume ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volStatus },
-  }
+function constituentsForMarket(label: MarketLabel) {
+  if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
+  const arr = (STATIC_CONS[label] || []) as any[]
+  return arr.map(x => ({ symbol: x.symbol, name: x.name }))
 }
+
+/* ---------- normalisatie van provider output ---------- */
+type Bar = { time?: number; t?: number; close?: number; c?: number; volume?: number; v?: number }
+
+function normCloses(ohlc: any): number[] {
+  if (Array.isArray(ohlc)) {
+    // array van candles
+    return (ohlc as Bar[])
+      .map(b => (typeof b?.close === 'number' ? b.close : (typeof b?.c === 'number' ? b.c : null)))
+      .filter((n): n is number => Number.isFinite(n))
+  }
+  // object met arrays
+  if (Array.isArray(ohlc?.closes)) return (ohlc.closes as number[]).filter(n => Number.isFinite(n))
+  if (Array.isArray(ohlc?.c)) return (ohlc.c as number[]).filter(n => Number.isFinite(n))
+  return []
+}
+function normVolumes(ohlc: any): number[] {
+  if (Array.isArray(ohlc)) {
+    return (ohlc as Bar[])
+      .map(b => (typeof b?.volume === 'number' ? b.volume : (typeof b?.v === 'number' ? b.v : null)))
+      .filter((n): n is number => Number.isFinite(n))
+  }
+  if (Array.isArray(ohlc?.volumes)) return (ohlc.volumes as number[]).filter(n => Number.isFinite(n))
+  if (Array.isArray(ohlc?.v)) return (ohlc.v as number[]).filter(n => Number.isFinite(n))
+  return []
+}
+
+/* ---------- snelle score (zelfde weging als homepage) ---------- */
+function computeScoreFromSeries(closes: number[], volumes: number[]): number | null {
+  if (!Array.isArray(closes) || closes.length < TTL_MIN_BARS) return null
+
+  const ma = maCross(closes)
+  const rsi = rsi14(closes)
+  const mac = macd(closes, 12, 26, 9)
+  const vol = vol20(volumes || [])
+
+  const ma50 = (ma as any)?.ma50 ?? null
+  const ma200 = (ma as any)?.ma200 ?? null
+  const rsiValue = typeof (rsi as any)?.rsi === 'number' ? (rsi as any).rsi : (typeof rsi === 'number' ? rsi : null)
+  const hist = (mac as any)?.hist ?? null
+  const ratio = (vol as any)?.ratio ?? null
+
+  const pMA   = toPtsSmart((ma as any)?.status,  (ma as any)?.points,  () => deriveMaPoints({ ma50, ma200 }))
+  const pMACD = toPtsSmart((mac as any)?.status, (mac as any)?.points, () => deriveMacdPoints(hist, ma50))
+  const pRSI  = toPtsSmart((rsi as any)?.status, (rsi as any)?.points, () => deriveRsiPoints(rsiValue))
+  const pVOL  = toPtsSmart((vol as any)?.status, (vol as any)?.points, () => deriveVolPoints(ratio))
+
+  const nMA   = (pMA   + 2) / 4
+  const nMACD = (pMACD + 2) / 4
+  const nRSI  = (pRSI  + 2) / 4
+  const nVOL  = (pVOL  + 2) / 4
+
+  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+  const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
+  return clamp(Math.round(agg * 100), 0, 100)
+}
+
+/* ---------- pool helper ---------- */
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+export const config = { runtime: 'nodejs' }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Zorgt dat Edge/CDN dit 30s serveert; daarna SWR (tot 5 min)
-  res.setHeader('Cache-Control', `public, s-maxage=${EDGE_MAX_AGE}, stale-while-revalidate=300`)
-
   try {
-    const raw = String(req.query.symbols || '').trim()
-    if (!raw) return res.status(400).json({ error: 'Missing ?symbols=AAPL,MSFT,...' })
+    const marketParam = String(req.query.market || '').trim() as MarketLabel | ''
+    const symbolsParam = String(req.query.symbols || '').trim()
 
-    const symbols = raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    if (!symbols.length) return res.status(400).json({ error: 'No symbols' })
+    let list: { symbol: string; name?: string }[] = []
+    if (symbolsParam) {
+      list = symbolsParam.split(',').map(s => ({ symbol: s.trim(), name: s.trim() })).filter(x => x.symbol)
+    } else if (marketParam) {
+      list = constituentsForMarket(marketParam)
+    }
 
-    const items = await Promise.all(
-      symbols.map(async (sym) => {
-        const key = `ind:snap:${sym}`
-        const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-          const v = await computeOne(sym)
-          try { await kvSetJSON(`ind:snap:all:${sym}`, { updatedAt: Date.now(), value: v }, TTL_SEC) } catch {}
-          return v
-        })
-        return data ?? { symbol: sym, ma: { ma50: null, ma200: null }, rsi: { period: 14, rsi: null }, macd: { macd: null, signal: null, hist: null }, volume: { volume: null, avg20d: null, ratio: null } }
-      })
-    )
+    if (!list.length) {
+      return res.status(200).json({ items: [] as Item[] })
+    }
 
-    return res.status(200).json({ items, updatedAt: Date.now() })
+    // beperkte concurrency; snel maar memory-zuinig
+    const results = await pool(list, 6, async (c) => {
+      try {
+        const ohlc = await getYahooDailyOHLC(c.symbol, RANGE)
+        const closes = normCloses(ohlc)
+        const volumes = normVolumes(ohlc)
+        const score = computeScoreFromSeries(closes, volumes)
+        return { symbol: c.symbol, name: c.name, score } as Item
+      } catch {
+        return { symbol: c.symbol, name: c.name, score: null } as Item
+      }
+    })
+
+    // filter op scores die numeriek zijn
+    const items = results.filter(r => Number.isFinite(r.score as number)) as Item[]
+    return res.status(200).json({ items })
   } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+    return res.status(200).json({ items: [], error: String(e?.message || e) })
   }
 }
