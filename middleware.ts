@@ -8,7 +8,9 @@ const PUBLIC_ALLOW = [
   '/api/indicators/ret-batch',
   '/api/indicators/snapshot',
   '/api/indicators/snapshot-list',
-  '/api/crypto-light/indicators', // ← aan laten als /crypto live is
+  '/api/crypto-light/indicators', // crypto indicators (als je /crypto gebruikt)
+  '/api/crypto-light/prices',     // ✅ crypto prijzen endpoint (nieuw)
+  '/api/market/',                 // ✅ alle Market-Intel subroutes (sectors/macro/hedgefunds/congress/aggregate)
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -19,7 +21,7 @@ const INTERNAL_ALLOW = [
   '/api/kv-health',
 ]
 
-// 3) Bot/preview user-agents blokkeren
+// 3) Bot/preview user-agents blokkeren (alleen voor API)
 const BOT_UA = [
   'bot','crawler','spider','crawling','preview',
   'facebookexternalhit','twitterbot','slackbot','discordbot','embedly',
@@ -44,21 +46,22 @@ const MARKET_ALLOW = new Set([
   'AEX','DAX','FTSE 100','S&P 500','NASDAQ','Dow Jones',
   'Nikkei 225','Hang Seng','Sensex'
 ])
-const countSymbols = (p: string | null) => p ? p.split(',').map(s => s.trim()).filter(Boolean).length : 0
+const countSymbols = (p: string | null) =>
+  p ? p.split(',').map(s => s.trim()).filter(Boolean).length : 0
 
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl
 
-  // Alleen API beschermen
+  // Alleen API beschermen; HTML/SEO vrijlaten
   if (!pathname.startsWith('/api/')) return NextResponse.next()
 
-  // Preflight/HEAD
+  // Preflight/HEAD altijd doorlaten
   if (req.method === 'OPTIONS' || req.method === 'HEAD') return NextResponse.next()
 
   // Interne paden vrij
   if (INTERNAL_ALLOW.some(pfx => pathname.startsWith(pfx))) return NextResponse.next()
 
-  // Whitelist
+  // Whitelist toepassen
   if (!PUBLIC_ALLOW.some(pfx => pathname.startsWith(pfx))) {
     return new NextResponse('Forbidden (not allowed)', {
       status: 403,
@@ -66,7 +69,7 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // Bots blokkeren
+  // Bots blokkeren (edge-gecachede 403)
   if (isBot(req.headers.get('user-agent'))) {
     return new NextResponse('Forbidden for bots', {
       status: 403,
@@ -74,7 +77,7 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // Alleen jouw site
+  // Alleen jouw site (origin/referer/host)
   if (!isSameOrigin(req)) {
     return new NextResponse('Forbidden (origin)', {
       status: 403,
@@ -82,15 +85,18 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // === Limiter op query-grootte (quotes/snapshot/ret-batch/crypto-light) ===
+  // === Limiter op query-grootte (quotes/snapshot/ret-batch/crypto) ===
   const isQuotes = pathname.startsWith('/api/quotes')
   const isSnap   = pathname.startsWith('/api/indicators/snapshot-list')
   const isRet    = pathname.startsWith('/api/indicators/ret-batch')
-  const isCrypto = pathname.startsWith('/api/crypto-light/indicators')
+  const isCryptoI= pathname.startsWith('/api/crypto-light/indicators')
+  const isCryptoP= pathname.startsWith('/api/crypto-light/prices')
 
-  if (isQuotes || isSnap || isRet || isCrypto) {
+  if (isQuotes || isSnap || isRet || isCryptoI || isCryptoP) {
     const symCount = countSymbols(searchParams.get('symbols'))
-    if (symCount > 60) return new NextResponse('Too many symbols (max 60)', { status: 400 })
+    if (symCount > 60) {
+      return new NextResponse('Too many symbols (max 60)', { status: 400 })
+    }
 
     const market = searchParams.get('market')
     if (market && !MARKET_ALLOW.has(market)) {
