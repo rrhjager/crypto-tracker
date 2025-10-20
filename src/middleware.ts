@@ -27,7 +27,8 @@ const BOT_UA = [
   'facebookexternalhit','twitterbot','slackbot','discordbot','embedly',
   'bingpreview','ahrefs','semrush','mj12bot','seokicks','yandex','petalbot'
 ]
-const isBot = (ua: string | null) => ua ? BOT_UA.some(k => ua.toLowerCase().includes(k)) : false
+const isBot = (ua: string | null) =>
+  ua ? BOT_UA.some(k => ua.toLowerCase().includes(k)) : false
 
 // 4) Alleen jouw domeinen
 function isSameOrigin(req: NextRequest) {
