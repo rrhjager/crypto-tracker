@@ -1,3 +1,4 @@
+// src/pages/api/crypto-light/prices.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 
@@ -25,63 +26,108 @@ type Resp = {
   }
 }
 
-/** ===== Config ===== */
+/* ===== CDN/KV settings ===== */
 const EDGE_S_MAXAGE = 20;           // 20s CDN cache
-const EDGE_SWR      = 120;          // 2 min stale-while-revalidate op CDN
-const KV_TTL_SEC    = 30;           // 30s KV snapshot (lage latency, laag egress)
-const KV_REVALIDATE = 15;           // 15s vóór TTL verversen in bg
+const EDGE_SWR      = 120;          // 2m stale-while-revalidate
+const KV_TTL_SEC    = 30;           // 30s snapshot per symbolset
+const KV_REVALIDATE = 15;           // refresh ~15s vóór TTL einde
 
-// Standaard symbolen op de crypto-homepage (pas aan indien nodig)
+// Sym→ID map cache (top-cap lijst)
+const MAP_TTL_SEC        = 6 * 60 * 60; // 6 uur
+const MAP_REVALIDATE_SEC = 2 * 60 * 60; // refresh na ~4 uur
+
+/* ===== Defaults ===== */
 const DEFAULT_SYMBOLS = [
-  'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK'
+  'BTC','ETH','SOL','BNB','XRP','ADA','DOGE','TON','AVAX','DOT','LINK','TRX','MATIC','SHIB','LTC','BCH'
 ]
 
-// CoinGecko mapping (id → ticker/sym) voor batch call
-const CG_ID_MAP: Record<string, string> = {
-  bitcoin: 'BTC',
-  ethereum: 'ETH',
-  solana: 'SOL',
-  binancecoin: 'BNB',
-  ripple: 'XRP',
-  cardano: 'ADA',
-  dogecoin: 'DOGE',
-  avalanche2: 'AVAX',
-  polkadot: 'DOT',
-  chainlink: 'LINK',
-}
-
-// omgekeerde lookup (sym → id)
-const CG_SYM_TO_ID: Record<string, string> = Object.fromEntries(
-  Object.entries(CG_ID_MAP).map(([id, sym]) => [sym, id])
-)
+/* ===== Utils ===== */
+const sleep = (ms:number)=> new Promise(r=>setTimeout(r,ms))
+const okJson = async <T,>(r: Response)=> (await r.json()) as T
 
 function parseSymbols(q: string | string[] | undefined): string[] {
   if (!q) return DEFAULT_SYMBOLS
   const raw = Array.isArray(q) ? q.join(',') : q
-  const syms = raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-  // max 60 om misbruik te voorkomen
-  return syms.slice(0, 60)
+  return raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 60)
 }
 
-/** ===== Helpers ===== */
-
-async function okJson<T>(r: Response): Promise<T> {
-  const j = await r.json()
-  return j as T
+/* ===== CoinGecko: dynamische sym→id map (top ~500) ===== */
+async function fetchCgTopSymbols(): Promise<Record<string,string>> {
+  const base = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&sparkline=false'
+  const [p1, p2] = await Promise.all([
+    fetch(`${base}&page=1`, { cache: 'no-store', headers: { 'accept': 'application/json' } }),
+    fetch(`${base}&page=2`, { cache: 'no-store', headers: { 'accept': 'application/json' } }),
+  ])
+  if (!p1.ok || !p2.ok) throw new Error(`CG markets HTTP ${p1.status}/${p2.status}`)
+  const a1: any[] = await okJson(p1)
+  const a2: any[] = await okJson(p2)
+  const map = new Map<string,string>()
+  for (const c of [...a1, ...a2]) {
+    const sym = String(c?.symbol || '').toUpperCase()
+    const id  = String(c?.id || '')
+    if (sym && id && !map.has(sym)) map.set(sym, id)
+  }
+  return Object.fromEntries(map)
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-/** Yahoo Chart fallback: pakt laatste en voorlaatste close en maakt change/% */
-async function yahooQuote(symbolUSD: string): Promise<Quote> {
-  // symbolUSD: bijv. BTC-USD, ETH-USD
-  const combos: Array<[string, string]> = [
-    ['1d', '1mo'],
-    ['1d', '3mo'],
-    ['1wk', '1y'],
-  ]
+async function getCgSymMap(): Promise<Record<string,string>> {
+  const key = 'cg:symmap:v1'
+  type MapSnap = { map: Record<string,string>; updatedAt: number }
+  const snap = await kvRefreshIfStale<MapSnap>(
+    key, MAP_TTL_SEC, MAP_REVALIDATE_SEC,
+    async () => {
+      const map = await fetchCgTopSymbols()
+      const payload: MapSnap = { map, updatedAt: Date.now() }
+      try { await kvSetJSON(key, payload, MAP_TTL_SEC) } catch {}
+      return payload
+    }
+  )
+  if (!snap) {
+    const map = await fetchCgTopSymbols()
+    const payload: MapSnap = { map, updatedAt: Date.now() }
+    try { await kvSetJSON(key, payload, MAP_TTL_SEC) } catch {}
+    return payload.map
+  }
+  return snap.map
+}
+
+/* ===== CoinGecko batch prijzen ===== */
+async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>): Promise<Record<string, Quote>> {
+  if (!ids.length) return {}
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
+  const r = await fetch(url, { cache: 'no-store', headers: { 'accept': 'application/json' } })
+  if (!r.ok) throw new Error(`CoinGecko HTTP ${r.status}`)
+  const j: any = await r.json()
+
+  const out: Record<string, Quote> = {}
+  for (const [id, payload] of Object.entries(j)) {
+    const sym = (idToSym[id] || '').toUpperCase()
+    if (!sym) continue
+    const p: any = payload
+    const px = Number(p?.usd)
+    const chgPct = Number(p?.usd_24h_change)
+    const priceOk = Number.isFinite(px)
+    const pctOk = Number.isFinite(chgPct)
+    const change = (priceOk && pctOk) ? px * (chgPct / 100) : null
+    out[sym] = {
+      symbol: sym,
+      regularMarketPrice: priceOk ? px : null,
+      regularMarketChange: change,
+      regularMarketChangePercent: pctOk ? chgPct : null,
+      currency: 'USD',
+      marketState: 'REGULAR',
+    }
+  }
+  return out
+}
+
+/* ===== Yahoo fallback (alleen als CG niet kan mappen of rate-limit) ===== */
+async function yahooQuote(symbol: string): Promise<Quote> {
+  const combos: Array<[string, string]> = [['1d','1mo'], ['1d','3mo'], ['1wk','1y']]
+  const ysym = `${symbol}-USD`
   const errs: string[] = []
   for (const [interval, range] of combos) {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbolUSD)}?interval=${interval}&range=${range}`
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ysym)}?interval=${interval}&range=${range}`
     try {
       const r = await fetch(url, { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -106,7 +152,7 @@ async function yahooQuote(symbolUSD: string): Promise<Quote> {
       const changePct = prev != null && prev !== 0 ? (change as number) / prev * 100 : null
 
       return {
-        symbol: symbolUSD.replace('-USD',''),
+        symbol,
         longName: meta?.symbol ?? undefined,
         shortName: meta?.symbol ?? undefined,
         regularMarketPrice: last,
@@ -115,87 +161,52 @@ async function yahooQuote(symbolUSD: string): Promise<Quote> {
         currency: 'USD',
         marketState: meta?.marketState ?? undefined,
       }
-    } catch (e: any) {
-      errs.push(`[chart ${interval}/${range}] ${String(e?.message || e)}`)
-      await sleep(120)
+    } catch (e:any) {
+      errs.push(`[${ysym} ${interval}/${range}] ${String(e?.message || e)}`)
+      await sleep(100)
     }
   }
-  // alles mislukt
   throw new Error(errs.join(' | '))
 }
 
-/** ====== CoinGecko: strak getype response ====== */
-type CgSimplePriceResp = Record<string, { usd?: number; usd_24h_change?: number }>;
-
-/** CoinGecko batch → zet om naar Quote-shape */
-async function coingeckoBatch(symbols: string[]): Promise<Record<string, Quote>> {
-  // Map symbolen die we kennen naar ids
-  const ids = symbols.map(s => CG_SYM_TO_ID[s]).filter(Boolean)
-  if (!ids.length) return {}
-
-  // één lichte call
-  const url =
-    `https://api.coingecko.com/api/v3/simple/price` +
-    `?ids=${encodeURIComponent(ids.join(','))}` +
-    `&vs_currencies=usd&include_24hr_change=true`
-
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) throw new Error(`CoinGecko HTTP ${r.status}`)
-  const j = (await r.json()) as CgSimplePriceResp
-
+/* ===== Builder ===== */
+async function buildPrices(symbols: string[]) {
+  const errors: string[] = []
   const out: Record<string, Quote> = {}
-  for (const id of Object.keys(j)) {
-    const sym = (CG_ID_MAP[id] || '').toUpperCase()
-    if (!sym) continue
-    const payload = j[id] || {}
-    const px = Number(payload.usd)
-    const chgPct = Number(payload.usd_24h_change)
-    const priceOk = Number.isFinite(px)
-    const pctOk = Number.isFinite(chgPct)
 
-    // We hebben geen exacte “prev” → change schatten via pct
-    const change = (priceOk && pctOk) ? (px * (chgPct / 100)) : null
+  // 1) laad CG sym→id (top ~500)
+  const symToId = await getCgSymMap()
+  const idToSym: Record<string,string> = {}
+  Object.entries(symToId).forEach(([sym, id]) => { idToSym[id] = sym })
 
-    out[sym] = {
-      symbol: sym,
-      regularMarketPrice: priceOk ? px : null,
-      regularMarketChange: change,
-      regularMarketChangePercent: pctOk ? chgPct : null,
-      currency: 'USD',
-      marketState: 'REGULAR',
+  // Splits: mappable via CG vs. overige
+  const cgSyms  = symbols.filter(s => !!symToId[s])
+  const rest    = symbols.filter(s => !symToId[s])
+
+  // 2) CG batch
+  if (cgSyms.length) {
+    const ids = cgSyms.map(s => symToId[s])
+    try {
+      const batch = await coingeckoBatchByIds(ids, idToSym)
+      Object.assign(out, batch)
+    } catch (e:any) {
+      errors.push(`coingecko: ${String(e?.message || e)}`)
     }
   }
-  return out
-}
 
-/** Combineer: eerst CoinGecko (batch, zuinig), dan Yahoo fallback voor missende symbols */
-async function buildQuotes(symbols: string[]): Promise<{ map: Record<string, Quote>, errors: string[] }> {
-  const errors: string[] = []
-  let map: Record<string, Quote> = {}
-
-  // 1) batch
-  try {
-    const cg = await coingeckoBatch(symbols)
-    map = { ...cg }
-  } catch (e: any) {
-    errors.push(`coingecko: ${String(e?.message || e)}`)
-  }
-
-  // 2) fallback per symbool dat nog mist
-  const missing = symbols.filter(s => !map[s])
-  if (missing.length) {
-    const limit = 3 // max 3 tegelijk
+  // 3) Yahoo fallback voor rest
+  if (rest.length) {
     let i = 0
-    const work = new Array(Math.min(limit, missing.length)).fill(0).map(async () => {
-      while (i < missing.length) {
+    const limit = 3
+    await Promise.all(new Array(Math.min(limit, rest.length)).fill(0).map(async () => {
+      while (i < rest.length) {
         const idx = i++
-        const s = missing[idx]
+        const s = rest[idx]
         try {
-          const q = await yahooQuote(`${s}-USD`)
-          map[s] = q
-        } catch (e: any) {
+          out[s] = await yahooQuote(s)
+        } catch (e:any) {
           errors.push(`${s}: ${String(e?.message || e)}`)
-          map[s] = {
+          out[s] = {
             symbol: s,
             regularMarketPrice: null,
             regularMarketChange: null,
@@ -204,65 +215,50 @@ async function buildQuotes(symbols: string[]): Promise<{ map: Record<string, Quo
           }
         }
       }
-    })
-    await Promise.all(work)
+    }))
   }
 
-  return { map, errors }
+  return { quotes: out, errors }
 }
 
-/** ===== Handler ===== */
+/* ===== Handler ===== */
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
-  // CDN: de meeste hits raken je functie niet
   res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
 
   try {
     const symbols = parseSymbols(req.query.symbols as any)
-    if (!symbols.length) return res.status(400).json({ error: 'symbols required' })
 
-    // KV key (alleen afhankelijk van symbolenlijst)
-    const kvKey = `crypto:prices:v2:${symbols.join(',')}`
+    // KV-key is alleen gebaseerd op de (geordende) symbolenlijst
+    const kvKey = `crypto:prices:v3:${symbols.join(',')}`
 
-    // Serve uit KV of reken & store (kvRefreshIfStale ververst goedkoop op achtergrond)
-    const snap = await kvRefreshIfStale<{ quotes: Record<string, Quote>, updatedAt: number }>(
-      kvKey,
-      KV_TTL_SEC,
-      KV_REVALIDATE,
+    const snap = await kvRefreshIfStale<{ quotes: Record<string, Quote>, updatedAt: number, errors?: string[] }>(
+      kvKey, KV_TTL_SEC, KV_REVALIDATE,
       async () => {
-        const { map, errors } = await buildQuotes(symbols)
-        const payload = { quotes: map, updatedAt: Date.now(), errors }
-        try { await kvSetJSON(kvKey, payload, KV_TTL_SEC) } catch {}
-        return payload
+        const payload = await buildPrices(symbols)
+        const withTs = { ...payload, updatedAt: Date.now() }
+        try { await kvSetJSON(kvKey, withTs, KV_TTL_SEC) } catch {}
+        return withTs
       }
     )
 
-    if (snap?.quotes) {
-      return res.status(200).json({
-        quotes: snap.quotes,
-        meta: {
-          requested: symbols.length,
-          received: Object.values(snap.quotes).filter(q => q.regularMarketPrice != null).length,
-          partial: Object.values(snap.quotes).some(q => q.regularMarketPrice == null),
-          errors: (snap as any)?.errors?.length ? (snap as any).errors.slice(0,8) : undefined,
-          used: 'coingecko+chart-fallback+kv'
-        }
-      })
-    }
+    const data = snap || await (async () => {
+      const payload = await buildPrices(symbols)
+      const withTs = { ...payload, updatedAt: Date.now() }
+      try { await kvSetJSON(kvKey, withTs, KV_TTL_SEC) } catch {}
+      return withTs
+    })()
 
-    // Eerste keer / fallback
-    const { map, errors } = await buildQuotes(symbols)
-    try { await kvSetJSON(kvKey, { quotes: map, updatedAt: Date.now(), errors }, KV_TTL_SEC) } catch {}
     return res.status(200).json({
-      quotes: map,
+      quotes: data.quotes,
       meta: {
         requested: symbols.length,
-        received: Object.values(map).filter(q => q.regularMarketPrice != null).length,
-        partial: Object.values(map).some(q => q.regularMarketPrice == null),
-        errors: errors.length ? errors.slice(0,8) : undefined,
-        used: 'coingecko+chart-fallback(fresh)'
+        received: Object.values(data.quotes).filter(q => q.regularMarketPrice != null).length,
+        partial: Object.values(data.quotes).some(q => q.regularMarketPrice == null),
+        errors: data.errors?.length ? data.errors.slice(0,8) : undefined,
+        used: 'cg-map(top500)+cg-batch+yahoo-fallback+kv',
       }
     })
-  } catch (e: any) {
+  } catch (e:any) {
     return res.status(502).json({ error: String(e?.message || e) })
   }
 }
