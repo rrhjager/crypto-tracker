@@ -36,186 +36,203 @@ function fmtPrice(v: number | null | undefined, ccy?: string) {
 }
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
-const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
-const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
 
-// batching helpers
-const CHUNK = 50
-const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
-function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
-async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promise<R[]>{
-  const out: R[] = new Array(arr.length) as any
-  let i=0
-  const workers = new Array(Math.min(n,arr.length)).fill(0).map(async()=> {
-    while(true){ const idx=i++; if(idx>=arr.length) break; out[idx]=await fn(arr[idx], idx) }
-  })
-  await Promise.all(workers)
-  return out
+const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
+function statusFromScore(score: number): Advice {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
 }
 
+/** ---------- helpers (batch/chunk) ---------- */
+const chunk = <T,>(arr: T[], size: number) => {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+const fetchJSON = async <T,>(url: string) => {
+  const r = await fetch(url, { cache: 'no-store' })
+  if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
+  return r.json() as Promise<T>
+}
+
+/** ---------- page ---------- */
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
+  const chunks = useMemo(() => chunk(symbols, 50), [symbols]) // <= binnen je middleware-limiet
 
-  // 1) Quotes in batches of 50 (20s poll)
+  /** 1) Quotes in batches (20s poll) */
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
-    let timer:any, aborted=false
-    async function load() {
+    let timer: any, aborted = false
+    async function loadAll() {
       try {
         setQErr(null)
-        const groups = chunk(symbols, CHUNK)
-        const parts = await pool(groups, 4, async (group, gi) => {
-          if (gi) await sleep(80)
-          const url = `/api/quotes?symbols=${encodeURIComponent(group.join(','))}`
-          const r = await fetch(url, { cache:'no-store' })
-          if (!r.ok) throw new Error(`HTTP ${r.status} @ quotes[${gi}]`)
-          const j: {quotes: Record<string, Quote>} = await r.json()
-          return j.quotes || {}
-        })
-        const merged: Record<string, Quote> = {}
-        parts.forEach(m => Object.assign(merged, m))
-        if (!aborted) setQuotes(merged)
-      } catch (e:any) {
+        const results = await Promise.all(
+          chunks.map(async (syms) => {
+            const url = `/api/quotes?symbols=${encodeURIComponent(syms.join(','))}`
+            const j = await fetchJSON<{ quotes: Record<string, Quote> }>(url)
+            return j.quotes || {}
+          })
+        )
+        if (!aborted) {
+          const merged: Record<string, Quote> = {}
+          results.forEach(m => Object.assign(merged, m))
+          setQuotes(merged)
+        }
+      } catch (e: any) {
         if (!aborted) setQErr(String(e?.message || e))
       } finally {
-        if (!aborted) timer = setTimeout(load, 20000)
+        if (!aborted) timer = setTimeout(loadAll, 20000)
       }
     }
-    load()
+    loadAll()
     return () => { aborted = true; if (timer) clearTimeout(timer) }
-  }, [symbols])
+  }, [chunks])
 
-  // 2) Snapshot-list (batches of 50, 30s SWR)
-  const snapKey = useMemo(() => `sp500-snap-${symbols.length}`, [symbols.length])
-  const { data: snapAll, error: snapErr } = useSWR<SnapResp>(
-    snapKey,
-    async () => {
-      const groups = chunk(symbols, CHUNK)
-      const parts = await pool(groups, 4, async (group, gi) => {
-        if (gi) await sleep(80)
-        const url = `/api/indicators/snapshot-list?symbols=${encodeURIComponent(group.join(','))}`
-        const r = await fetch(url, { cache:'no-store' })
-        if (!r.ok) return { items: [] as SnapItem[], updatedAt: Date.now() }
-        return r.json() as Promise<SnapResp>
-      })
-      const items = parts.flatMap(p => p.items || [])
-      return { items, updatedAt: Date.now() }
+  /** 2) Snapshot-list in batches (30s poll) */
+  const snapKeys = useMemo(
+    () => chunks.map(c => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(c.join(','))}`),
+    [chunks]
+  )
+  const { data: snaps, error: snapErr } = useSWR<SnapResp[]>(
+    snapKeys.length ? snapKeys : null,
+    async (keys: string[]) => {
+      const arr = await Promise.all(keys.map(k => fetchJSON<SnapResp>(k)))
+      return arr
     },
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
   const snapBySym = useMemo(() => {
     const m: Record<string, SnapItem> = {}
-    snapAll?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    snaps?.forEach(s => s?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it }))
     return m
-  }, [snapAll])
+  }, [snaps])
 
-  // 3) Score 0..100 (same weights as AEX)
+  /** 3) Score 0..100 op basis van snapshot-status (zoals AEX) */
   const scoreMap = useMemo(() => {
-    const toNorm = (p:number)=>(p+2)/4
-    const W_MA=0.40, W_MACD=0.30, W_RSI=0.20, W_VOL=0.10
+    const toNorm = (pts: number) => (pts + 2) / 4
+    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
     const map: Record<string, number> = {}
     for (const sym of symbols) {
-      const it = snapBySym[sym]; if (!it) continue
-      const pMA=toPtsFromStatus(it.ma?.status)
-      const pMACD=toPtsFromStatus(it.macd?.status)
-      const pRSI=toPtsFromStatus(it.rsi?.status)
-      const pVOL=toPtsFromStatus(it.volume?.status)
-      const agg = W_MA*toNorm(pMA)+W_MACD*toNorm(pMACD)+W_RSI*toNorm(pRSI)+W_VOL*toNorm(pVOL)
-      map[sym]=Math.round(Math.max(0,Math.min(1,agg))*100)
+      const it = snapBySym[sym]
+      if (!it) continue
+      const pMA   = toPtsFromStatus(it.ma?.status)
+      const pMACD = toPtsFromStatus(it.macd?.status)
+      const pRSI  = toPtsFromStatus(it.rsi?.status)
+      const pVOL  = toPtsFromStatus(it.volume?.status)
+      const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+      map[sym] = Math.round(Math.max(0, Math.min(1, agg)) * 100)
     }
     return map
   }, [symbols, snapBySym])
 
-  // 4) 7d/30d returns (batches)
+  /** 4) 7d/30d returns in batches */
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
   useEffect(() => {
-    let aborted=false
-    async function loadDays(days:7|30){
-      const groups = chunk(symbols, CHUNK)
-      const parts = await pool(groups, 4, async (group, gi) => {
-        if (gi) await sleep(80)
-        const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(group.join(','))}`
-        const r = await fetch(url, { cache:'no-store' }); if (!r.ok) return { items: [] as any[] }
-        return r.json() as Promise<{ items:{ symbol:string; days:number; pct:number|null }[] }>
-      })
-      const map: Record<string, number> = {}
-      parts.forEach(p => p.items?.forEach(it => {
-        if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number
-      }))
-      return map
+    let aborted = false
+    async function loadDays(days: 7 | 30) {
+      const results = await Promise.all(
+        chunks.map(async (syms) => {
+          const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(syms.join(','))}`
+          try {
+            const j = await fetchJSON<{ items: { symbol: string; days: number; pct: number | null }[] }>(url)
+            const map: Record<string, number> = {}
+            j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
+            return map
+          } catch {
+            return {}
+          }
+        })
+      )
+      // merge
+      const merged: Record<string, number> = {}
+      results.forEach(m => Object.assign(merged, m))
+      return merged
     }
-    ;(async()=>{
-      const [m7,m30] = await Promise.all([loadDays(7), loadDays(30)])
-      if(!aborted){ setRet7Map(m7); setRet30Map(m30) }
+    ;(async () => {
+      const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
+      if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
     })()
-    return ()=>{aborted=true}
-  }, [symbols])
+    return () => { aborted = true }
+  }, [chunks])
 
-  // Hydration-safe clock
+  /** Hydration-safe clock */
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
-    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12:false }))
-    upd(); const id=setInterval(upd,1000); return ()=>clearInterval(id)
+    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
+    upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // Summary + heatmap (same as AEX page)
+  /** Samenvatting rechts (zelfde als AEX) */
   const summary = useMemo(() => {
-    const withScore = SP500.map(a => ({ sym:a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
-    const total = withScore.length || 0
+    const withScore = SP500.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
+    const totalWithScore = withScore.length || 0
     const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
     const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
     const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = total ? Math.round(withScore.reduce((acc,x)=>acc+(x.s as number),0)/total) : 50
+    const avgScore = totalWithScore ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore) : 50
 
     const pctArr = SP500.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent)).filter(v => Number.isFinite(v)) as number[]
-    const green = pctArr.filter(v => v>0).length
-    const breadthPct = pctArr.length ? Math.round((green / pctArr.length) * 100) : 0
+    const greenCount = pctArr.filter(v => v > 0).length
+    const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
 
-    const rows = SP500.map(a => ({ symbol:a.symbol, pct:Number(quotes[a.symbol]?.regularMarketChangePercent) }))
+    const rows = SP500.map(a => ({ symbol: a.symbol, pct: Number(quotes[a.symbol]?.regularMarketChangePercent) }))
       .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
-    const topGainers = [...rows].sort((a,b)=> b.pct - a.pct).slice(0,3)
-    const topLosers  = [...rows].sort((a,b)=> a.pct - b.pct).slice(0,3)
+    const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
+    const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
 
-    return { counts:{ buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
+    return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
+  /** Heatmap data */
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = SP500.map(a => {
       const score = scoreMap[a.symbol]
       const status = Number.isFinite(score as number) ? statusFromScore(score as number) : 'HOLD'
-      return { symbol:a.symbol, score:(score as number) ?? 50, status }
+      return { symbol: a.symbol, score: (score as number) ?? 50, status }
     })
-    return filter==='ALL' ? rows : rows.filter(r => r.status===filter)
+    return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
   }, [scoreMap, filter])
 
   return (
     <>
       <Head><title>S&amp;P 500 Tracker — SignalHub</title></Head>
+
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">S&amp;P 500 Tracker</h1>
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
-          {/* show API errors like AEX page */}
           {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
           {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Table */}
+            {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-[13px]">
                 <colgroup>
-                  <col className="w-10" /><col className="w-[40%]" /><col className="w-[14%]" />
-                  <col className="w-[14%]" /><col className="w-[12%]" /><col className="w-[12%]" /><col className="w-[18%]" />
+                  <col className="w-10" />
+                  <col className="w-[40%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[18%]" />
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className="text-left text-gray-500">
-                    <th className="px-3 py-3">#</th><th className="px-2 py-3">Aandeel</th><th className="px-3 py-3">Prijs</th>
-                    <th className="px-3 py-3">24h</th><th className="px-3 py-3">7d</th><th className="px-3 py-3">30d</th><th className="px-3 py-3 text-left">Status</th>
+                    <th className="px-3 py-3">#</th>
+                    <th className="px-2 py-3">Aandeel</th>
+                    <th className="px-3 py-3">Prijs</th>
+                    <th className="px-3 py-3">24h</th>
+                    <th className="px-3 py-3">7d</th>
+                    <th className="px-3 py-3">30d</th>
+                    <th className="px-3 py-3 text-left">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -227,6 +244,7 @@ export default function Sp500Page() {
                     const r7  = ret7Map[row.symbol]
                     const r30 = ret30Map[row.symbol]
                     const score = scoreMap[row.symbol]
+
                     return (
                       <tr key={row.symbol} className="hover:bg-gray-50 align-middle">
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
@@ -266,7 +284,7 @@ export default function Sp500Page() {
               </table>
             </div>
 
-            {/* Right column */}
+            {/* Rechterkolom */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -275,27 +293,22 @@ export default function Sp500Page() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mb-3">
-                  <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">BUY</div>
-                    <div className="text-lg font-bold text-green-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
-                  </div>
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">HOLD</div>
-                    <div className="text-lg font-bold text-amber-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
-                  </div>
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">SELL</div>
-                    <div className="text-lg font-bold text-red-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
-                  </div>
+                  {(['BUY','HOLD','SELL'] as Advice[]).map((k) => {
+                    const t = summary.counts.total || 0
+                    const n = k==='BUY'?summary.counts.buy:k==='HOLD'?summary.counts.hold:summary.counts.sell
+                    const pct = t ? Math.round((n / t) * 100) : 0
+                    const color =
+                      k==='BUY' ? 'border-green-500/30 bg-green-500/10 text-green-700' :
+                      k==='SELL'? 'border-red-500/30 bg-red-500/10 text-red-700' :
+                                  'border-amber-500/30 bg-amber-500/10 text-amber-700'
+                    return (
+                      <div key={k} className={`rounded-xl border p-3 text-center ${color}`}>
+                        <div className="text-xs text-gray-600">{k}</div>
+                        <div className="text-lg font-bold">{pct}%</div>
+                        <div className="text-xs text-gray-600">{n}/{t}</div>
+                      </div>
+                    )
+                  })}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 mb-3">
