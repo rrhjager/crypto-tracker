@@ -124,6 +124,9 @@ async function yahooQuote(symbolUSD: string): Promise<Quote> {
   throw new Error(errs.join(' | '))
 }
 
+/** ====== CoinGecko: strak getype response ====== */
+type CgSimplePriceResp = Record<string, { usd?: number; usd_24h_change?: number }>;
+
 /** CoinGecko batch → zet om naar Quote-shape */
 async function coingeckoBatch(symbols: string[]): Promise<Record<string, Quote>> {
   // Map symbolen die we kennen naar ids
@@ -131,17 +134,22 @@ async function coingeckoBatch(symbols: string[]): Promise<Record<string, Quote>>
   if (!ids.length) return {}
 
   // één lichte call
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
+  const url =
+    `https://api.coingecko.com/api/v3/simple/price` +
+    `?ids=${encodeURIComponent(ids.join(','))}` +
+    `&vs_currencies=usd&include_24hr_change=true`
+
   const r = await fetch(url, { cache: 'no-store' })
   if (!r.ok) throw new Error(`CoinGecko HTTP ${r.status}`)
-  const j: any = await r.json()
+  const j = (await r.json()) as CgSimplePriceResp
 
   const out: Record<string, Quote> = {}
-  for (const [id, payload] of Object.entries(j)) {
+  for (const id of Object.keys(j)) {
     const sym = (CG_ID_MAP[id] || '').toUpperCase()
     if (!sym) continue
-    const px = Number(payload?.usd)
-    const chgPct = Number(payload?.usd_24h_change)
+    const payload = j[id] || {}
+    const px = Number(payload.usd)
+    const chgPct = Number(payload.usd_24h_change)
     const priceOk = Number.isFinite(px)
     const pctOk = Number.isFinite(chgPct)
 
