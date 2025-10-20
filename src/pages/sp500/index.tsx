@@ -42,7 +42,7 @@ type SnapResp = { items: SnapItem[]; updatedAt: number }
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
 
-  // 1) Quotes (batch, 20s poll)
+  // 1) Quotes batch (20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
@@ -65,7 +65,7 @@ export default function Sp500Page() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // 2) Snapshot-list (1 call/30s)
+  // 2) Snapshot-list (één call / 30s)
   const snapUrl = useMemo(
     () => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
     [symbols]
@@ -81,7 +81,7 @@ export default function Sp500Page() {
     return m
   }, [snap])
 
-  // 3) Score 0..100 op basis van snapshot-status
+  // 3) Score 0..100 o.b.v. snapshot-status (zelfde weging als AEX)
   const scoreMap = useMemo(() => {
     const toNorm = (p: number) => (p + 2) / 4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
@@ -99,7 +99,7 @@ export default function Sp500Page() {
     return map
   }, [symbols, snapBySym])
 
-  // 4) 7d / 30d batch
+  // 4) 7d/30d batch
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
   useEffect(() => {
@@ -128,7 +128,7 @@ export default function Sp500Page() {
     upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // Samenvatting rechts
+  // Samenvatting + heatmap
   const summary = useMemo(() => {
     const withScore = SP500.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
@@ -144,17 +144,14 @@ export default function Sp500Page() {
     const greenCount = pctArr.filter(v => v > 0).length
     const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
 
-    const rows = SP500.map(a => ({
-      symbol: a.symbol,
-      pct: Number(quotes[a.symbol]?.regularMarketChangePercent)
-    })).filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
+    const rows = SP500.map(a => ({ symbol: a.symbol, pct: Number(quotes[a.symbol]?.regularMarketChangePercent) }))
+      .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
     const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
     const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
 
     return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
-  // Heatmap
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = SP500.map(a => {
@@ -187,13 +184,8 @@ export default function Sp500Page() {
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className="text-left text-gray-500">
-                    <th className="px-3 py-3">#</th>
-                    <th className="px-2 py-3">Aandeel</th>
-                    <th className="px-3 py-3">Prijs</th>
-                    <th className="px-3 py-3">24h</th>
-                    <th className="px-3 py-3">7d</th>
-                    <th className="px-3 py-3">30d</th>
-                    <th className="px-3 py-3 text-left">Status</th>
+                    <th className="px-3 py-3">#</th><th className="px-2 py-3">Aandeel</th><th className="px-3 py-3">Prijs</th>
+                    <th className="px-3 py-3">24h</th><th className="px-3 py-3">7d</th><th className="px-3 py-3">30d</th><th className="px-3 py-3 text-left">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -205,7 +197,6 @@ export default function Sp500Page() {
                     const r7  = ret7Map[row.symbol]
                     const r30 = ret30Map[row.symbol]
                     const score = scoreMap[row.symbol]
-
                     return (
                       <tr key={row.symbol} className="hover:bg-gray-50 align-middle">
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
@@ -245,14 +236,13 @@ export default function Sp500Page() {
               </table>
             </div>
 
-            {/* Rechterkolom */}
+            {/* Rechterkolom (identiek aan AEX, maar met USD-data) */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="font-semibold text-gray-900">Dagelijkse samenvatting</div>
                   <div className="text-xs text-gray-500">Stand: <span suppressHydrationWarning>{timeStr}</span></div>
                 </div>
-
                 <div className="grid grid-cols-3 gap-2 mb-3">
                   <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">BUY</div>
