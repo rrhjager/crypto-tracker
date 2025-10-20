@@ -2,6 +2,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import useSWR from 'swr'
 import { SP500 } from '@/lib/sp500'
 import ScoreBadge from '@/components/ScoreBadge'
 
@@ -14,10 +15,6 @@ type Quote = {
   regularMarketChangePercent: number | null
   currency?: string
 }
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
 function num(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
@@ -29,22 +26,21 @@ function fmtPrice(v: number | null | undefined, ccy?: string) {
   } catch {}
   return (v as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
-
 function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
+const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
 
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
+
+  // 1) Quotes (batch, 20s poll) – zelfde als AEX
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
-
-  // Quotes
   useEffect(() => {
     let timer: any, aborted = false
     async function load() {
@@ -65,87 +61,55 @@ export default function Sp500Page() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // Samengesteld advies per symbool (scores 0..100)
-  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
-  useEffect(() => {
-    let aborted = false
+  // 2) Snapshot-list (1 call/30s) – identiek aan AEX, maar voor SP500
+  type SnapItem = {
+    symbol: string
+    ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+    rsi?:   { period: number; rsi: number | null; status?: Advice }
+    macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+    volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+  }
+  type SnapResp = { items: SnapItem[]; updatedAt: number }
 
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
+  const snapUrl = useMemo(
+    () => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
+    [symbols]
+  )
+  const { data: snap, error: snapErr } = useSWR<SnapResp>(
+    snapUrl,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
+  const snapBySym = useMemo(() => {
+    const m: Record<string, SnapItem> = {}
+    snap?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    return m
+  }, [snap])
+
+  // 3) Score 0..100 (zelfde weging als AEX)
+  const scoreMap = useMemo(() => {
+    const toNorm = (pts: number) => (pts + 2) / 4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-
-    async function calcFor(sym: string): Promise<number | null> {
-      try {
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(sym)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(sym)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(sym)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(sym)}?period=20`, { cache: 'no-store' }),
-        ])
-        if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-        const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        const pMA   = toPts(ma?.status,   ma?.points)
-        const pMACD = toPts(macd?.status, macd?.points)
-        const pRSI  = toPts(rsi?.status,  rsi?.points)
-        const pVOL  = toPts(vol?.status,  vol?.points)
-
-        const nMA   = (pMA   + 2) / 4
-        const nMACD = (pMACD + 2) / 4
-        const nRSI  = (pRSI  + 2) / 4
-        const nVOL  = (pVOL  + 2) / 4
-
-        const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-        return Math.round(agg * 100)
-      } catch {
-        return null
-      }
+    const map: Record<string, number> = {}
+    for (const sym of symbols) {
+      const it = snapBySym[sym]
+      if (!it) continue
+      const pMA   = toPtsFromStatus(it.ma?.status)
+      const pMACD = toPtsFromStatus(it.macd?.status)
+      const pRSI  = toPtsFromStatus(it.rsi?.status)
+      const pVOL  = toPtsFromStatus(it.volume?.status)
+      const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+      map[sym] = Math.round(Math.max(0, Math.min(1, agg)) * 100)
     }
+    return map
+  }, [symbols, snapBySym])
 
-    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-      const out: R[] = new Array(arr.length) as any
-      let i = 0
-      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= arr.length) break
-          out[idx] = await fn(arr[idx], idx)
-        }
-      })
-      await Promise.all(workers)
-      return out
-    }
-
-    ;(async () => {
-      const list = SP500.map(x => x.symbol)
-      const results = await pool(list, 4, async (sym, idx) => {
-        if (idx) await sleep(80)
-        return await calcFor(sym)
-      })
-      if (!aborted) {
-        const map: Record<string, number> = {}
-        results.forEach((s, i) => { if (Number.isFinite(s as number)) map[list[i]] = s as number })
-        setScoreMap(map)
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
-  // 7d / 30d procent-verandering (batch)
+  // 4) 7d/30d batch – hetzelfde patroon
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
-
   useEffect(() => {
     let aborted = false
     const list = SP500.map(x => x.symbol)
-
     async function loadDays(days: 7 | 30) {
       const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(list.join(','))}`
       const r = await fetch(url, { cache: 'no-store' })
@@ -155,51 +119,42 @@ export default function Sp500Page() {
       j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
       return map
     }
-
     ;(async () => {
       const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
       if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
     })()
-
     return () => { aborted = true }
   }, [])
 
-  // Hydration-safe klok
+  // 5) Hydration-safe klokje
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
-    upd()
-    const id = setInterval(upd, 1000)
-    return () => clearInterval(id)
+    upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // Samenvatting rechts
+  // 6) Samenvatting + heatmap (identiek aan AEX)
   const summary = useMemo(() => {
     const withScore = SP500.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
     const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
     const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
     const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = totalWithScore
-      ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore)
-      : 50
+    const avgScore = totalWithScore ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore) : 50
 
     const pctArr = SP500.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent))
       .filter(v => Number.isFinite(v)) as number[]
     const greenCount = pctArr.filter(v => v > 0).length
     const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
 
-    const rows = SP500.map(a => ({
-      symbol: a.symbol,
-      pct: Number(quotes[a.symbol]?.regularMarketChangePercent)
-    })).filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
+    const rows = SP500.map(a => ({ symbol: a.symbol, pct: Number(quotes[a.symbol]?.regularMarketChangePercent) }))
+      .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
     const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
     const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
 
     return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
-  // Heatmap
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = SP500.map(a => {
@@ -212,8 +167,7 @@ export default function Sp500Page() {
 
   return (
     <>
-      <Head><title>S&P 500 Tracker — SignalHub</title></Head>
-
+      <Head><title>S&amp;P 500 Tracker — SignalHub</title></Head>
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">S&amp;P 500 Tracker</h1>
@@ -221,19 +175,15 @@ export default function Sp500Page() {
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
+          {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
             {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-[13px]">
                 <colgroup>
-                  <col className="w-10" />
-                  <col className="w-[40%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[18%]" />
+                  <col className="w-10" /><col className="w-[40%]" /><col className="w-[14%]" />
+                  <col className="w-[14%]" /><col className="w-[12%]" /><col className="w-[12%]" /><col className="w-[18%]" />
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className="text-left text-gray-500">
@@ -255,7 +205,6 @@ export default function Sp500Page() {
                     const r7  = ret7Map[row.symbol]
                     const r30 = ret30Map[row.symbol]
                     const score = scoreMap[row.symbol]
-
                     return (
                       <tr key={row.symbol} className="hover:bg-gray-50 align-middle">
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
