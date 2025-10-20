@@ -7,7 +7,6 @@ import { SP500 } from '@/lib/sp500'
 import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-
 type Quote = {
   symbol: string
   regularMarketPrice: number | null
@@ -28,17 +27,22 @@ function fmtPrice(v: number | null | undefined, ccy?: string) {
 }
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
-function statusFromScore(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
+const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
+const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
+
+type SnapItem = {
+  symbol: string
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
 }
-const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
+type SnapResp = { items: SnapItem[]; updatedAt: number }
 
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
 
-  // 1) Quotes (batch, 20s poll) – zelfde als AEX
+  // 1) Quotes (batch, 20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
@@ -61,16 +65,7 @@ export default function Sp500Page() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // 2) Snapshot-list (1 call/30s) – identiek aan AEX, maar voor SP500
-  type SnapItem = {
-    symbol: string
-    ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
-    rsi?:   { period: number; rsi: number | null; status?: Advice }
-    macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
-    volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
-  }
-  type SnapResp = { items: SnapItem[]; updatedAt: number }
-
+  // 2) Snapshot-list (1 call/30s)
   const snapUrl = useMemo(
     () => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
     [symbols]
@@ -86,9 +81,9 @@ export default function Sp500Page() {
     return m
   }, [snap])
 
-  // 3) Score 0..100 (zelfde weging als AEX)
+  // 3) Score 0..100 op basis van snapshot-status
   const scoreMap = useMemo(() => {
-    const toNorm = (pts: number) => (pts + 2) / 4
+    const toNorm = (p: number) => (p + 2) / 4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
     const map: Record<string, number> = {}
     for (const sym of symbols) {
@@ -104,7 +99,7 @@ export default function Sp500Page() {
     return map
   }, [symbols, snapBySym])
 
-  // 4) 7d/30d batch – hetzelfde patroon
+  // 4) 7d / 30d batch
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
   useEffect(() => {
@@ -126,35 +121,40 @@ export default function Sp500Page() {
     return () => { aborted = true }
   }, [])
 
-  // 5) Hydration-safe klokje
+  // Hydration-safe klok
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
     upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // 6) Samenvatting + heatmap (identiek aan AEX)
+  // Samenvatting rechts
   const summary = useMemo(() => {
     const withScore = SP500.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
     const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
     const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
     const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = totalWithScore ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore) : 50
+    const avgScore = totalWithScore
+      ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore)
+      : 50
 
     const pctArr = SP500.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent))
       .filter(v => Number.isFinite(v)) as number[]
     const greenCount = pctArr.filter(v => v > 0).length
     const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
 
-    const rows = SP500.map(a => ({ symbol: a.symbol, pct: Number(quotes[a.symbol]?.regularMarketChangePercent) }))
-      .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
+    const rows = SP500.map(a => ({
+      symbol: a.symbol,
+      pct: Number(quotes[a.symbol]?.regularMarketChangePercent)
+    })).filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
     const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
     const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
 
     return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
+  // Heatmap
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = SP500.map(a => {
@@ -205,6 +205,7 @@ export default function Sp500Page() {
                     const r7  = ret7Map[row.symbol]
                     const r30 = ret30Map[row.symbol]
                     const score = scoreMap[row.symbol]
+
                     return (
                       <tr key={row.symbol} className="hover:bg-gray-50 align-middle">
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
@@ -244,7 +245,7 @@ export default function Sp500Page() {
               </table>
             </div>
 
-            {/* Rechterkolom: samenvatting + heatmap */}
+            {/* Rechterkolom */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -253,22 +254,27 @@ export default function Sp500Page() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mb-3">
-                  {(['BUY','HOLD','SELL'] as Advice[]).map((k) => {
-                    const t = summary.counts.total || 0
-                    const n = k==='BUY'?summary.counts.buy:k==='HOLD'?summary.counts.hold:summary.counts.sell
-                    const pct = t ? Math.round((n / t) * 100) : 0
-                    const color =
-                      k==='BUY' ? 'border-green-500/30 bg-green-500/10 text-green-700' :
-                      k==='SELL'? 'border-red-500/30 bg-red-500/10 text-red-700' :
-                                  'border-amber-500/30 bg-amber-500/10 text-amber-700'
-                    return (
-                      <div key={k} className={`rounded-xl border p-3 text-center ${color}`}>
-                        <div className="text-xs text-gray-600">{k}</div>
-                        <div className="text-lg font-bold">{pct}%</div>
-                        <div className="text-xs text-gray-600">{n}/{t}</div>
-                      </div>
-                    )
-                  })}
+                  <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
+                    <div className="text-xs text-gray-600">BUY</div>
+                    <div className="text-lg font-bold text-green-700">
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
+                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
+                  </div>
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
+                    <div className="text-xs text-gray-600">HOLD</div>
+                    <div className="text-lg font-bold text-amber-700">
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
+                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
+                  </div>
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
+                    <div className="text-xs text-gray-600">SELL</div>
+                    <div className="text-lg font-bold text-red-700">
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
+                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 mb-3">
