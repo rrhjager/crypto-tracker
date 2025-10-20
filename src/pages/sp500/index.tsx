@@ -39,7 +39,7 @@ const pctCls = (p?: number | null) =>
 const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
 const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
 
-// ------- helpers: batching & pooling (respecteert middleware-limieten) -------
+// batching helpers
 const CHUNK = 50
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
 function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
@@ -56,7 +56,7 @@ async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promi
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
 
-  // 1) Quotes (batch in stukken van 50, 20s poll)
+  // 1) Quotes in batches of 50 (20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
@@ -86,7 +86,7 @@ export default function Sp500Page() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // 2) Snapshot-list (ook in batches van 50, 30s SWR)
+  // 2) Snapshot-list (batches of 50, 30s SWR)
   const snapKey = useMemo(() => `sp500-snap-${symbols.length}`, [symbols.length])
   const { data: snapAll, error: snapErr } = useSWR<SnapResp>(
     snapKey,
@@ -110,7 +110,7 @@ export default function Sp500Page() {
     return m
   }, [snapAll])
 
-  // 3) Score 0..100 op basis van snapshot-status (zelfde weging)
+  // 3) Score 0..100 (same weights as AEX)
   const scoreMap = useMemo(() => {
     const toNorm = (p:number)=>(p+2)/4
     const W_MA=0.40, W_MACD=0.30, W_RSI=0.20, W_VOL=0.10
@@ -127,7 +127,7 @@ export default function Sp500Page() {
     return map
   }, [symbols, snapBySym])
 
-  // 4) 7d/30d batch (ook in stukken)
+  // 4) 7d/30d returns (batches)
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
   useEffect(() => {
@@ -153,14 +153,14 @@ export default function Sp500Page() {
     return ()=>{aborted=true}
   }, [symbols])
 
-  // Hydration-safe klok
+  // Hydration-safe clock
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12:false }))
     upd(); const id=setInterval(upd,1000); return ()=>clearInterval(id)
   }, [])
 
-  // Samenvatting + heatmap
+  // Summary + heatmap (same as AEX page)
   const summary = useMemo(() => {
     const withScore = SP500.map(a => ({ sym:a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const total = withScore.length || 0
@@ -200,11 +200,12 @@ export default function Sp500Page() {
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
+          {/* show API errors like AEX page */}
           {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
           {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Lijst */}
+            {/* Table */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-[13px]">
                 <colgroup>
@@ -265,7 +266,7 @@ export default function Sp500Page() {
               </table>
             </div>
 
-            {/* Rechterkolom */}
+            {/* Right column */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
