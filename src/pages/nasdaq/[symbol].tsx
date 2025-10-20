@@ -18,18 +18,10 @@ function statusFromScore(score: number): Advice {
   return 'HOLD'
 }
 
-/** Yahoo-safe aliasing for class-share tickers: BRK.B -> BRK-B, HEI.A -> HEI-A, etc. */
-function toYahooAlias(sym: string) {
-  // Alleen “klassenaam” met punt vervangen; overige exchanges/suffixen blijven staan
-  return sym.includes('.') ? sym.replace(/\./g, '-') : sym
-}
-
 export default function StockDetail() {
   const router = useRouter()
-  const uiSymbol = String(router.query.symbol || '').toUpperCase()
-  const apiSymbol = toYahooAlias(uiSymbol)
-
-  const meta = useMemo(() => NASDAQ.find(t => t.symbol === uiSymbol), [uiSymbol])
+  const symbol = (router.query.symbol as string) || ''
+  const meta = useMemo(() => NASDAQ.find(t => t.symbol === symbol), [symbol])
 
   const [ma, setMa] = useState<MaCrossResp | null>(null)
   const [rsi, setRsi] = useState<RsiResp | null>(null)
@@ -39,9 +31,9 @@ export default function StockDetail() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
-  // laad indicators (gebruik alias in API, maar toon originele uiSymbol in de UI)
+  // laad indicators
   useEffect(() => {
-    if (!uiSymbol) return
+    if (!symbol) return
     let aborted = false
     ;(async () => {
       try {
@@ -49,15 +41,15 @@ export default function StockDetail() {
         setErr(null)
 
         const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(apiSymbol)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(apiSymbol)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(apiSymbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(apiSymbol)}?period=20`, { cache: 'no-store' }),
+          fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+          fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
+          fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
+          fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
         ])
 
-        if (!rMa.ok)  throw new Error(`MA HTTP ${rMa.status}`)
+        if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
         if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
-        if (!rMacd.ok)throw new Error(`MACD HTTP ${rMacd.status}`)
+        if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
         if (!rVol.ok) throw new Error(`VOL HTTP ${rVol.status}`)
 
         const [jMa, jRsi, jMacd, jVol] = await Promise.all([
@@ -74,7 +66,7 @@ export default function StockDetail() {
       }
     })()
     return () => { aborted = true }
-  }, [uiSymbol, apiSymbol])
+  }, [symbol])
 
   // samengesteld advies (zelfde weging als lijst)
   const totalScore = (() => {
@@ -106,7 +98,7 @@ export default function StockDetail() {
             <h1 className="hero text-gray-900">{meta?.name || 'Onbekend aandeel'}</h1>
             {Number.isFinite(totalScore) && <ScoreBadge score={totalScore as number} />}
           </div>
-          <p className="sub text-gray-600">{uiSymbol}</p>
+          <p className="sub text-gray-600">{symbol}</p>
         </header>
 
         <div className="grid md:grid-cols-2 gap-4">
@@ -158,7 +150,7 @@ export default function StockDetail() {
           />
         </div>
 
-        {/* Grijze, simpele knoppen — zelfde look & feel */}
+        {/* Grijze, simpele knoppen — inline Tailwind om globale .btn (blauw) te overriden */}
         <div className="flex gap-3">
           <Link
             href="/nasdaq"
