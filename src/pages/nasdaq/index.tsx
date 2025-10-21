@@ -2,11 +2,11 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import useSWR from 'swr'
 import { NASDAQ } from '@/lib/nasdaq'
 import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-
 type Quote = {
   symbol: string
   regularMarketPrice: number | null
@@ -36,31 +36,47 @@ function fmtPrice(v: number | null | undefined, ccy?: string) {
 }
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
+const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
+const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
 
-function statusFromScore(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
+// batching helpers (zelfde als sp500)
+const CHUNK = 50
+const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
+function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
+async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promise<R[]>{
+  const out: R[] = new Array(arr.length) as any
+  let i=0
+  const workers = new Array(Math.min(n,arr.length)).fill(0).map(async()=> {
+    while(true){ const idx=i++; if(idx>=arr.length) break; out[idx]=await fn(arr[idx], idx) }
+  })
+  await Promise.all(workers)
+  return out
 }
-const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
 
 export default function Nasdaq() {
   const symbols = useMemo(() => NASDAQ.map(x => x.symbol), [])
 
-  // 1) Quotes (batch, 20s poll)
+  // 1) Quotes in batches of 50 (20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
-    let timer: any, aborted = false
+    let timer:any, aborted=false
     async function load() {
       try {
         setQErr(null)
-        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j: { quotes: Record<string, Quote> } = await r.json()
-        if (!aborted) setQuotes(j.quotes || {})
-      } catch (e: any) {
+        const groups = chunk(symbols, CHUNK)
+        const parts = await pool(groups, 4, async (group, gi) => {
+          if (gi) await sleep(80)
+          const url = `/api/quotes?symbols=${encodeURIComponent(group.join(','))}`
+          const r = await fetch(url, { cache:'no-store' })
+          if (!r.ok) throw new Error(`HTTP ${r.status} @ quotes[${gi}]`)
+          const j: {quotes: Record<string, Quote>} = await r.json()
+          return j.quotes || {}
+        })
+        const merged: Record<string, Quote> = {}
+        parts.forEach(m => Object.assign(merged, m))
+        if (!aborted) setQuotes(merged)
+      } catch (e:any) {
         if (!aborted) setQErr(String(e?.message || e))
       } finally {
         if (!aborted) timer = setTimeout(load, 20000)
@@ -70,116 +86,109 @@ export default function Nasdaq() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // 2) Snapshot-list (1 call/30s) — batch i.p.v. 4 losse indicator-calls
-  const [snapErr, setSnapErr] = useState<string | null>(null)
-  const [snapBySym, setSnapBySym] = useState<Record<string, SnapItem>>({})
-  useEffect(() => {
-    let timer: any, aborted = false
-    async function load() {
-      try {
-        setSnapErr(null)
-        const url = `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
-        const j: SnapResp = await r.json()
-        if (aborted) return
-        const m: Record<string, SnapItem> = {}
-        j.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
-        setSnapBySym(m)
-      } catch (e: any) {
-        if (!aborted) setSnapErr(String(e?.message || e))
-      } finally {
-        if (!aborted) timer = setTimeout(load, 30000)
-      }
-    }
-    load()
-    return () => { aborted = true; if (timer) clearTimeout(timer) }
-  }, [symbols])
+  // 2) Snapshot-list (batches of 50, 30s SWR) — voorkomt 403/414 door middleware
+  const snapKey = useMemo(() => `nasdaq-snap-${symbols.length}`, [symbols.length])
+  const { data: snapAll, error: snapErr } = useSWR<SnapResp>(
+    snapKey,
+    async () => {
+      const groups = chunk(symbols, CHUNK)
+      const parts = await pool(groups, 4, async (group, gi) => {
+        if (gi) await sleep(80)
+        const url = `/api/indicators/snapshot-list?symbols=${encodeURIComponent(group.join(','))}`
+        const r = await fetch(url, { cache:'no-store' })
+        if (!r.ok) return { items: [] as SnapItem[], updatedAt: Date.now() }
+        return r.json() as Promise<SnapResp>
+      })
+      const items = parts.flatMap(p => p.items || [])
+      return { items, updatedAt: Date.now() }
+    },
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
+  const snapBySym = useMemo(() => {
+    const m: Record<string, SnapItem> = {}
+    snapAll?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    return m
+  }, [snapAll])
 
-  // 3) Score 0..100 (zelfde weging als AEX)
+  // 3) Score 0..100 (zelfde weging als AEX/SP500)
   const scoreMap = useMemo(() => {
-    const toNorm = (pts: number) => (pts + 2) / 4
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+    const toNorm = (p:number)=>(p+2)/4
+    const W_MA=0.40, W_MACD=0.30, W_RSI=0.20, W_VOL=0.10
     const map: Record<string, number> = {}
     for (const sym of symbols) {
-      const it = snapBySym[sym]
-      if (!it) continue
-      const pMA   = toPtsFromStatus(it.ma?.status)
-      const pMACD = toPtsFromStatus(it.macd?.status)
-      const pRSI  = toPtsFromStatus(it.rsi?.status)
-      const pVOL  = toPtsFromStatus(it.volume?.status)
-      const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
-      map[sym] = Math.round(Math.max(0, Math.min(1, agg)) * 100)
+      const it = snapBySym[sym]; if (!it) continue
+      const pMA=toPtsFromStatus(it.ma?.status)
+      const pMACD=toPtsFromStatus(it.macd?.status)
+      const pRSI=toPtsFromStatus(it.rsi?.status)
+      const pVOL=toPtsFromStatus(it.volume?.status)
+      const agg = W_MA*toNorm(pMA)+W_MACD*toNorm(pMACD)+W_RSI*toNorm(pRSI)+W_VOL*toNorm(pVOL)
+      map[sym]=Math.round(Math.max(0,Math.min(1,agg))*100)
     }
     return map
   }, [symbols, snapBySym])
 
-  // 4) 7d / 30d procent-verandering (batch)
+  // 4) 7d/30d returns (batches)
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
   useEffect(() => {
-    let aborted = false
-    const list = NASDAQ.map(x => x.symbol)
-    async function loadDays(days: 7 | 30) {
-      const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(list.join(','))}`
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) return {}
-      const j = await r.json() as { items: { symbol: string; days: number; pct: number | null }[] }
+    let aborted=false
+    async function loadDays(days:7|30){
+      const groups = chunk(symbols, CHUNK)
+      const parts = await pool(groups, 4, async (group, gi) => {
+        if (gi) await sleep(80)
+        const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(group.join(','))}`
+        const r = await fetch(url, { cache:'no-store' }); if (!r.ok) return { items: [] as any[] }
+        return r.json() as Promise<{ items:{ symbol:string; days:number; pct:number|null }[] }>
+      })
       const map: Record<string, number> = {}
-      j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
+      parts.forEach(p => p.items?.forEach(it => {
+        if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number
+      }))
       return map
     }
-    ;(async () => {
-      const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
-      if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
+    ;(async()=>{
+      const [m7,m30] = await Promise.all([loadDays(7), loadDays(30)])
+      if(!aborted){ setRet7Map(m7); setRet30Map(m30) }
     })()
-    return () => { aborted = true }
-  }, [])
+    return ()=>{aborted=true}
+  }, [symbols])
 
-  // Hydration-safe klok
+  // Hydration-safe clock
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
-    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
-    upd()
-    const id = setInterval(upd, 1000)
-    return () => clearInterval(id)
+    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12:false }))
+    upd(); const id=setInterval(upd,1000); return ()=>clearInterval(id)
   }, [])
 
-  // Samenvatting rechts
+  // Summary + heatmap (layout identiek)
   const summary = useMemo(() => {
-    const withScore = NASDAQ.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
-    const totalWithScore = withScore.length || 0
+    const withScore = NASDAQ.map(a => ({ sym:a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
+    const total = withScore.length || 0
     const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
     const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
     const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = totalWithScore
-      ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore)
-      : 50
+    const avgScore = total ? Math.round(withScore.reduce((acc,x)=>acc+(x.s as number),0)/total) : 50
 
-    const pctArr = NASDAQ.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent))
-      .filter(v => Number.isFinite(v)) as number[]
-    const greenCount = pctArr.filter(v => v > 0).length
-    const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
+    const pctArr = NASDAQ.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent)).filter(v => Number.isFinite(v)) as number[]
+    const green = pctArr.filter(v => v>0).length
+    const breadthPct = pctArr.length ? Math.round((green / pctArr.length) * 100) : 0
 
-    const rows = NASDAQ.map(a => ({
-      symbol: a.symbol,
-      pct: Number(quotes[a.symbol]?.regularMarketChangePercent)
-    })).filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
-    const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
-    const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
+    const rows = NASDAQ.map(a => ({ symbol:a.symbol, pct:Number(quotes[a.symbol]?.regularMarketChangePercent) }))
+      .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
+    const topGainers = [...rows].sort((a,b)=> b.pct - a.pct).slice(0,3)
+    const topLosers  = [...rows].sort((a,b)=> a.pct - b.pct).slice(0,3)
 
-    return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
+    return { counts:{ buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
-  // Heatmap filter
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = NASDAQ.map(a => {
       const score = scoreMap[a.symbol]
       const status = Number.isFinite(score as number) ? statusFromScore(score as number) : 'HOLD'
-      return { symbol: a.symbol, score: (score as number) ?? 50, status }
+      return { symbol:a.symbol, score:(score as number) ?? 50, status }
     })
-    return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
+    return filter==='ALL' ? rows : rows.filter(r => r.status===filter)
   }, [scoreMap, filter])
 
   return (
@@ -193,10 +202,10 @@ export default function Nasdaq() {
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {qErr &&   <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
-          {snapErr &&<div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {snapErr}</div>}
+          {snapErr &&<div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Lijst (zelfde layout als AEX) */}
+            {/* Lijst (zelfde layout als AEX/SP500) */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
@@ -333,30 +342,10 @@ export default function Nasdaq() {
                 <div className="flex items-center justify-between">
                   <div className="font-semibold text-gray-900">Heatmap</div>
                   <div className="flex gap-1">
-                    <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='ALL'
-                        ? 'bg-gray-200 text-gray-900 border-gray-300'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-                      onClick={() => setFilter('ALL')}
-                    >All</button>
-                    <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='BUY'
-                        ? 'bg-green-600 text-white border-green-600'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-                      onClick={() => setFilter('BUY')}
-                    >Buy</button>
-                    <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='HOLD'
-                        ? 'bg-amber-500 text-white border-amber-500'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-                      onClick={() => setFilter('HOLD')}
-                    >Hold</button>
-                    <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='SELL'
-                        ? 'bg-red-600 text-white border-red-600'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-                      onClick={() => setFilter('SELL')}
-                    >Sell</button>
+                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='ALL' ? 'bg-gray-200 text-gray-900 border-gray-300' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('ALL')}>All</button>
+                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='BUY' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('BUY')}>Buy</button>
+                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='HOLD' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('HOLD')}>Hold</button>
+                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='SELL' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('SELL')}>Sell</button>
                   </div>
                 </div>
 
