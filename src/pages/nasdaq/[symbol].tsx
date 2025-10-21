@@ -2,15 +2,21 @@
 import { useRouter } from 'next/router'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import useSWR from 'swr'
 import StockIndicatorCard from '@/components/StockIndicatorCard'
 import { NASDAQ } from '@/lib/nasdaq'
 import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
+
+type SnapItem = {
+  symbol: string
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+}
+type SnapResp = { items: SnapItem[]; updatedAt: number }
 
 function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
@@ -20,75 +26,44 @@ function statusFromScore(score: number): Advice {
 
 export default function StockDetail() {
   const router = useRouter()
-  const symbol = (router.query.symbol as string) || ''
+  const symbol = String(router.query.symbol || '').toUpperCase()
   const meta = useMemo(() => NASDAQ.find(t => t.symbol === symbol), [symbol])
 
-  const [ma, setMa] = useState<MaCrossResp | null>(null)
-  const [rsi, setRsi] = useState<RsiResp | null>(null)
-  const [macd, setMacd] = useState<MacdResp | null>(null)
-  const [vol20, setVol20] = useState<Vol20Resp | null>(null)
+  // snapshot voor 1 symbool (middleware-safe)
+  const { data, error, isLoading } = useSWR<SnapResp>(
+    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    }),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
 
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  const item = data?.items?.[0]
+  const ma    = item?.ma
+  const rsi   = item?.rsi
+  const macd  = item?.macd
+  const vol20 = item?.volume
 
-  // laad indicators
-  useEffect(() => {
-    if (!symbol) return
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoading(true)
-        setErr(null)
-
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-        ])
-
-        if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
-        if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
-        if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
-        if (!rVol.ok) throw new Error(`VOL HTTP ${rVol.status}`)
-
-        const [jMa, jRsi, jMacd, jVol] = await Promise.all([
-          rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-        ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        if (!aborted) {
-          setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol)
-        }
-      } catch (e: any) {
-        if (!aborted) setErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoading(false)
-      }
-    })()
-    return () => { aborted = true }
-  }, [symbol])
-
-  // samengesteld advies (zelfde weging als lijst)
+  // samengesteld advies (zelfde weging als lijsten; op basis van status)
   const totalScore = (() => {
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
+    const toPts = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
+    const toNorm = (p:number)=>(p+2)/4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const pMA   = toPts(ma?.status,   ma?.points)
-    const pMACD = toPts(macd?.status, macd?.points)
-    const pRSI  = toPts(rsi?.status,  rsi?.points)
-    const pVOL  = toPts(vol20?.status,vol20?.points)
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    return Math.round(agg * 100)
+    const pMA   = toPts(ma?.status)
+    const pMACD = toPts(macd?.status)
+    const pRSI  = toPts(rsi?.status)
+    const pVOL  = toPts(vol20?.status)
+    const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+    return Math.round(Math.max(0, Math.min(1, agg)) * 100)
   })()
+
+  // helpers voor tekstjes
+  const fmt = (v: number | null | undefined, d = 2) =>
+    (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
+
+  const loading = isLoading
+  const errMsg = error ? String((error as any)?.message || error) : null
 
   return (
     <main className="min-h-screen bg-white text-gray-900">
@@ -104,53 +79,56 @@ export default function StockDetail() {
         <div className="grid md:grid-cols-2 gap-4">
           <StockIndicatorCard
             title="MA50 vs MA200 (Golden/Death Cross)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
+            status={loading ? 'HOLD' : errMsg ? 'HOLD' : (ma?.status || 'HOLD')}
             note={
               loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
+              errMsg ? `Fout: ${errMsg}` :
               ma
                 ? (ma.ma50 != null && ma.ma200 != null
-                  ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
+                  ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
                   : 'Nog onvoldoende data om MA50/MA200 te bepalen')
                 : '—'
             }
           />
+
           <StockIndicatorCard
-            title="RSI (14)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
+            title={`RSI (${rsi?.period ?? 14})`}
+            status={loading ? 'HOLD' : errMsg ? 'HOLD' : (rsi?.status || 'HOLD')}
             note={
               loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
+              errMsg ? `Fout: ${errMsg}` :
               rsi && rsi.rsi != null
-                ? `RSI: ${rsi.rsi.toFixed(2)}`
+                ? `RSI: ${fmt(rsi.rsi)}`
                 : 'Onvoldoende data voor RSI'
             }
           />
+
           <StockIndicatorCard
             title="MACD (12/26/9)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
+            status={loading ? 'HOLD' : errMsg ? 'HOLD' : (macd?.status || 'HOLD')}
             note={
               loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
+              errMsg ? `Fout: ${errMsg}` :
               macd && macd.macd != null && macd.signal != null
-                ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
+                ? `MACD: ${fmt(macd.macd, 4)} — Signaal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
                 : 'Onvoldoende data voor MACD'
             }
           />
+
           <StockIndicatorCard
             title="Volume vs 20d gemiddelde"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
+            status={loading ? 'HOLD' : errMsg ? 'HOLD' : (vol20?.status || 'HOLD')}
             note={
               loading ? 'Bezig met ophalen...' :
-              err ? `Fout: ${err}` :
-              vol20 && vol20.volume != null && vol20.avg20 != null
-                ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
+              errMsg ? `Fout: ${errMsg}` :
+              vol20 && vol20.volume != null && vol20.avg20d != null
+                ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
                 : 'Onvoldoende data voor volume'
             }
           />
         </div>
 
-        {/* Grijze, simpele knoppen — inline Tailwind om globale .btn (blauw) te overriden */}
+        {/* Grijze, simpele knoppen — zelfde look & feel */}
         <div className="flex gap-3">
           <Link
             href="/nasdaq"
