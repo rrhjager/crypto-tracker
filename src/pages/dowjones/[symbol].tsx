@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMemo } from 'react'
 import useSWR from 'swr'
 import StockIndicatorCard from '@/components/StockIndicatorCard'
+import ScoreBadge from '@/components/ScoreBadge'
 import { DOWJONES } from '@/lib/dowjones'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -17,12 +18,15 @@ type SnapItem = {
 }
 type SnapResp = { items: SnapItem[]; updatedAt: number }
 
+const statusFromScore = (score: number): Advice =>
+  score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD'
+
 export default function StockDetail() {
   const router = useRouter()
   const symbol = String(router.query.symbol || '').toUpperCase()
   const meta = useMemo(() => DOWJONES.find(t => t.symbol === symbol), [symbol])
 
-  // Haal alles in één keer via snapshot-list (middleware-safe)
+  // Alles in één call (middleware-safe)
   const { data, error, isLoading } = useSWR<SnapResp>(
     symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
     (url) => fetch(url, { cache: 'no-store' }).then(r => {
@@ -41,6 +45,27 @@ export default function StockDetail() {
   const loading = isLoading
   const err = error ? String((error as any)?.message || error) : null
 
+  // === Totaalscore 0..100 (zelfde weging als elders) ===
+  const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+  const toPts = (status?: Advice, pts?: number | null) => {
+    if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
+    if (status === 'BUY') return 2
+    if (status === 'SELL') return -2
+    return 0
+  }
+  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+  const pMA   = toPts(ma?.status,    undefined) // snapshot-list geeft geen 'points' terug; status is genoeg
+  const pMACD = toPts(macd?.status,  undefined)
+  const pRSI  = toPts(rsi?.status,   undefined)
+  const pVOL  = toPts(vol20?.status, undefined)
+  const nMA   = (pMA   + 2) / 4
+  const nMACD = (pMACD + 2) / 4
+  const nRSI  = (pRSI  + 2) / 4
+  const nVOL  = (pVOL  + 2) / 4
+  const agg   = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
+  const totalScore = Math.round(agg * 100)
+  const totalStatus: Advice = statusFromScore(totalScore)
+
   const fmt = (v: number | null | undefined, d = 2) =>
     (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
@@ -48,8 +73,11 @@ export default function StockDetail() {
     <main className="min-h-screen">
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
         <header className="space-y-1">
-          <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
-          <p className="sub">{symbol}</p>
+          <div className="flex items-center justify-between">
+            <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
+            {Number.isFinite(totalScore) && <ScoreBadge score={totalScore as number} />}
+          </div>
+          <p className="sub">{symbol} · {totalStatus}</p>
         </header>
 
         <div className="grid md:grid-cols-2 gap-4">
