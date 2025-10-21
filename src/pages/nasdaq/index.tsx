@@ -14,10 +14,15 @@ type Quote = {
   regularMarketChangePercent: number | null
   currency?: string
 }
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
+
+type SnapItem = {
+  symbol: string
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+}
+type SnapResp = { items: SnapItem[]; updatedAt: number }
 
 function num(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
@@ -25,11 +30,10 @@ function num(v: number | null | undefined, d = 2) {
 function fmtPrice(v: number | null | undefined, ccy?: string) {
   if (v == null || !Number.isFinite(v)) return '—'
   try {
-    if (ccy) return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: ccy }).format(v as number)
+    if (ccy) return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy }).format(v as number)
   } catch {}
-  return (v as number).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return (v as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
 
@@ -38,13 +42,14 @@ function statusFromScore(score: number): Advice {
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
+const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
 
 export default function Nasdaq() {
   const symbols = useMemo(() => NASDAQ.map(x => x.symbol), [])
+
+  // 1) Quotes (batch, 20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
-
-  // Quotes (poll)
   useEffect(() => {
     let timer: any, aborted = false
     async function load() {
@@ -65,87 +70,56 @@ export default function Nasdaq() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // Samengesteld advies per symbool (scores 0..100)
-  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
+  // 2) Snapshot-list (1 call/30s) — batch i.p.v. 4 losse indicator-calls
+  const [snapErr, setSnapErr] = useState<string | null>(null)
+  const [snapBySym, setSnapBySym] = useState<Record<string, SnapItem>>({})
   useEffect(() => {
-    let aborted = false
-
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-
-    async function calcFor(sym: string): Promise<number | null> {
+    let timer: any, aborted = false
+    async function load() {
       try {
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(sym)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(sym)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(sym)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(sym)}?period=20`, { cache: 'no-store' }),
-        ])
-        if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-        const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        const pMA   = toPts(ma?.status,   ma?.points)
-        const pMACD = toPts(macd?.status, macd?.points)
-        const pRSI  = toPts(rsi?.status,  rsi?.points)
-        const pVOL  = toPts(vol?.status,  vol?.points)
-
-        const nMA   = (pMA   + 2) / 4
-        const nMACD = (pMACD + 2) / 4
-        const nRSI  = (pRSI  + 2) / 4
-        const nVOL  = (pVOL  + 2) / 4
-
-        const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-        return Math.round(agg * 100)
-      } catch {
-        return null
+        setSnapErr(null)
+        const url = `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`
+        const r = await fetch(url, { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url}`)
+        const j: SnapResp = await r.json()
+        if (aborted) return
+        const m: Record<string, SnapItem> = {}
+        j.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+        setSnapBySym(m)
+      } catch (e: any) {
+        if (!aborted) setSnapErr(String(e?.message || e))
+      } finally {
+        if (!aborted) timer = setTimeout(load, 30000)
       }
     }
+    load()
+    return () => { aborted = true; if (timer) clearTimeout(timer) }
+  }, [symbols])
 
-    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-      const out: R[] = new Array(arr.length) as any
-      let i = 0
-      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= arr.length) break
-          out[idx] = await fn(arr[idx], idx)
-        }
-      })
-      await Promise.all(workers)
-      return out
+  // 3) Score 0..100 (zelfde weging als AEX)
+  const scoreMap = useMemo(() => {
+    const toNorm = (pts: number) => (pts + 2) / 4
+    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
+    const map: Record<string, number> = {}
+    for (const sym of symbols) {
+      const it = snapBySym[sym]
+      if (!it) continue
+      const pMA   = toPtsFromStatus(it.ma?.status)
+      const pMACD = toPtsFromStatus(it.macd?.status)
+      const pRSI  = toPtsFromStatus(it.rsi?.status)
+      const pVOL  = toPtsFromStatus(it.volume?.status)
+      const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+      map[sym] = Math.round(Math.max(0, Math.min(1, agg)) * 100)
     }
+    return map
+  }, [symbols, snapBySym])
 
-    ;(async () => {
-      const list = NASDAQ.map(x => x.symbol)
-      const results = await pool(list, 4, async (sym, idx) => {
-        if (idx) await sleep(80)
-        return await calcFor(sym)
-      })
-      if (!aborted) {
-        const map: Record<string, number> = {}
-        results.forEach((s, i) => { if (Number.isFinite(s as number)) map[list[i]] = s as number })
-        setScoreMap(map)
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
-  // 7d / 30d procent-verandering (batch)
+  // 4) 7d / 30d procent-verandering (batch)
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
-
   useEffect(() => {
     let aborted = false
     const list = NASDAQ.map(x => x.symbol)
-
     async function loadDays(days: 7 | 30) {
       const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(list.join(','))}`
       const r = await fetch(url, { cache: 'no-store' })
@@ -155,16 +129,14 @@ export default function Nasdaq() {
       j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
       return map
     }
-
     ;(async () => {
       const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
       if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
     })()
-
     return () => { aborted = true }
   }, [])
 
-  // Hydration-safe klokje
+  // Hydration-safe klok
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
@@ -173,7 +145,7 @@ export default function Nasdaq() {
     return () => clearInterval(id)
   }, [])
 
-  // Samenvatting (rechts)
+  // Samenvatting rechts
   const summary = useMemo(() => {
     const withScore = NASDAQ.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
@@ -196,10 +168,7 @@ export default function Nasdaq() {
     const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
     const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
 
-    return {
-      counts: { buy, hold, sell, total: totalWithScore },
-      avgScore, breadthPct, topGainers, topLosers
-    }
+    return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [quotes, scoreMap])
 
   // Heatmap filter
@@ -223,7 +192,8 @@ export default function Nasdaq() {
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
-          {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
+          {qErr &&   <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
+          {snapErr &&<div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {snapErr}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
             {/* Lijst (zelfde layout als AEX) */}
@@ -289,7 +259,6 @@ export default function Nasdaq() {
 
             {/* Rechterkolom: samenvatting + heatmap */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
-              {/* Dagelijkse samenvatting */}
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="font-semibold text-gray-900">Dagelijkse samenvatting</div>
@@ -302,38 +271,23 @@ export default function Nasdaq() {
                   <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">BUY</div>
                     <div className="text-lg font-bold text-green-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.buy / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">
-                      {summary.counts.buy}/{summary.counts.total}
-                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
                   </div>
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">HOLD</div>
                     <div className="text-lg font-bold text-amber-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.hold / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">
-                      {summary.counts.hold}/{summary.counts.total}
-                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
                   </div>
                   <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">SELL</div>
                     <div className="text-lg font-bold text-red-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.sell / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">
-                      {summary.counts.sell}/{summary.counts.total}
-                    </div>
+                    <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
                   </div>
                 </div>
 
