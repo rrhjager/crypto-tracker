@@ -1,95 +1,48 @@
 // src/pages/dowjones/[symbol].tsx
 import { useRouter } from 'next/router'
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import useSWR from 'swr'
 import StockIndicatorCard from '@/components/StockIndicatorCard'
 import { DOWJONES } from '@/lib/dowjones'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
-type MaCrossResp = {
+type SnapItem = {
   symbol: string
-  ma50: number | null
-  ma200: number | null
-  status: Advice
-  points: number
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
 }
-type RsiResp = {
-  symbol: string
-  period: number
-  rsi: number | null
-  status: Advice
-  points: number
-}
-type MacdResp = {
-  symbol: string
-  fast: number
-  slow: number
-  signalPeriod: number
-  macd: number | null
-  signal: number | null
-  hist: number | null
-  status: Advice
-  points: number
-}
-type Vol20Resp = {
-  symbol: string
-  period: number
-  volume: number | null
-  avg20: number | null
-  ratio: number | null
-  status: Advice
-  points: number
-}
+type SnapResp = { items: SnapItem[]; updatedAt: number }
 
 export default function StockDetail() {
   const router = useRouter()
-  const symbol = (router.query.symbol as string) || ''
+  const symbol = String(router.query.symbol || '').toUpperCase()
   const meta = useMemo(() => DOWJONES.find(t => t.symbol === symbol), [symbol])
 
-  const [ma, setMa] = useState<MaCrossResp | null>(null)
-  const [rsi, setRsi] = useState<RsiResp | null>(null)
-  const [macd, setMacd] = useState<MacdResp | null>(null)
-  const [vol20, setVol20] = useState<Vol20Resp | null>(null)
+  // Haal alles in één keer via snapshot-list (middleware-safe)
+  const { data, error, isLoading } = useSWR<SnapResp>(
+    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    }),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
 
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  const item  = data?.items?.[0]
+  const ma    = item?.ma
+  const rsi   = item?.rsi
+  const macd  = item?.macd
+  const vol20 = item?.volume
 
-  useEffect(() => {
-    if (!symbol) return
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoading(true)
-        setErr(null)
+  const loading = isLoading
+  const err = error ? String((error as any)?.message || error) : null
 
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-        ])
-
-        if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
-        if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
-        if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
-        if (!rVol.ok) throw new Error(`VOL HTTP ${rVol.status}`)
-
-        const [jMa, jRsi, jMacd, jVol] = await Promise.all([
-          rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-        ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        if (!aborted) {
-          setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol)
-        }
-      } catch (e: any) {
-        if (!aborted) setErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoading(false)
-      }
-    })()
-    return () => { aborted = true }
-  }, [symbol])
+  const fmt = (v: number | null | undefined, d = 2) =>
+    (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
   return (
     <main className="min-h-screen">
@@ -110,14 +63,14 @@ export default function StockDetail() {
                   ? `Fout: ${err}`
                   : ma
                     ? (ma.ma50 != null && ma.ma200 != null
-                        ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
+                        ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
                         : 'Nog onvoldoende data om MA50/MA200 te bepalen')
                     : '—'
             }
           />
 
           <StockIndicatorCard
-            title="RSI (14)"
+            title={`RSI (${rsi?.period ?? 14})`}
             status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
             note={
               loading
@@ -125,7 +78,7 @@ export default function StockDetail() {
                 : err
                   ? `Fout: ${err}`
                   : rsi && rsi.rsi != null
-                    ? `RSI: ${rsi.rsi.toFixed(2)}`
+                    ? `RSI: ${fmt(rsi.rsi)}`
                     : 'Onvoldoende data voor RSI'
             }
           />
@@ -139,7 +92,7 @@ export default function StockDetail() {
                 : err
                   ? `Fout: ${err}`
                   : macd && macd.macd != null && macd.signal != null
-                    ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
+                    ? `MACD: ${fmt(macd.macd, 4)} — Signaal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
                     : 'Onvoldoende data voor MACD'
             }
           />
@@ -152,14 +105,14 @@ export default function StockDetail() {
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
-                  : vol20 && vol20.volume != null && vol20.avg20 != null
-                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
+                  : vol20 && vol20.volume != null && vol20.avg20d != null
+                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
                     : 'Onvoldoende data voor volume'
             }
           />
         </div>
 
-        {/* Grijze, simpele knoppen — inline Tailwind om globale .btn-stijlen te overriden */}
+        {/* Grijze knoppen – layout ongewijzigd */}
         <div className="flex gap-3">
           <Link
             href="/dowjones"
