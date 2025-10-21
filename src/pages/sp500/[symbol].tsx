@@ -26,10 +26,14 @@ export default function Sp500StockDetail() {
   const router = useRouter()
   const sym = String(router.query.symbol || '').toUpperCase()
 
-  // Zelfde fetch als AEX: één snapshot-call voor alle indicatoren
+  // Eén snapshot-call voor alle indicatoren (zoals AEX)
   const { data, error } = useSWR<SnapResp>(
     sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
-    (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
+    async (url) => {
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    },
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
 
@@ -55,8 +59,16 @@ export default function Sp500StockDetail() {
     <>
       <Head><title>{sym} — SignalHub</title></Head>
       <main className="min-h-screen">
+        {/* Header met totaal-score rechts (zelfde als AEX) */}
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-          <h1 className="hero">{sym}</h1>
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="hero">{sym}</h1>
+            <div className="origin-left scale-95">
+              {Number.isFinite(score as number)
+                ? <ScoreBadge score={score as number} />
+                : <span className="badge badge-hold">HOLD · 50</span>}
+            </div>
+          </div>
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
@@ -65,16 +77,6 @@ export default function Sp500StockDetail() {
               Fout bij laden: {String((error as any)?.message || error)}
             </div>
           )}
-
-          {/* Totaal advies */}
-          <div className="table-card p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold text-gray-900">Totaal advies</div>
-              <div className="origin-left scale-95">
-                <ScoreBadge score={score} />
-              </div>
-            </div>
-          </div>
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* MA */}
