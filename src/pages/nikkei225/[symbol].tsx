@@ -1,82 +1,67 @@
 // src/pages/nikkei225/[symbol].tsx
 import { useRouter } from 'next/router'
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import useSWR from 'swr'
 import StockIndicatorCard from '@/components/StockIndicatorCard'
 import { NIKKEI225 } from '@/lib/nikkei225'
 import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
+
+type SnapItem = {
+  symbol: string
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period: number; rsi: number | null; status?: Advice }
+  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+  // let op: snapshot gebruikt avg20d (niet avg20)
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+}
+type SnapResp = { items: SnapItem[]; updatedAt: number }
+
+const statusFromScore = (score: number): Advice =>
+  score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD'
 
 export default function StockDetail() {
   const router = useRouter()
-  const symbol = (router.query.symbol as string) || ''
+  const symbol = String(router.query.symbol || '').toUpperCase()
   const meta = useMemo(() => NIKKEI225.find(t => t.symbol === symbol), [symbol])
 
-  const [ma, setMa] = useState<MaCrossResp | null>(null)
-  const [rsi, setRsi] = useState<RsiResp | null>(null)
-  const [macd, setMacd] = useState<MacdResp | null>(null)
-  const [vol20, setVol20] = useState<Vol20Resp | null>(null)
+  // Eén snapshot-call (middleware-vriendelijk)
+  const { data, error, isLoading } = useSWR<SnapResp>(
+    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
+    (url) => fetch(url, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    }),
+    { refreshInterval: 30_000, revalidateOnFocus: false }
+  )
 
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  const item  = data?.items?.[0]
+  const ma    = item?.ma
+  const rsi   = item?.rsi
+  const macd  = item?.macd
+  const vol20 = item?.volume
 
-  // gecombineerde score (zelfde wegingen als de lijst)
+  const loading = isLoading
+  const err = error ? String((error as any)?.message || error) : null
+
+  // Gecombineerde score 0..100 (zelfde wegingen als elders)
+  const toPts = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
+  const toNorm = (p: number) => (p + 2) / 4
   const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const toPts = (s?: Advice, p?: number | null) => {
-    if (Number.isFinite(p as number)) return Math.max(-2, Math.min(2, Number(p)))
-    if (s === 'BUY') return 2
-    if (s === 'SELL') return -2
-    return 0
-  }
-  const toScore = () => {
-    const nMA   = (toPts(ma?.status, ma?.points)     + 2) / 4
-    const nMACD = (toPts(macd?.status, macd?.points) + 2) / 4
-    const nRSI  = (toPts(rsi?.status, rsi?.points)   + 2) / 4
-    const nVOL  = (toPts(vol20?.status, vol20?.points)+2) / 4
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    return Math.round(agg * 100)
-  }
 
-  useEffect(() => {
-    if (!symbol) return
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoading(true)
-        setErr(null)
+  const pMA   = toPts(ma?.status)
+  const pMACD = toPts(macd?.status)
+  const pRSI  = toPts(rsi?.status)
+  const pVOL  = toPts(vol20?.status)
 
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(symbol)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(symbol)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(symbol)}?period=20`, { cache: 'no-store' }),
-        ])
+  const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
+  const combinedScore = Math.round(Math.max(0, Math.min(1, agg)) * 100)
+  const overall: Advice = statusFromScore(combinedScore)
 
-        if (!rMa.ok) throw new Error(`MA HTTP ${rMa.status}`)
-        if (!rRsi.ok) throw new Error(`RSI HTTP ${rRsi.status}`)
-        if (!rMacd.ok) throw new Error(`MACD HTTP ${rMacd.status}`)
-        if (!rVol.ok) throw new Error(`VOL HTTP ${rVol.status}`)
-
-        const [jMa, jRsi, jMacd, jVol] = await Promise.all([
-          rMa.json(), rRsi.json(), rMacd.json(), rVol.json()
-        ]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        if (!aborted) { setMa(jMa); setRsi(jRsi); setMacd(jMacd); setVol20(jVol) }
-      } catch (e: any) {
-        if (!aborted) setErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoading(false)
-      }
-    })()
-    return () => { aborted = true }
-  }, [symbol])
-
-  const combinedScore = toScore()
+  const fmt = (v: number | null | undefined, d = 2) =>
+    (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
   return (
     <main className="min-h-screen bg-ink text-white">
@@ -85,9 +70,8 @@ export default function StockDetail() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
-              <p className="sub">{symbol}</p>
+              <p className="sub">{symbol} · {overall}</p>
             </div>
-            {/* Alleen het samengestelde advies rechtsboven tonen (zoals afgesproken) */}
             {Number.isFinite(combinedScore as number) && (
               <ScoreBadge score={combinedScore} />
             )}
@@ -102,18 +86,18 @@ export default function StockDetail() {
               loading ? 'Bezig met ophalen...' :
               err ? `Fout: ${err}` :
               ma && ma.ma50 != null && ma.ma200 != null
-                ? `MA50: ${ma.ma50.toFixed(2)} — MA200: ${ma.ma200.toFixed(2)}`
+                ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
                 : 'Onvoldoende data voor MA50/MA200'
             }
           />
           <StockIndicatorCard
-            title="RSI (14)"
+            title={`RSI (${rsi?.period ?? 14})`}
             status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
             note={
               loading ? 'Bezig met ophalen...' :
               err ? `Fout: ${err}` :
               rsi && rsi.rsi != null
-                ? `RSI: ${rsi.rsi.toFixed(2)}`
+                ? `RSI: ${fmt(rsi.rsi)}`
                 : 'Onvoldoende data voor RSI'
             }
           />
@@ -124,7 +108,7 @@ export default function StockDetail() {
               loading ? 'Bezig met ophalen...' :
               err ? `Fout: ${err}` :
               macd && macd.macd != null && macd.signal != null
-                ? `MACD: ${macd.macd.toFixed(4)} — Signaal: ${macd.signal.toFixed(4)} — Hist: ${(macd.hist ?? 0).toFixed(4)}`
+                ? `MACD: ${fmt(macd.macd, 4)} — Signaal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
                 : 'Onvoldoende data voor MACD'
             }
           />
@@ -134,14 +118,14 @@ export default function StockDetail() {
             note={
               loading ? 'Bezig met ophalen...' :
               err ? `Fout: ${err}` :
-              vol20 && vol20.volume != null && vol20.avg20 != null
-                ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20).toLocaleString()} — Ratio: ${(vol20.ratio ?? 0).toFixed(2)}`
+              vol20 && vol20.volume != null && vol20.avg20d != null
+                ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
                 : 'Onvoldoende data voor volume'
             }
           />
         </div>
 
-        {/* Grijze, simpele knoppen — inline Tailwind (zelfde als andere pagina's) */}
+        {/* Grijze, simpele knoppen — zelfde layout */}
         <div className="flex gap-3">
           <Link
             href="/nikkei225"
