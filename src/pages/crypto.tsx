@@ -403,17 +403,45 @@ function PageInner() {
   }, [symbols])
 
   // ---- Prijs + d/w/m ophalen (Light) ----
-  const symbolsCsv = useMemo(() => symbols.join(','), [symbols])
-  const { data: pxData } = useSWR<{ results: { symbol: string, price: number|null, d: number|null, w: number|null, m: number|null }[] }>(
-    symbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(symbolsCsv)}` : null,
+  // (PATCH) map Binance pairs -> base tickers voor de prices API
+  const baseToBinance = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const s of symbols) {
+      const base = s?.toUpperCase().replace(/USDT$/, '')
+      if (base) m.set(base, s)
+    }
+    return m
+  }, [symbols])
+
+  const cgSymbolsCsv = useMemo(() => Array.from(baseToBinance.keys()).join(','), [baseToBinance])
+
+  type PriceApi = {
+    quotes: Record<string, {
+      symbol: string
+      regularMarketPrice: number | null
+      regularMarketChangePercent: number | null
+      currency?: string
+    }>
+  }
+
+  const { data: pxData } = useSWR<PriceApi>(
+    cgSymbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(cgSymbolsCsv)}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
+
   const pxBySym = useMemo(() => {
     const map = new Map<string, { price: number|null, d: number|null, w: number|null, m: number|null }>()
-    for (const it of (pxData?.results || [])) map.set(it.symbol, { price: it.price, d: it.d, w: it.w, m: it.m })
+    const quotes = pxData?.quotes || {}
+    for (const [base, q] of Object.entries(quotes)) {
+      const binanceSym = baseToBinance.get(base) // bv. 'BTC' -> 'BTCUSDT'
+      if (!binanceSym) continue
+      const price = Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null
+      const dPct  = Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null
+      map.set(binanceSym, { price, d: dPct, w: null, m: null }) // 7d/30d evt. later
+    }
     return map
-  }, [pxData])
+  }, [pxData, baseToBinance])
 
   // Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
