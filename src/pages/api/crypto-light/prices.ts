@@ -4,6 +4,7 @@ import { kvRefreshIfStale, kvSetJSON, kvGetJSON } from '@/lib/kv'
 
 export const config = { runtime: 'nodejs' }
 
+/* ===== Types ===== */
 type Quote = {
   symbol: string
   longName?: string
@@ -22,7 +23,6 @@ type Resp = {
     partial: boolean
     errors?: string[]
     used: string
-    // ⬇️ extra debuginfo komt alleen mee bij ?debug=1
     debug?: {
       now: string
       symbols: string[]
@@ -80,10 +80,29 @@ const STATIC_CG_MAP: Record<string,string> = {
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r,ms))
 const okJson = async <T,>(r: Response)=> (await r.json()) as T
 
+// normaliseer binnenkomende symbols: accepteer 'BTC', 'btc', 'BTCUSDT', etc.
+// → maak base symbool (BTC) en skip pure stablecoins
+const STABLES = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+function toBaseSymbol(s: string): string | null {
+  const raw = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (!raw) return null
+  if (STABLES.has(raw)) return null
+  // strip 'USDT' achteraan (binance-pair) → 'BTCUSDT' -> 'BTC'
+  const base = raw.endsWith('USDT') ? raw.slice(0, -4) : raw
+  if (!base || STABLES.has(base)) return null
+  return base
+}
+
 function parseSymbols(q: string | string[] | undefined): string[] {
-  if (!q) return DEFAULT_SYMBOLS
-  const raw = Array.isArray(q) ? q.join(',') : q
-  return raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 60)
+  const raw = Array.isArray(q) ? q.join(',') : q || DEFAULT_SYMBOLS.join(',')
+  const out: string[] = []
+  for (const p of raw.split(',')) {
+    const b = toBaseSymbol(p.trim())
+    if (b) out.push(b)
+    if (out.length >= 60) break
+  }
+  // uniek + volgorde bewaren
+  return Array.from(new Set(out))
 }
 
 function cgHeaders() {
@@ -100,7 +119,7 @@ const log = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) conso
 const err = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) console.error('[crypto-prices]', ...args) }
 
 /* ===== CoinGecko: dynamic sym→id map (top ~500) ===== */
-async function fetchCgTopSymbols(req: NextApiRequest, dbg: Resp['meta']['debug']): Promise<Record<string,string>> {
+async function fetchCgTopSymbols(req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<Record<string,string>> {
   const t0 = time()
   const base = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&sparkline=false'
   const [p1, p2] = await Promise.all([
@@ -125,7 +144,7 @@ async function fetchCgTopSymbols(req: NextApiRequest, dbg: Resp['meta']['debug']
 }
 
 /* Robust: prefer fresh; else stale KV; else static fallback */
-async function getCgSymMap(req: NextApiRequest, dbg: Resp['meta']['debug']): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
+async function getCgSymMap(req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
   const key = 'cg:symmap:v1'
   type MapSnap = { map: Record<string,string>; updatedAt: number }
 
@@ -164,7 +183,7 @@ async function getCgSymMap(req: NextApiRequest, dbg: Resp['meta']['debug']): Pro
 }
 
 /* ===== CoinGecko batch prijzen (graceful on 429) ===== */
-async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg: Resp['meta']['debug']): Promise<Record<string, Quote>> {
+async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<Record<string, Quote>> {
   if (!ids.length) return {}
   const t0 = time()
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
@@ -306,6 +325,7 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: NonNulla
 /* ===== Handler ===== */
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
   res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
+
   const debug = req.query.debug === '1'
   const symbols = parseSymbols(req.query.symbols as any)
   const kvKey = `crypto:prices:v4:${symbols.join(',')}`
@@ -358,7 +378,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       dbg.yahoo = dbg.yahoo || { attempts: 0, errors: [] }
     }
 
-    // optioneel: ook loggen in console
     if (debug) log(req, 'META', {
       requested: symbols.length, received, partial,
       path: dbg?.path, mapSize: dbg?.mapStats?.size, cgKey: dbg?.env?.hasCgKey
