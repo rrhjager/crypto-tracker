@@ -368,14 +368,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         symbol: symRaw,                                 // bv. BTCUSDT
         price: q?.regularMarketPrice ?? null,           // prijs
         d: q?.regularMarketChangePercent ?? null,       // 24h %
-        w: null as number | null,                       // laat zoals het was in de UI
+        w: null as number | null,                       // compat-velden
         m: null as number | null,
       }
     })
 
     return res.status(200).json({
       quotes: data.quotes,
-      results, // ⬅️ nieuw
+      results,
       meta: {
         requested: symbols.length,
         received,
