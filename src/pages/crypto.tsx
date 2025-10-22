@@ -57,12 +57,13 @@ type IndResp = {
 }
 
 type PriceApi = {
-  quotes: Record<string, {
+  quotes?: Record<string, {
     symbol: string
     regularMarketPrice: number | null
     regularMarketChangePercent: number | null
     currency?: string
   }>
+  results?: Array<{ symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }>
 }
 
 /* ===== detail→home localStorage handshake ===== */
@@ -98,9 +99,7 @@ async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
     const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' })
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     return await r.json()
-  } finally {
-    clearTimeout(t)
-  }
+  } finally { clearTimeout(t) }
 }
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
@@ -108,7 +107,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ===== rechterkolom widgets ===== */
+/* ===== rechterkolom widgets (ongewijzigd) ===== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -290,7 +289,7 @@ type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
-  // base rows uit COINS + pair fallback
+  // base rows
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
@@ -312,7 +311,7 @@ function PageInner() {
     })
   }, [])
 
-  // favorieten
+  // favorites
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -332,7 +331,7 @@ function PageInner() {
     })
   }
 
-  // lokale TA overrides
+  // local TA
   const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
     setLocalTA(readAllLocalTA())
@@ -344,7 +343,7 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // Indicators (batches, elke 60s)
+  // Indicators (batch, 60s)
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -352,7 +351,6 @@ function PageInner() {
   useEffect(() => {
     if (!symbols.length) return
     let aborted = false
-
     async function runOnce() {
       const groups = chunk(symbols, 12)
       await Promise.all(groups.map(async (group, gi) => {
@@ -371,13 +369,12 @@ function PageInner() {
         } catch {}
       }))
     }
-
     runOnce()
     const id = setInterval(runOnce, 60_000)
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
-  // Prijzen (quotes)
+  // Prices (quotes + fallback to results)
   const bases = useMemo(() => {
     const b = symbols.map(s => toBaseTicker(s)).filter(Boolean) as string[]
     return Array.from(new Set(b))
@@ -391,12 +388,21 @@ function PageInner() {
 
   const pxByBase = useMemo(() => {
     const map = new Map<string, { price: number | null, d: number | null }>()
-    const quotes = (pxData as any)?.quotes as PriceApi['quotes'] | undefined
+    const quotes = (pxData?.quotes) || undefined
     if (quotes) {
       for (const [base, q] of Object.entries(quotes)) {
         map.set(base.toUpperCase(), {
           price: Number.isFinite(Number(q.regularMarketPrice)) ? Number(q.regularMarketPrice) : null,
           d: Number.isFinite(Number(q.regularMarketChangePercent)) ? Number(q.regularMarketChangePercent) : null
+        })
+      }
+    }
+    // fallback: support for `results` array (symbol, price, d, w, m)
+    if ((!quotes || map.size === 0) && Array.isArray(pxData?.results)) {
+      for (const it of pxData!.results!) {
+        map.set(String(it.symbol || '').toUpperCase(), {
+          price: Number.isFinite(Number(it.price)) ? Number(it.price) : null,
+          d: Number.isFinite(Number(it.d)) ? Number(it.d) : null
         })
       }
     }
@@ -421,17 +427,14 @@ function PageInner() {
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      // override met recente localStorage
-      const localKey = c.binance
-      if (localKey) {
-        const ta = (readAllLocalTA().get(localKey) ?? null) || null
-        if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
-          if (Number.isFinite(ta.score)) finalScore = ta.score
-          if (ta.status === 'BUY' || 'HOLD' || 'SELL') finalStatus = ta.status
-        }
+      // FIXED: correcte guard
+      const ta = c.binance ? localTA.get(c.binance) : undefined
+      if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
+        if (Number.isFinite(ta.score)) finalScore = ta.score
+        if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      // prijzen via quotes (base ticker) + 24h%
+      // prijzen via quotes/results (base ticker) + 24h%
       const base = toBaseTicker(c.binance)
       const px = base ? pxByBase.get(base) : undefined
 
@@ -468,7 +471,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
