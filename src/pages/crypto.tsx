@@ -4,10 +4,9 @@ import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
-import ScoreBadge from '@/components/ScoreBadge' // blijft staan, maar we tonen nu status-badge
-import { computeScoreStatus } from '@/lib/taScore' // ★ NIEUW: identieke scorebron
+import ScoreBadge from '@/components/ScoreBadge'
+import { computeScoreStatus } from '@/lib/taScore'
 
-// ---------- helpers ----------
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 function formatFiat(n: number | null | undefined) {
@@ -38,22 +37,28 @@ function statusFromScore(score: number): Status {
   return 'HOLD'
 }
 
-// Binance-pair fallback (voor Vercel): maak SYMBOLUSDT behalve voor stablecoins
+// Binance-pair fallback: SYMBOLUSDT behalve stablecoins
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
 
-// ---------- API shapes ----------
+// ✅ ROBUUST: haal base uit allerlei notaties (BTCUSDT, BTCUSD, BTC-USD, BTC/USD)
+const toBaseTicker = (pair: string | null | undefined): string | null => {
+  if (!pair) return null
+  const clean = pair.toUpperCase().replace(/[^A-Z0-9]/g, '') // strip -, /
+  const base = clean.replace(/(USDT|USD|USDC|BUSD|FDUSD|TUSD)$/, '')
+  return base || null
+}
+
 type IndResp = {
   symbol: string
   ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  // backend mag score/status meeleveren, maar we negeren die en rekenen met computeScoreStatus
   score?: number
   status?: Status
   error?: string
@@ -61,8 +66,7 @@ type IndResp = {
 
 /* ====== detail→home localStorage handshake ====== */
 type LocalTA = { score: number; status: Status; ts: number }
-const TA_KEY_PREFIX = 'ta:' // sleutels zoals ta:BTCUSDT
-
+const TA_KEY_PREFIX = 'ta:'
 function readAllLocalTA(): Map<string, LocalTA> {
   if (typeof window === 'undefined') return new Map()
   const out = new Map<string, LocalTA>()
@@ -85,7 +89,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ====== snellere, incrementele indicator-fetch ====== */
+/* ====== fetch utils ====== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -103,7 +107,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-// ---------- rechterkolom ----------
+/* ====== rechterkolom ====== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -250,7 +254,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
-      {/* Legenda */}
       <div className="mb-2 flex items-center gap-3 text-[10px] text-white/70">
         <span className="inline-flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(142 65% 36%)' }} />
@@ -266,7 +269,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         </span>
       </div>
 
-      {/* Tegels met echte score/status */}
       <div
         className="grid gap-1.5"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
@@ -308,12 +310,11 @@ function Heatmap({ rows }: { rows: any[] }) {
   )
 }
 
-// ---------- page ----------
+/* ====== pagina ====== */
 type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
-  // build rows vanuit COINS + Binance symbolen (met fallback)
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
@@ -322,7 +323,7 @@ function PageInner() {
         slug: (c.slug || c.symbol.toLowerCase()),
         symbol: c.symbol,
         name: c.name,
-        binance: fromList || fallback, // <-- belangrijk voor Vercel
+        binance: fromList || fallback,
         _rank: i,
         _price: null as number | null,
         _d: 0 as number | null,
@@ -335,7 +336,6 @@ function PageInner() {
     })
   }, [])
 
-  // Favorieten
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -355,7 +355,6 @@ function PageInner() {
     })
   }
 
-  // NEW: lokale TA state (detailpagina schrijft hierin via localStorage)
   const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
     setLocalTA(readAllLocalTA())
@@ -367,7 +366,7 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // ---- Indicators ophalen (BATCHED + elke 60s) ----
+  // Indicators (batched)
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -375,7 +374,6 @@ function PageInner() {
   useEffect(() => {
     if (!symbols.length) return
     let aborted = false
-
     async function runOnce() {
       try {
         const groups = chunk(symbols, 12)
@@ -396,19 +394,17 @@ function PageInner() {
         }))
       } finally {}
     }
-
     runOnce()
-    const id = setInterval(runOnce, 60_000) // ★ GEWIJZIGD: 60s refresh
+    const id = setInterval(runOnce, 60_000)
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
-  // ---- Prijs + d/w/m ophalen (Light) ----
-  // (PATCH) map Binance pairs -> base tickers voor de prices API
+  // ✅ Prijs + 24h% uit /api/crypto-light/prices (mapping via toBaseTicker)
   const baseToBinance = useMemo(() => {
     const m = new Map<string, string>()
     for (const s of symbols) {
-      const base = s?.toUpperCase().replace(/USDT$/, '')
-      if (base) m.set(base, s)
+      const base = toBaseTicker(s)
+      if (base) m.set(base, s) // bv. 'BTC' -> 'BTCUSDT' of 'BTCUSD'
     }
     return m
   }, [symbols])
@@ -434,11 +430,11 @@ function PageInner() {
     const map = new Map<string, { price: number|null, d: number|null, w: number|null, m: number|null }>()
     const quotes = pxData?.quotes || {}
     for (const [base, q] of Object.entries(quotes)) {
-      const binanceSym = baseToBinance.get(base) // bv. 'BTC' -> 'BTCUSDT'
+      const binanceSym = baseToBinance.get(base)
       if (!binanceSym) continue
       const price = Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null
       const dPct  = Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null
-      map.set(binanceSym, { price, d: dPct, w: null, m: null }) // 7d/30d evt. later
+      map.set(binanceSym, { price, d: dPct, w: null, m: null })
     }
     return map
   }, [pxData, baseToBinance])
@@ -451,20 +447,16 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // rows verrijken met indicator-score (computeScoreStatus) + prijs/perf
+  // rows verrijken met score + prijs/perf
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
       const ind  = c.binance ? indBySym.get(c.binance) : undefined
 
-      // ★ GEWIJZIGD: score ALTIJD uit computeScoreStatus (zelfde als elders)
-      const result = computeScoreStatus({
-        ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
-      } as any)
+      const result = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(result?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      // Eventuele override met verse localStorage (detailpagina)
       const localKey = c.binance
       if (localKey) {
         const ta = localTA.get(localKey)
@@ -517,7 +509,6 @@ function PageInner() {
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* LINKS: TABEL */}
         <div className="lg:col-span-8">
           <div className="table-card overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -559,8 +550,6 @@ function PageInner() {
                   const sym = String(c.symbol || '').toUpperCase()
                   const isFav = c._fav === true
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
-
-                  // ★ ENIGE WIJZIGING: badge baseert zich op score i.p.v. c.status
                   const statusByScore: Status = statusFromScore(scoreNum)
                   const badgeCls =
                     statusByScore === 'BUY'  ? 'badge-buy'  :
@@ -592,8 +581,6 @@ function PageInner() {
                       <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
                       <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
                       <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
-
-                      {/* Status-badge met score */}
                       <td className="py-3 text-right">
                         <button
                           type="button"
@@ -612,7 +599,6 @@ function PageInner() {
           </div>
         </div>
 
-        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
         <div className="lg:col-span-4">
           <div className="sticky top-6 space-y-6">
             <AISummary rows={rows} updatedAt={updatedAt} />
@@ -625,5 +611,4 @@ function PageInner() {
   )
 }
 
-// Client-only om hydration mismatch te voorkomen
 export default dynamic(() => Promise.resolve(PageInner), { ssr: false })
