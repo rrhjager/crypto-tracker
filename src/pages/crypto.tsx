@@ -1,4 +1,4 @@
-// src/pages/crypto.tsx  (of src/pages/crypto/index.tsx)
+// src/pages/crypto.tsx
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -13,7 +13,6 @@ type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
 type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
-/* ---------- helpers ---------- */
 function statusFromScore(score: number): Status {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
@@ -29,18 +28,15 @@ function formatFiat(n: number | null | undefined) {
 const fmtPct = (v: number | null | undefined) =>
   (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
-// Normaliseer symbolen overal IDENTIEK
-const cleanSym = (s: any) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-
 // Binance-pair fallback voor indicators
 const toBinancePair = (symbol: string) => {
-  const s = cleanSym(symbol)
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
 
-/* ---------- API shapes ---------- */
+/* ===== types van je light-indicators API ===== */
 type IndResp = {
   symbol: string // Binance pair, bv. BTCUSDT
   ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
@@ -50,18 +46,7 @@ type IndResp = {
   perf?: { d: number|null; w: number|null; m: number|null }
 }
 
-type PriceApiQuotes = Record<string, {
-  symbol: string
-  regularMarketPrice: number | null
-  regularMarketChangePercent: number | null
-  currency?: string
-}>
-type PriceApi = {
-  quotes?: PriceApiQuotes
-  results?: Array<{ symbol: string, price: number|null, d: number|null, w?: number|null, m?: number|null }>
-}
-
-/* ---------- localStorage TA handshake ---------- */
+/* ===== detail→home handshake (optioneel) ===== */
 type LocalTA = { score: number; status: Status; ts: number }
 const TA_KEY_PREFIX = 'ta:'
 function readAllLocalTA(): Map<string, LocalTA> {
@@ -86,7 +71,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ---------- fetch utils ---------- */
+/* ===== kleine helpers ===== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -104,7 +89,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ---------- Widgets ---------- */
+/* ===== Widgets ===== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -115,13 +100,10 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   const greenPct = Math.round((rows.filter(r => (r._d ?? 0) >= 0).length / total) * 100)
   const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
   const avgD = rows.reduce((s, r) => s + (r._d ?? 0), 0) / Math.max(1, total)
-
   let bias: 'Bullish' | 'Bearish' | 'Neutraal' = 'Neutraal'
   if ((buyPct - sellPct) >= 10 || avgScore >= 58 || avgD >= 0.5) bias = 'Bullish'
   if ((sellPct - buyPct) >= 10 || avgScore <= 42 || avgD <= -0.5) bias = 'Bearish'
-
   const biasCls = bias === 'Bullish' ? 'badge-buy' : bias === 'Bearish' ? 'badge-sell' : 'badge-hold'
-
   return (
     <aside className="table-card">
       <div className="flex items-center justify-between mb-2">
@@ -147,14 +129,11 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
   const hold = rows.filter(r => r.status === 'HOLD').length
   const sell = rows.filter(r => r.status === 'SELL').length
   const pct = (n: number) => Math.round((n / Math.max(1, total)) * 100)
-
   const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
   const greenPct = pct(rows.filter(r => (r._d ?? 0) >= 0).length)
-
   const byScore = [...rows].sort((a, b) => (b._score ?? 0) - (a._score ?? 0))
   const topUp = byScore.slice(0, Math.min(3, byScore.length))
   const topDown = [...byScore].reverse().slice(0, Math.min(3, byScore.length))
-
   return (
     <aside className="table-card">
       <div className="flex items-center justify-between mb-2">
@@ -214,9 +193,7 @@ function Heatmap({ rows }: { rows: any[] }) {
     if (filter === 'ALL') return rows
     return rows.filter((r) => (r.status || 'HOLD') === filter)
   }, [rows, filter])
-
   if (!rows || rows.length === 0) return null
-
   const Chip = ({ value, label }: { value: StatusFilter, label: string }) => {
     const active = filter === value
     return (
@@ -225,16 +202,14 @@ function Heatmap({ rows }: { rows: any[] }) {
         className={[
           'px-2.5 py-1 rounded-full text-[11px] transition',
           'border',
-          active
-            ? 'bg-white/10 border-white/30 text-white'
-            : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:border-white/20'
+          active ? 'bg-white/10 border-white/30 text-white'
+                 : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:border-white/20'
         ].join(' ')}
       >
         {label}
       </button>
     )
   }
-
   return (
     <div className="table-card">
       <div className="mb-3 flex items-center justify-between">
@@ -246,7 +221,6 @@ function Heatmap({ rows }: { rows: any[] }) {
           <Chip value="SELL" label="Sell" />
         </div>
       </div>
-
       <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}>
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
@@ -284,9 +258,9 @@ function PageInner() {
       const fallback = toBinancePair(c.symbol)
       return {
         slug: (c.slug || c.symbol.toLowerCase()),
-        symbol: cleanSym(c.symbol),           // ← pure ticker (genormaliseerd)
+        symbol: c.symbol,              // pure ticker (BTC/ETH/…)
         name: c.name,
-        binance: fromList || fallback,        // ← voor indicators fetch
+        binance: fromList || fallback, // voor indicators fetch
         _rank: i,
         _price: null as number | null,
         _d: null as number | null,
@@ -306,12 +280,12 @@ function PageInner() {
       const raw = typeof window !== 'undefined' ? localStorage.getItem('faves') : null
       if (raw) {
         const arr = JSON.parse(raw)
-        if (Array.isArray(arr)) setFaves(arr.map((s: any) => cleanSym(s)))
+        if (Array.isArray(arr)) setFaves(arr.map((s: any) => String(s).toUpperCase()))
       }
     } catch {}
   }, [])
   function toggleFav(sym: string) {
-    const s = cleanSym(sym)
+    const s = String(sym || '').toUpperCase()
     setFaves(prev => {
       const next = prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
       try { localStorage.setItem('faves', JSON.stringify(next)) } catch {}
@@ -320,16 +294,16 @@ function PageInner() {
   }
 
   // 3) (optioneel) localStorage TA
-  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
-    setLocalTA(readAllLocalTA())
     function onStorage(ev: StorageEvent) {
       if (!ev.key || !ev.key.startsWith(TA_KEY_PREFIX)) return
-      setLocalTA(readAllLocalTA())
+      // force rerender via state toggle
+      setLocalTA(new Map(readAllLocalTA()))
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
+  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(readAllLocalTA())
 
   // 4) Indicators (via Binance-keys), batched elke 60s
   const binanceSymbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
@@ -362,45 +336,41 @@ function PageInner() {
     return () => { aborted = true; clearInterval(id) }
   }, [binanceSymbols])
 
-  // 5) Prijzen (direct per ticker, NIET via binance pair)
+  // 5) Prijzen (direct per ticker)
   const tickers = useMemo(
-    () => Array.from(new Set(baseRows.map(r => r.symbol))), // al genormaliseerd
+    () => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))),
     [baseRows]
   )
-
-  const { data: pxData } = useSWR<PriceApi>(
+  const { data: pxData } = useSWR<any>(
     tickers.length ? `/api/crypto-light/prices?symbols=${encodeURIComponent(tickers.join(','))}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  // Map van prijs-data (quotes/results) naar ticker-keys (genormaliseerd)
+  // quotes of results → map per ticker
   const pxByTicker = useMemo(() => {
     const map = new Map<string, { price: number | null, d: number | null }>()
-    const quotes = pxData?.quotes
-    const results = pxData?.results
-
+    const quotes = pxData?.quotes as Record<string, any> | undefined
+    const results = pxData?.results as Array<{symbol:string, price:number|null, d:number|null}> | undefined
     if (quotes && Object.keys(quotes).length) {
-      for (const [sym, q] of Object.entries(quotes as PriceApiQuotes)) {
-        const key = cleanSym(sym)
-        const price = Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null
-        const d     = Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null
-        map.set(key, { price, d })
+      for (const [sym, q] of Object.entries(quotes)) {
+        map.set(sym.toUpperCase(), {
+          price: Number.isFinite(Number((q as any).regularMarketPrice)) ? Number((q as any).regularMarketPrice) : null,
+          d: Number.isFinite(Number((q as any).regularMarketChangePercent)) ? Number((q as any).regularMarketChangePercent) : null
+        })
       }
-    }
-    if (Array.isArray(results)) {
+    } else if (Array.isArray(results)) {
       for (const r of results) {
-        const key = cleanSym(r.symbol)
-        const prev = map.get(key)
-        const price = Number.isFinite(Number(r.price)) ? Number(r.price) : (prev?.price ?? null)
-        const d     = Number.isFinite(Number(r.d))     ? Number(r.d)     : (prev?.d ?? null)
-        map.set(key, { price, d })
+        map.set(String(r.symbol || '').toUpperCase(), {
+          price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
+          d: Number.isFinite(Number(r.d)) ? Number(r.d) : null
+        })
       }
     }
     return map
   }, [pxData])
 
-  // 6) Sort
+  // 6) Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -411,26 +381,27 @@ function PageInner() {
   // 7) Rijen bouwen
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
-      const symKey = c.symbol // al clean
+      const symU = String(c.symbol || '').toUpperCase()
       const ind = c.binance ? indBySym.get(c.binance) : undefined
 
       const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      const ta = c.binance ? readAllLocalTA().get(c.binance) : undefined
+      // lokale override via binance-key
+      const ta = c.binance ? localTA.get(c.binance) : undefined
       if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
         if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      const px = pxByTicker.get(symKey)
+      const px = pxByTicker.get(symU) // ← direct op ticker
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
       return {
         ...c,
-        _fav: faves.includes(symKey),
+        _fav: faves.includes(symU),
         _score: finalScore,
         status: finalStatus,
         _price: px?.price ?? null,
@@ -457,7 +428,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByTicker])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByTicker, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
@@ -471,7 +442,6 @@ function PageInner() {
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
-        {/* LINKS: TABEL */}
         <div className="lg:col-span-8">
           <div className="table-card overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -479,11 +449,8 @@ function PageInner() {
                 <tr>
                   <th className="text-left py-2">#</th>
                   <th className="py-2 w-10 text-center">
-                    <button
-                      onClick={() => toggleSort('fav')}
-                      title="Sorteren op favoriet"
-                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
-                    >
+                    <button onClick={() => toggleSort('fav')} title="Sorteren op favoriet"
+                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition">
                       <span className="leading-none">⭐</span>
                       <span className="sr-only">Favoriet</span>
                     </button>
@@ -510,7 +477,7 @@ function PageInner() {
               </thead>
               <tbody>
                 {rows.map((c: any, i: number) => {
-                  const sym = c.symbol // al clean
+                  const sym = String(c.symbol || '').toUpperCase()
                   const isFav = c._fav === true
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
                   const statusByScore: Status = statusFromScore(scoreNum)
@@ -537,20 +504,22 @@ function PageInner() {
                       </td>
                       <td className="py-3">
                         <Link href={`/crypto/${c.slug}`} className="link font-semibold">
-                          {c.name} <span className="ticker">({sym})</span>
+                          {c.name} <span className="ticker">({c.symbol})</span>
                         </Link>
                       </td>
-                      <td className="py-3 text-right">{formatFiat(c._price)}</td>
+
+                      {/* Prijs + % met duidelijke fallback zodat je ziet als mapping faalt */}
+                      <td className="py-3 text-right">
+                        {c._price == null ? <span className="text-white/50">— (geen prijs voor {c.symbol})</span> : formatFiat(c._price)}
+                      </td>
                       <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
+
                       <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
                       <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
                       <td className="py-3 text-right">
-                        <button
-                          type="button"
-                          className={`${badgeCls} text-xs px-2 py-1 rounded`}
+                        <button type="button" className={`${badgeCls} text-xs px-2 py-1 rounded`}
                           title={`Status: ${statusByScore} · Score: ${scoreNum}`}
-                          aria-label={`Status ${statusByScore} met score ${scoreNum}`}
-                        >
+                          aria-label={`Status ${statusByScore} met score ${scoreNum}`}>
                           {statusByScore} · {scoreNum}
                         </button>
                       </td>
@@ -575,4 +544,5 @@ function PageInner() {
   )
 }
 
+// Client-only om SSR/hydration gedoe te voorkomen in Pages Router
 export default dynamic(() => Promise.resolve(PageInner), { ssr: false })
