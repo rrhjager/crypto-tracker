@@ -1,4 +1,4 @@
-// src/pages/crypto.tsx
+// src/pages/crypto/index.tsx
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -27,10 +27,10 @@ function formatFiat(n: number | null | undefined) {
 const fmtPct = (v: number | null | undefined) =>
   (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
-// Binance-pair fallback: SYMBOL → SYMBOLUSDT (geen stablecoins)
+// SYMBOL -> SYMBOLUSDT (skip stablecoins)
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'])
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
@@ -43,15 +43,14 @@ const toBaseTicker = (pairOrSym: string | null | undefined): string | null => {
   return base || null
 }
 
-/* ====== API shapes ====== */
+/* ===== API shapes ===== */
 type IndResp = {
   symbol: string
-  ma?: { ma50: number | null; ma200: number | null; cross: 'Golden Cross' | 'Death Cross' | '—' }
-  rsi?: number | null
-  macd?: { macd: number | null; signal: number | null; hist: number | null }
-  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  // backend levert dit ook mee: gebruiken we voor 7d/30d
-  perf?: { d: number | null; w: number | null; m: number | null; q?: number | null }
+  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
+  rsi?: number|null
+  macd?: { macd: number|null; signal: number|null; hist: number|null }
+  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  perf?: { d: number|null; w: number|null; m: number|null; q?: number|null }
   score?: number
   status?: Status
   error?: string
@@ -66,7 +65,7 @@ type PriceApi = {
   }>
 }
 
-/* ====== detail→home localStorage handshake ====== */
+/* ===== detail→home localStorage handshake ===== */
 type LocalTA = { score: number; status: Status; ts: number }
 const TA_KEY_PREFIX = 'ta:'
 function readAllLocalTA(): Map<string, LocalTA> {
@@ -91,7 +90,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ====== small utils ====== */
+/* ===== small utils ===== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -109,7 +108,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ====== rechterkolom widgets (zoals bij jou) ====== */
+/* ===== rechterkolom widgets ===== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -217,7 +216,6 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
 
 function Heatmap({ rows }: { rows: any[] }) {
   const [filter, setFilter] = useState<StatusFilter>('ALL')
-
   const filtered = useMemo(() => {
     if (!rows) return []
     if (filter === 'ALL') return rows
@@ -263,7 +261,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
           const status = (c.status as Status) || 'HOLD'
-          // simpele kleur (zelfde als je had)
           const cls =
             status === 'BUY' ? 'bg-green-500/20 ring-green-500/30' :
             status === 'SELL' ? 'bg-red-500/20 ring-red-500/30' :
@@ -272,7 +269,7 @@ function Heatmap({ rows }: { rows: any[] }) {
             <Link
               key={c.slug}
               href={`/crypto/${c.slug}`}
-              title={`${c.name} (${c.symbol}) • ${status} · ${Math.round(score)}`}
+              title={`${c.name} (${c.symbol}) · ${status} · ${Math.round(score)}`}
               className={`group rounded-[10px] ring-1 ${cls} text-white text-center`}
               style={{ aspectRatio: '1 / 1' }}
             >
@@ -293,7 +290,7 @@ type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
-  // basis-rows uit COINS + binance pair fallback
+  // base rows uit COINS + pair fallback
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
@@ -335,7 +332,7 @@ function PageInner() {
     })
   }
 
-  // local TA uit detail
+  // lokale TA overrides
   const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
     setLocalTA(readAllLocalTA())
@@ -347,7 +344,7 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // ---------- Indicators ophalen (batches, elke 60s) ----------
+  // Indicators (batches, elke 60s)
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -380,10 +377,9 @@ function PageInner() {
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
-  // ---------- Prijzen ophalen (via quotes-object) ----------
+  // Prijzen (quotes)
   const bases = useMemo(() => {
     const b = symbols.map(s => toBaseTicker(s)).filter(Boolean) as string[]
-    // de /api/crypto-light/prices endpoint verwacht bv "BTC,ETH,SOL"
     return Array.from(new Set(b))
   }, [symbols])
 
@@ -407,7 +403,7 @@ function PageInner() {
     return map
   }, [pxData])
 
-  // ---------- Sorting ----------
+  // Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -415,32 +411,31 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // ---------- rows opbouwen ----------
+  // rows
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
-      const ind = c.binance ? indBySym.get(c.binance) : undefined
+      const ind  = c.binance ? indBySym.get(c.binance) : undefined
 
-      // score altijd via dezelfde helper als elders
       const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      // verse local override (detailpagina)
+      // override met recente localStorage
       const localKey = c.binance
       if (localKey) {
         const ta = (readAllLocalTA().get(localKey) ?? null) || null
         if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
           if (Number.isFinite(ta.score)) finalScore = ta.score
-          if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
+          if (ta.status === 'BUY' || 'HOLD' || 'SELL') finalStatus = ta.status
         }
       }
 
-      // prijzen uit quotes (base-ticker)
+      // prijzen via quotes (base ticker) + 24h%
       const base = toBaseTicker(c.binance)
       const px = base ? pxByBase.get(base) : undefined
 
-      // 7d/30d uit indicators.perf (indicators biedt dat al)
+      // 7d/30d uit indicators.perf
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
@@ -450,7 +445,7 @@ function PageInner() {
         _score: finalScore,
         status: finalStatus,
         _price: px?.price ?? null,
-        _d: px?.d ?? null,   // 24h %
+        _d: px?.d ?? null,
         _w: w,
         _m: m,
       }
@@ -459,18 +454,18 @@ function PageInner() {
     const dir = sortDir === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
       switch (sortKey) {
-        case 'fav': return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
-        case 'coin': return (a._rank - b._rank) * dir
+        case 'fav':   return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
+        case 'coin':  return (a._rank - b._rank) * dir
         case 'price':
           if (a._price == null && b._price == null) return 0
           if (a._price == null) return 1
           if (b._price == null) return -1
           return (a._price - b._price) * dir
-        case 'd': return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
-        case 'w': return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
-        case 'm': return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
-        case 'status': return (a._score - b._score) * dir
-        default: return 0
+        case 'd':     return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
+        case 'w':     return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
+        case 'm':     return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
+        case 'status':return (a._score - b._score) * dir
+        default:      return 0
       }
     })
   }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase])
@@ -531,7 +526,7 @@ function PageInner() {
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
                   const statusByScore: Status = statusFromScore(scoreNum)
                   const badgeCls =
-                    statusByScore === 'BUY' ? 'badge-buy' :
+                    statusByScore === 'BUY'  ? 'badge-buy'  :
                     statusByScore === 'SELL' ? 'badge-sell' : 'badge-hold'
 
                   return (
@@ -578,7 +573,7 @@ function PageInner() {
           </div>
         </div>
 
-        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
+        {/* RECHTS */}
         <div className="lg:col-span-4">
           <div className="sticky top-6 space-y-6">
             <AISummary rows={rows} updatedAt={updatedAt} />
