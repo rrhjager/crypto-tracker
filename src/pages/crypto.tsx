@@ -1,4 +1,4 @@
-// src/pages/crypto.tsx
+// src/pages/crypto.tsx  (of src/pages/crypto/index.tsx)
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -6,7 +6,6 @@ import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
 import { computeScoreStatus } from '@/lib/taScore'
 
-/* ===================== helpers ===================== */
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 type Status = 'BUY' | 'HOLD' | 'SELL'
@@ -14,8 +13,11 @@ type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
 type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
-const statusFromScore = (score: number): Status =>
-  score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD'
+function statusFromScore(score: number): Status {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
+}
 
 function formatFiat(n: number | null | undefined) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
@@ -27,54 +29,25 @@ function formatFiat(n: number | null | undefined) {
 const fmtPct = (v: number | null | undefined) =>
   (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
-// Binance-pair fallback: SYMBOL → SYMBOLUSDT (geen stablecoins)
+// Binance-fallback voor indicators
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'])
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
 
-// BTCUSDT / BTCUSD / BTC-USD / BTC/USD -> BTC
-const toBaseTicker = (pairOrSym: string | null | undefined): string | null => {
-  if (!pairOrSym) return null
-  const clean = pairOrSym.toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const base = clean.replace(/(USDT|USD|USDC|BUSD|FDUSD|TUSD)$/, '')
-  return base || null
-}
-
-/* ====== API shapes ====== */
-type StatusT = 'BUY' | 'HOLD' | 'SELL'
+/* ========== Types van je light-indicators API ========== */
 type IndResp = {
-  symbol: string
-  ma?: { ma50: number | null; ma200: number | null; cross: 'Golden Cross' | 'Death Cross' | '—' }
-  rsi?: number | null
-  macd?: { macd: number | null; signal: number | null; hist: number | null }
-  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  perf?: { d: number | null; w: number | null; m: number | null; q?: number | null }
-  score?: number
-  status?: StatusT
-  error?: string
+  symbol: string // ← Binance pair, bv. BTCUSDT
+  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
+  rsi?: number|null
+  macd?: { macd: number|null; signal: number|null; hist: number|null }
+  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  perf?: { d: number|null; w: number|null; m: number|null }
 }
 
-type PriceApiQuotesShape = {
-  quotes: Record<string, {
-    symbol: string
-    regularMarketPrice: number | null
-    regularMarketChangePercent: number | null
-    currency?: string
-  }>
-  results?: undefined
-}
-
-type PriceApiResultsShape = {
-  quotes?: any
-  results: Array<{ symbol: string; price: number | null; d: number | null }>
-}
-
-type PriceApi = PriceApiQuotesShape | PriceApiResultsShape
-
-/* ====== detail→home localStorage handshake ====== */
+/* ====== detail→home handshake (optioneel) ====== */
 type LocalTA = { score: number; status: Status; ts: number }
 const TA_KEY_PREFIX = 'ta:'
 function readAllLocalTA(): Map<string, LocalTA> {
@@ -99,7 +72,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ====== small utils ====== */
+/* ====== kleine helpers ====== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -117,7 +90,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ===================== rechterkolom widgets ===================== */
+/* ====== Widgets (ongewijzigd) ====== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -174,7 +147,6 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
         <h3 className="font-bold">Dagelijkse samenvatting</h3>
         <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
       </div>
-
       <div className="grid grid-cols-3 gap-2 mb-3">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">BUY</div>
@@ -189,12 +161,10 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
           <div className="flex items-end justify-between"><div className="text-lg font-bold text-red-300">{pct(sell)}%</div><div className="text-xs text-white/60">{sell}/{total}</div></div>
         </div>
       </div>
-
       <div className="grid grid-cols-2 gap-2 mb-3">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Breadth (24h groen)</div><div className="text-lg font-bold">{greenPct}%</div></div>
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Gem. score</div><div className="text-lg font-bold">{avgScore}</div></div>
       </div>
-
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">Top scores</div>
@@ -225,7 +195,6 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
 
 function Heatmap({ rows }: { rows: any[] }) {
   const [filter, setFilter] = useState<StatusFilter>('ALL')
-
   const filtered = useMemo(() => {
     if (!rows) return []
     if (filter === 'ALL') return rows
@@ -264,10 +233,7 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
-      <div
-        className="grid gap-1.5"
-        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
-      >
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}>
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
           const status = (c.status as Status) || 'HOLD'
@@ -297,21 +263,21 @@ function Heatmap({ rows }: { rows: any[] }) {
 
 /* ===================== PAGE ===================== */
 function PageInner() {
-  // basis-rows uit COINS + binance pair fallback
+  // 1) Basisrijen (Binance pair alleen voor indicators)
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
       const fallback = toBinancePair(c.symbol)
       return {
         slug: (c.slug || c.symbol.toLowerCase()),
-        symbol: c.symbol,
+        symbol: c.symbol,              // ← pure ticker (BTC/ETH/…)
         name: c.name,
-        binance: fromList || fallback,
+        binance: fromList || fallback, // ← voor indicators fetch
         _rank: i,
         _price: null as number | null,
-        _d: 0 as number | null,
-        _w: 0 as number | null,
-        _m: 0 as number | null,
+        _d: null as number | null,
+        _w: null as number | null,
+        _m: null as number | null,
         _score: 50,
         status: 'HOLD' as Status,
         _fav: false,
@@ -319,7 +285,7 @@ function PageInner() {
     })
   }, [])
 
-  // favorieten
+  // 2) Favorieten
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -339,7 +305,7 @@ function PageInner() {
     })
   }
 
-  // local TA uit detail (lees één keer en via 'storage' events)
+  // 3) (optioneel) localStorage TA
   const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
     setLocalTA(readAllLocalTA())
@@ -351,17 +317,16 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // ---------- Indicators ophalen (batches, elke 60s) ----------
-  const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
+  // 4) Indicators (via Binance-keys), batched elke 60s
+  const binanceSymbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
 
   useEffect(() => {
-    if (!symbols.length) return
+    if (!binanceSymbols.length) return
     let aborted = false
-
     async function runOnce() {
-      const groups = chunk(symbols, 12)
+      const groups = chunk(binanceSymbols, 12)
       await Promise.all(groups.map(async (group, gi) => {
         if (gi) await new Promise(r => setTimeout(r, 120 * gi))
         const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
@@ -378,57 +343,48 @@ function PageInner() {
         } catch {}
       }))
     }
-
     runOnce()
     const id = setInterval(runOnce, 60_000)
     return () => { aborted = true; clearInterval(id) }
-  }, [symbols])
+  }, [binanceSymbols])
 
-  // ---------- Prijzen ophalen (robust: ondersteunt quotes{} en results[]) ----------
-  const bases = useMemo(() => {
-    const b = symbols.map(s => toBaseTicker(s)).filter(Boolean) as string[]
-    return Array.from(new Set(b))
-  }, [symbols])
+  // 5) Prijzen (direct per ticker, NIET via binance pair)
+  const tickers = useMemo(
+    () => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))),
+    [baseRows]
+  )
 
-  const { data: pxData } = useSWR<PriceApi>(
-    bases.length ? `/api/crypto-light/prices?symbols=${encodeURIComponent(bases.join(','))}` : null,
+  const { data: pxData } = useSWR<any>(
+    tickers.length ? `/api/crypto-light/prices?symbols=${encodeURIComponent(tickers.join(','))}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  const pxByBase = useMemo(() => {
+  // Maak een map per ticker uit óf quotes óf results (wat er beschikbaar is)
+  const pxByTicker = useMemo(() => {
     const map = new Map<string, { price: number | null, d: number | null }>()
-    const anyData = pxData as any
+    const quotes = pxData?.quotes as Record<string, any> | undefined
+    const results = pxData?.results as Array<{symbol:string, price:number|null, d:number|null}> | undefined
 
-    // shape A: { quotes: { BTC: { regularMarketPrice, regularMarketChangePercent }, ... } }
-    if (anyData?.quotes && typeof anyData.quotes === 'object') {
-      const quotes = anyData.quotes as PriceApiQuotesShape['quotes']
-      for (const [base, q] of Object.entries(quotes)) {
-        map.set(base.toUpperCase(), {
-          price: Number.isFinite(Number(q.regularMarketPrice)) ? Number(q.regularMarketPrice) : null,
-          d: Number.isFinite(Number(q.regularMarketChangePercent)) ? Number(q.regularMarketChangePercent) : null
+    if (quotes && Object.keys(quotes).length) {
+      for (const [sym, q] of Object.entries(quotes)) {
+        map.set(sym.toUpperCase(), {
+          price: Number.isFinite(Number((q as any).regularMarketPrice)) ? Number((q as any).regularMarketPrice) : null,
+          d: Number.isFinite(Number((q as any).regularMarketChangePercent)) ? Number((q as any).regularMarketChangePercent) : null
+        })
+      }
+    } else if (Array.isArray(results)) {
+      for (const r of results) {
+        map.set(String(r.symbol || '').toUpperCase(), {
+          price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
+          d: Number.isFinite(Number(r.d)) ? Number(r.d) : null
         })
       }
     }
-
-    // shape B: { results: [{ symbol: 'BTC', price, d }, ...] }
-    if (Array.isArray(anyData?.results)) {
-      for (const row of anyData.results as Array<{ symbol: string, price: number | null, d: number | null }>) {
-        const base = String(row.symbol || '').toUpperCase()
-        // prefer quotes if present; else fill from results
-        if (!map.has(base)) {
-          map.set(base, {
-            price: Number.isFinite(Number(row.price)) ? Number(row.price) : null,
-            d: Number.isFinite(Number(row.d)) ? Number(row.d) : null
-          })
-        }
-      }
-    }
-
     return map
   }, [pxData])
 
-  // ---------- Sorting ----------
+  // 6) Sortering
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -436,29 +392,24 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // ---------- rows opbouwen ----------
+  // 7) Rijen bouwen (score/status + prijs + d/w/m)
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
       const ind = c.binance ? indBySym.get(c.binance) : undefined
 
-      // score altijd via dezelfde helper
       const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      // verse local override (detailpagina) — gebruik state, niet opnieuw lezen
-      const ta = c.binance ? localTA.get(c.binance) : undefined
+      // lokale override (detailpagina) via binance-key
+      const ta = c.binance ? readAllLocalTA().get(c.binance) : undefined
       if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
-        if (ta.status === 'BUY' || 'HOLD' || 'SELL') finalStatus = ta.status
+        if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      // prijzen uit quotes/results (base-ticker)
-      const base = toBaseTicker(c.binance)
-      const px = base ? pxByBase.get(base) : undefined
-
-      // 7d/30d uit indicators.perf (indicators biedt dat al)
+      const px = pxByTicker.get(symU) // ← direct op ticker (BTC/ETH/…)
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
@@ -468,7 +419,7 @@ function PageInner() {
         _score: finalScore,
         status: finalStatus,
         _price: px?.price ?? null,
-        _d: px?.d ?? null,   // 24h %
+        _d: px?.d ?? null,
         _w: w,
         _m: m,
       }
@@ -477,21 +428,21 @@ function PageInner() {
     const dir = sortDir === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
       switch (sortKey) {
-        case 'fav': return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
-        case 'coin': return (a._rank - b._rank) * dir
+        case 'fav':   return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
+        case 'coin':  return (a._rank - b._rank) * dir
         case 'price':
           if (a._price == null && b._price == null) return 0
           if (a._price == null) return 1
           if (b._price == null) return -1
           return (a._price - b._price) * dir
-        case 'd': return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
-        case 'w': return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
-        case 'm': return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
-        case 'status': return (a._score - b._score) * dir
-        default: return 0
+        case 'd':     return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
+        case 'w':     return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
+        case 'm':     return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
+        case 'status':return (a._score - b._score) * dir
+        default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase, localTA])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByTicker])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
@@ -596,7 +547,7 @@ function PageInner() {
           </div>
         </div>
 
-        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
+        {/* RECHTS */}
         <div className="lg:col-span-4">
           <div className="sticky top-6 space-y-6">
             <AISummary rows={rows} updatedAt={updatedAt} />
@@ -609,5 +560,4 @@ function PageInner() {
   )
 }
 
-// Client-only om hydration mismatch te voorkomen
 export default dynamic(() => Promise.resolve(PageInner), { ssr: false })
