@@ -15,84 +15,74 @@ type Quote = {
   currency?: string
   marketState?: string
 }
+type MetaDebug = {
+  now: string
+  symbols: string[]
+  timings: Record<string, number>
+  path: {
+    map: 'fresh' | 'stale' | 'static' | 'error'
+    prices: 'coingecko' | 'yahoo' | 'mixed' | 'none'
+  }
+  mapStats: { size: number, keysExample: string[] }
+  cg?: { status?: number, rateLimited?: boolean, err?: string }
+  yahoo?: { attempts: number, errors: string[] }
+  kvKey: string
+  env: { hasCgKey: boolean, nodeEnv: string }
+  headers?: Record<string,string>
+}
 type Resp = {
   quotes: Record<string, Quote>
+  // ⬇️ extra shape die de UI verwacht
+  results?: Array<{ symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }>
   meta?: {
     requested: number
     received: number
     partial: boolean
     errors?: string[]
     used: string
-    debug?: {
-      now: string
-      symbols: string[]
-      timings: Record<string, number>
-      path: {
-        map: 'fresh' | 'stale' | 'static' | 'error'
-        prices: 'coingecko' | 'yahoo' | 'mixed' | 'none'
-      }
-      mapStats: { size: number, keysExample: string[] }
-      cg?: { status?: number, rateLimited?: boolean, err?: string }
-      yahoo?: { attempts: number, errors: string[] }
-      kvKey: string
-      env: { hasCgKey: boolean, nodeEnv: string }
-      headers?: Record<string,string>
-    }
+    debug?: MetaDebug
   }
 }
 
 /* ===== CDN/KV settings ===== */
 const EDGE_S_MAXAGE = 20
 const EDGE_SWR      = 120
-const KV_TTL_SEC    = 30   // snapshot per symbolset
+const KV_TTL_SEC    = 30
 const KV_REVALIDATE = 15
 
-// Sym→ID map cache (top-cap list). We’ll serve stale on error.
-const MAP_TTL_SEC        = 24 * 60 * 60 // 24h
-const MAP_REVALIDATE_SEC = 6  * 60 * 60 // ~6h
+const MAP_TTL_SEC        = 24 * 60 * 60
+const MAP_REVALIDATE_SEC = 6  * 60 * 60
 
 /* ===== Defaults ===== */
 const DEFAULT_SYMBOLS = [
   'BTC','ETH','SOL','BNB','XRP','ADA','DOGE','TON','AVAX','DOT','LINK','TRX','MATIC','SHIB','LTC','BCH'
 ]
 
-/* ===== Static fallback CG symbol→id (top coins) ===== */
+/* ===== Static fallback CG symbol→id ===== */
 const STATIC_CG_MAP: Record<string,string> = {
-  BTC: 'bitcoin',
-  ETH: 'ethereum',
-  SOL: 'solana',
-  BNB: 'binancecoin',
-  XRP: 'ripple',
-  ADA: 'cardano',
-  DOGE:'dogecoin',
-  TON: 'the-open-network',
-  AVAX:'avalanche-2',
-  DOT: 'polkadot',
-  LINK:'chainlink',
-  TRX: 'tron',
-  MATIC:'polygon',
-  SHIB:'shiba-inu',
-  LTC:'litecoin',
-  BCH:'bitcoin-cash',
+  BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', BNB: 'binancecoin',
+  XRP: 'ripple',  ADA: 'cardano',  DOGE:'dogecoin', TON: 'the-open-network',
+  AVAX:'avalanche-2', DOT: 'polkadot', LINK:'chainlink', TRX: 'tron',
+  MATIC:'polygon', SHIB:'shiba-inu', LTC:'litecoin', BCH:'bitcoin-cash',
 }
 
 /* ===== Utils ===== */
-const sleep = (ms:number)=> new Promise(r=>setTimeout(r,ms))
 const okJson = async <T,>(r: Response)=> (await r.json()) as T
+const time = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+const shouldLog = (req: NextApiRequest) => req.query.debug === '1' || process.env.NODE_ENV !== 'production'
+const log = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) console.log('[crypto-prices]', ...args) }
+const err = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) console.error('[crypto-prices]', ...args) }
 
-// normaliseer binnenkomende symbols: accepteer 'BTC', 'btc', 'BTCUSDT', etc.
-// → maak base symbool (BTC) en skip pure stablecoins
+// normaliseer: accepteer BTC / btc / BTCUSDT → BTC
 const STABLES = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
 function toBaseSymbol(s: string): string | null {
   const raw = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   if (!raw) return null
   if (STABLES.has(raw)) return null
-  // strip 'USDT' achteraan (binance-pair) → 'BTCUSDT' -> 'BTC'
   const base = raw.endsWith('USDT') ? raw.slice(0, -4) : raw
   if (!base || STABLES.has(base)) return null
   return base
 }
-
 function parseSymbols(q: string | string[] | undefined): string[] {
   const raw = Array.isArray(q) ? q.join(',') : q || DEFAULT_SYMBOLS.join(',')
   const out: string[] = []
@@ -101,10 +91,8 @@ function parseSymbols(q: string | string[] | undefined): string[] {
     if (b) out.push(b)
     if (out.length >= 60) break
   }
-  // uniek + volgorde bewaren
   return Array.from(new Set(out))
 }
-
 function cgHeaders() {
   const h: Record<string,string> = { 'accept': 'application/json' }
   const key = process.env.COINGECKO_API_KEY || process.env.COINGECKO_PRO_API_KEY
@@ -112,14 +100,8 @@ function cgHeaders() {
   return h
 }
 
-/* ===== debug helpers ===== */
-const time = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
-const shouldLog = (req: NextApiRequest) => req.query.debug === '1' || process.env.NODE_ENV !== 'production'
-const log = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) console.log('[crypto-prices]', ...args) }
-const err = (req: NextApiRequest, ...args: any[]) => { if (shouldLog(req)) console.error('[crypto-prices]', ...args) }
-
-/* ===== CoinGecko: dynamic sym→id map (top ~500) ===== */
-async function fetchCgTopSymbols(req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<Record<string,string>> {
+/* ===== CoinGecko sym→id map ===== */
+async function fetchCgTopSymbols(req: NextApiRequest, dbg: MetaDebug): Promise<Record<string,string>> {
   const t0 = time()
   const base = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&sparkline=false'
   const [p1, p2] = await Promise.all([
@@ -131,20 +113,17 @@ async function fetchCgTopSymbols(req: NextApiRequest, dbg: NonNullable<Resp['met
     dbg.cg = { status: (!p1.ok ? p1.status : p2.status), rateLimited: p1.status===429 || p2.status===429 }
     throw new Error(`CG markets HTTP ${p1.status}/${p2.status}`)
   }
-
   const a1: any[] = await okJson(p1)
   const a2: any[] = await okJson(p2)
   const map = new Map<string,string>()
   for (const c of [...a1, ...a2]) {
     const sym = String(c?.symbol || '').toUpperCase()
     const id  = String(c?.id || '')
-    if (sym && id && !map.has(sym)) map.set(sym, id) // first = highest mcap
+    if (sym && id && !map.has(sym)) map.set(sym, id)
   }
   return Object.fromEntries(map)
 }
-
-/* Robust: prefer fresh; else stale KV; else static fallback */
-async function getCgSymMap(req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
+async function getCgSymMap(req: NextApiRequest, dbg: MetaDebug): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
   const key = 'cg:symmap:v1'
   type MapSnap = { map: Record<string,string>; updatedAt: number }
 
@@ -182,8 +161,8 @@ async function getCgSymMap(req: NextApiRequest, dbg: NonNullable<Resp['meta']>['
   return { map: { ...STATIC_CG_MAP }, source: 'static' }
 }
 
-/* ===== CoinGecko batch prijzen (graceful on 429) ===== */
-async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']): Promise<Record<string, Quote>> {
+/* ===== Price providers ===== */
+async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg: MetaDebug): Promise<Record<string, Quote>> {
   if (!ids.length) return {}
   const t0 = time()
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
@@ -217,7 +196,6 @@ async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>
   return out
 }
 
-/* ===== Yahoo fallback (only when CG failed/absent) ===== */
 async function yahooQuote(symbol: string): Promise<Quote> {
   const combos: Array<[string, string]> = [['1d','1mo'], ['1d','3mo'], ['1wk','1y']]
   const ysym = `${symbol}-USD`
@@ -266,11 +244,11 @@ async function yahooQuote(symbol: string): Promise<Quote> {
 }
 
 /* ===== Builder ===== */
-async function buildPrices(symbols: string[], req: NextApiRequest, dbg: NonNullable<Resp['meta']>['debug']) {
+async function buildPrices(symbols: string[], req: NextApiRequest, dbg: MetaDebug) {
   const errors: string[] = []
   const out: Record<string, Quote> = {}
 
-  // 1) Load sym→id map
+  // 1) sym→id map
   const mapRes = await getCgSymMap(req, dbg)
   const symToId = mapRes.map
   const idToSym: Record<string,string> = {}
@@ -278,10 +256,8 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: NonNulla
   dbg.mapStats = { size: Object.keys(symToId).length, keysExample: Object.keys(symToId).slice(0,6) }
 
   const cgSyms  = symbols.filter(s => !!symToId[s])
-  const missingFromMap = symbols.filter(s => !symToId[s])
-  if (missingFromMap.length) errors.push(`no-cg-id: ${missingFromMap.slice(0,10).join(',')}${missingFromMap.length>10?'…':''}`)
 
-  // 2) Try CoinGecko batch
+  // 2) CoinGecko batch
   let cgOut: Record<string, Quote> = {}
   if (cgSyms.length) {
     const ids = cgSyms.map(s => symToId[s])
@@ -292,7 +268,7 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: NonNulla
     }
   }
 
-  // 3) Yahoo fallback for missing
+  // 3) Yahoo fallback
   const missing = symbols.filter(s => !out[s])
   const yahooErrors: string[] = []
   if (missing.length) {
@@ -325,12 +301,16 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: NonNulla
 /* ===== Handler ===== */
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
   res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
-
   const debug = req.query.debug === '1'
+
+  // we bewaren ook de originele query-symbols (kunnen Binance-pairs zijn)
+  const raw = Array.isArray(req.query.symbols) ? req.query.symbols.join(',') : (req.query.symbols as string|undefined) || ''
+  const originalSymbols = raw.split(',').map(s => s.trim()).filter(Boolean)
+
   const symbols = parseSymbols(req.query.symbols as any)
   const kvKey = `crypto:prices:v4:${symbols.join(',')}`
 
-  const dbg: NonNullable<Resp['meta']>['debug'] = debug ? {
+  const dbg: MetaDebug | undefined = debug ? {
     now: new Date().toISOString(),
     symbols,
     timings: {},
@@ -378,13 +358,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       dbg.yahoo = dbg.yahoo || { attempts: 0, errors: [] }
     }
 
-    if (debug) log(req, 'META', {
-      requested: symbols.length, received, partial,
-      path: dbg?.path, mapSize: dbg?.mapStats?.size, cgKey: dbg?.env?.hasCgKey
+    // === 🔑 ADD: results[] voor de UI ===
+    // We mappen terug naar de originele (mogelijk Binance) symbols
+    // Voor d (24h) nemen we CG/Yahoo changePercent; w/m laten we ongemoeid.
+    const results = originalSymbols.map(symRaw => {
+      const base = toBaseSymbol(symRaw) || symRaw.toUpperCase()
+      const q = data.quotes[base]
+      return {
+        symbol: symRaw,                                 // bv. BTCUSDT
+        price: q?.regularMarketPrice ?? null,           // prijs
+        d: q?.regularMarketChangePercent ?? null,       // 24h %
+        w: null as number | null,                       // laat zoals het was in de UI
+        m: null as number | null,
+      }
     })
 
     return res.status(200).json({
       quotes: data.quotes,
+      results, // ⬅️ nieuw
       meta: {
         requested: symbols.length,
         received,
@@ -398,6 +389,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     if (debug) err(req, 'FATAL handler error', e?.message || e)
     return res.status(200).json({
       quotes: {},
+      results: [],
       meta: {
         requested: 0,
         received: 0,
@@ -405,7 +397,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         errors: [String(e?.message || e)],
         used: 'error',
         ...(debug ? { debug: {
-          ...dbg,
+          ...dbg!,
           timings: { ...(dbg?.timings||{}), total_ms: Math.round(time() - t0) },
         }} : {})
       }
