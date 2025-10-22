@@ -5,8 +5,8 @@ import { getYahooDailyOHLC } from '@/lib/providers/quote'
 
 export const config = { runtime: 'nodejs' }
 
-const TTL_SEC = 300          // 5 min cache in KV
-const REVALIDATE_SEC = 20    // bij ≤20s resterend, achtergrond refresh
+const TTL_SEC = 300
+const REVALIDATE_SEC = 20
 const RANGE: '1y' | '2y' = '1y'
 
 type Bar = { close?: number; volume?: number }
@@ -14,16 +14,19 @@ type Advice = 'BUY'|'SELL'|'HOLD'
 
 type SnapResp = {
   symbol: string
-  // ✨ nieuw:
+  // prijs & dag
   price?: number | null
   change?: number | null
   changePct?: number | null
-  // bestaand:
+  // ✨ nieuw: 7/30 "dagen" (bars) performance
+  ret7Pct?: number | null
+  ret30Pct?: number | null
+  // indicatoren
   ma?: { ma50: number | null; ma200: number | null; status?: Advice }
   rsi?: number | null
   macd?: { macd: number | null; signal: number | null; hist: number | null }
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  // ✨ nieuw:
+  // samengestelde score
   score?: number
 }
 
@@ -59,7 +62,6 @@ const sma = (arr: number[], p: number): number | null => {
   return s.reduce((a, b) => a + b, 0) / p
 }
 
-// Wilder's RSI(14)
 function rsiWilder(closes: number[], period = 14): number | null {
   if (closes.length < period + 1) return null
   let gains = 0, losses = 0
@@ -107,8 +109,9 @@ function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
   return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
 }
 
-// ✨ score-helpers (zelfde weging als je snapshot-list)
-const adv = (v:number|null, lo:number, hi:number): Advice => v==null?'HOLD':(v<lo?'SELL':v>hi?'BUY':'HOLD')
+// score helpers (zelfde weging)
+const adv = (v:number|null, lo:number, hi:number): Advice =>
+  v==null?'HOLD':(v<lo?'SELL':v>hi?'BUY':'HOLD')
 const scoreFrom = (ma:Advice, macd:Advice, rsi:Advice, vol:Advice) => {
   const pts = (s:Advice)=> s==='BUY'?2:s==='SELL'?-2:0
   const n = (p:number)=> (p+2)/4
@@ -140,13 +143,19 @@ async function computeOne(symbol: string): Promise<SnapResp> {
       ? volume / avg20d
       : null
 
-  // ✨ prijs en dag% uit close→close (zoals AEX effectief doet)
+  // prijs/dag
   const last = closes.length ? closes[closes.length - 1] : null
   const prev = closes.length > 1 ? closes[closes.length - 2] : null
   const change = (last != null && prev != null) ? last - prev : null
   const changePct = (change != null && prev) ? (change / prev * 100) : null
 
-  // ✨ samengestelde score (zelfde weging als snapshot-list)
+  // ✨ 7/30 bars terug (praktisch ≈ 7/30 dagen trading)
+  const pctFromBars = (n:number) =>
+    closes.length > n ? ((closes[closes.length-1] / closes[closes.length-1-n]) - 1) * 100 : null
+  const ret7Pct  = pctFromBars(7)
+  const ret30Pct = pctFromBars(30)
+
+  // score
   const macdStatus: Advice = (macd!=null && signal!=null)
     ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
     : 'HOLD'
@@ -159,6 +168,8 @@ async function computeOne(symbol: string): Promise<SnapResp> {
     price: last ?? null,
     change,
     changePct,
+    ret7Pct,
+    ret30Pct,
     ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
     rsi: rsi ?? null,
     macd: { macd: macd ?? null, signal: signal ?? null, hist: hist ?? null },
@@ -179,7 +190,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
-    // Per symbool een KV-cache + refresh
     const items = await Promise.all(
       symbols.map(async (sym) => {
         const key = `ind:snapshot:${sym}:${RANGE}`

@@ -12,6 +12,8 @@ type SnapItem = {
   price?: number | null
   change?: number | null
   changePct?: number | null
+  ret7Pct?: number | null
+  ret30Pct?: number | null
   ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
   rsi?:   number | null
   macd?:  { macd: number | null; signal: number | null; hist: number | null }
@@ -24,9 +26,7 @@ function num(v: number | null | undefined, d = 2) {
 }
 function fmtPrice(v: number | null | undefined, ccy: string = 'USD') {
   if (v == null || !Number.isFinite(v)) return '—'
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy }).format(v as number)
-  } catch {}
+  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy }).format(v as number) } catch {}
   return (v as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 const pctCls = (p?: number | null) =>
@@ -55,7 +55,7 @@ async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promi
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
 
-  // 1) Snapshot (batches, vervangt quotes + snapshot-list)
+  // 1) Snapshot (batches, vervangt quotes + snapshot-list + ret-batch)
   const [items, setItems] = useState<SnapItem[]>([])
   const [snapErr, setSnapErr] = useState<string | null>(null)
 
@@ -84,32 +84,6 @@ export default function Sp500Page() {
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // 2) 7d/30d returns (batches)
-  const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
-  const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
-  useEffect(() => {
-    let aborted=false
-    async function loadDays(days:7|30){
-      const groups = chunk(symbols, CHUNK)
-      const parts = await pool(groups, 4, async (group, gi) => {
-        if (gi) await sleep(80)
-        const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(group.join(','))}`
-        const r = await fetch(url, { cache:'no-store' }); if (!r.ok) return { items: [] as any[] }
-        return r.json() as Promise<{ items:{ symbol:string; days:number; pct:number|null }[] }>
-      })
-      const map: Record<string, number> = {}
-      parts.forEach(p => p.items?.forEach(it => {
-        if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number
-      }))
-      return map
-    }
-    ;(async()=>{
-      const [m7,m30] = await Promise.all([loadDays(7), loadDays(30)])
-      if(!aborted){ setRet7Map(m7); setRet30Map(m30) }
-    })()
-    return ()=>{aborted=true}
-  }, [symbols])
-
   // Hydration-safe clock
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
@@ -124,7 +98,7 @@ export default function Sp500Page() {
     return m
   }, [items])
 
-  // Summary + heatmap (zelfde UI; data nu uit snapshot i.p.v. quotes)
+  // Summary + heatmap (zelfde UI; alles uit snapshot)
   const summary = useMemo(() => {
     const rows = SP500.map(a => bySym[a.symbol]).filter(Boolean) as SnapItem[]
     const total = rows.length
@@ -189,8 +163,8 @@ export default function Sp500Page() {
                     const price = fmtPrice(it?.price, 'USD')
                     const chg = it?.change
                     const pct = it?.changePct
-                    const r7  = ret7Map[row.symbol]
-                    const r30 = ret30Map[row.symbol]
+                    const r7  = Number(it?.ret7Pct)
+                    const r30 = Number(it?.ret30Pct)
                     const score = Number(it?.score)
 
                     return (
@@ -211,10 +185,10 @@ export default function Sp500Page() {
                             : '—'}
                         </td>
                         <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r7)}`}>
-                          {Number.isFinite(r7 as number) ? `${(r7 as number) >= 0 ? '+' : ''}${num(r7, 2)}%` : '—'}
+                          {Number.isFinite(r7) ? `${r7 >= 0 ? '+' : ''}${num(r7, 2)}%` : '—'}
                         </td>
                         <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r30)}`}>
-                          {Number.isFinite(r30 as number) ? `${(r30 as number) >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
+                          {Number.isFinite(r30) ? `${r30 >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center justify-start">
