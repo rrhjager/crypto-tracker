@@ -10,13 +10,21 @@ const REVALIDATE_SEC = 20    // bij ≤20s resterend, achtergrond refresh
 const RANGE: '1y' | '2y' = '1y'
 
 type Bar = { close?: number; volume?: number }
+type Advice = 'BUY'|'SELL'|'HOLD'
 
 type SnapResp = {
   symbol: string
-  ma?: { ma50: number | null; ma200: number | null; status?: 'BUY'|'SELL'|'HOLD' }
+  // ✨ nieuw:
+  price?: number | null
+  change?: number | null
+  changePct?: number | null
+  // bestaand:
+  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
   rsi?: number | null
   macd?: { macd: number | null; signal: number | null; hist: number | null }
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  // ✨ nieuw:
+  score?: number
 }
 
 type ApiResp = { items: SnapResp[] }
@@ -99,6 +107,16 @@ function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
   return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
 }
 
+// ✨ score-helpers (zelfde weging als je snapshot-list)
+const adv = (v:number|null, lo:number, hi:number): Advice => v==null?'HOLD':(v<lo?'SELL':v>hi?'BUY':'HOLD')
+const scoreFrom = (ma:Advice, macd:Advice, rsi:Advice, vol:Advice) => {
+  const pts = (s:Advice)=> s==='BUY'?2:s==='SELL'?-2:0
+  const n = (p:number)=> (p+2)/4
+  const W_MA=.40, W_MACD=.30, W_RSI=.20, W_VOL=.10
+  const agg = W_MA*n(pts(ma)) + W_MACD*n(pts(macd)) + W_RSI*n(pts(rsi)) + W_VOL*n(pts(vol))
+  return Math.round(Math.max(0, Math.min(1, agg)) * 100)
+}
+
 async function computeOne(symbol: string): Promise<SnapResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
@@ -106,9 +124,9 @@ async function computeOne(symbol: string): Promise<SnapResp> {
 
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
-  const status =
+  const maStatus: Advice | undefined =
     typeof ma50 === 'number' && typeof ma200 === 'number'
-      ? ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD'
+      ? (ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD')
       : undefined
 
   const rsi = rsiWilder(closes, 14)
@@ -122,12 +140,30 @@ async function computeOne(symbol: string): Promise<SnapResp> {
       ? volume / avg20d
       : null
 
+  // ✨ prijs en dag% uit close→close (zoals AEX effectief doet)
+  const last = closes.length ? closes[closes.length - 1] : null
+  const prev = closes.length > 1 ? closes[closes.length - 2] : null
+  const change = (last != null && prev != null) ? last - prev : null
+  const changePct = (change != null && prev) ? (change / prev * 100) : null
+
+  // ✨ samengestelde score (zelfde weging als snapshot-list)
+  const macdStatus: Advice = (macd!=null && signal!=null)
+    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
+    : 'HOLD'
+  const rsiStatus: Advice = rsi==null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
+  const volStatus: Advice = adv(ratio, 0.8, 1.2)
+  const score = scoreFrom(maStatus ?? 'HOLD', macdStatus, rsiStatus, volStatus)
+
   return {
     symbol,
-    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status },
+    price: last ?? null,
+    change,
+    changePct,
+    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
     rsi: rsi ?? null,
     macd: { macd: macd ?? null, signal: signal ?? null, hist: hist ?? null },
     volume: { volume: volume ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null },
+    score,
   }
 }
 
