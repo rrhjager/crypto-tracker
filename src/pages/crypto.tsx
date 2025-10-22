@@ -1,4 +1,4 @@
-// src/pages/crypto.tsx  (of src/pages/crypto/index.tsx)
+// src/pages/crypto.tsx
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
@@ -29,7 +29,7 @@ function formatFiat(n: number | null | undefined) {
 const fmtPct = (v: number | null | undefined) =>
   (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 
-// Binance-fallback voor indicators
+// Binance-pair fallback voor indicators
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
@@ -37,9 +37,9 @@ const toBinancePair = (symbol: string) => {
   return `${s}USDT`
 }
 
-/* ========== Types van je light-indicators API ========== */
+/* ====== Types ====== */
 type IndResp = {
-  symbol: string // ← Binance pair, bv. BTCUSDT
+  symbol: string // Binance pair, bv. BTCUSDT
   ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
@@ -47,7 +47,6 @@ type IndResp = {
   perf?: { d: number|null; w: number|null; m: number|null }
 }
 
-/* ====== detail→home handshake (optioneel) ====== */
 type LocalTA = { score: number; status: Status; ts: number }
 const TA_KEY_PREFIX = 'ta:'
 function readAllLocalTA(): Map<string, LocalTA> {
@@ -72,7 +71,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ====== kleine helpers ====== */
+/* ====== utils ====== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -90,7 +89,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ====== Widgets (ongewijzigd) ====== */
+/* ====== Widgets ====== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -147,6 +146,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
         <h3 className="font-bold">Dagelijkse samenvatting</h3>
         <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
       </div>
+
       <div className="grid grid-cols-3 gap-2 mb-3">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">BUY</div>
@@ -161,10 +161,12 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
           <div className="flex items-end justify-between"><div className="text-lg font-bold text-red-300">{pct(sell)}%</div><div className="text-xs text-white/60">{sell}/{total}</div></div>
         </div>
       </div>
+
       <div className="grid grid-cols-2 gap-2 mb-3">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Breadth (24h groen)</div><div className="text-lg font-bold">{greenPct}%</div></div>
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Gem. score</div><div className="text-lg font-bold">{avgScore}</div></div>
       </div>
+
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">Top scores</div>
@@ -195,6 +197,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
 
 function Heatmap({ rows }: { rows: any[] }) {
   const [filter, setFilter] = useState<StatusFilter>('ALL')
+
   const filtered = useMemo(() => {
     if (!rows) return []
     if (filter === 'ALL') return rows
@@ -233,7 +236,10 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
-      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}>
+      <div
+        className="grid gap-1.5"
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
+      >
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
           const status = (c.status as Status) || 'HOLD'
@@ -270,9 +276,9 @@ function PageInner() {
       const fallback = toBinancePair(c.symbol)
       return {
         slug: (c.slug || c.symbol.toLowerCase()),
-        symbol: c.symbol,              // ← pure ticker (BTC/ETH/…)
+        symbol: c.symbol,              // pure ticker (BTC/ETH/…)
         name: c.name,
-        binance: fromList || fallback, // ← voor indicators fetch
+        binance: fromList || fallback, // voor indicators fetch
         _rank: i,
         _price: null as number | null,
         _d: null as number | null,
@@ -348,7 +354,7 @@ function PageInner() {
     return () => { aborted = true; clearInterval(id) }
   }, [binanceSymbols])
 
-  // 5) Prijzen (direct per ticker, NIET via binance pair)
+  // 5) Prijzen per ticker (BTC, ETH, …)
   const tickers = useMemo(
     () => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))),
     [baseRows]
@@ -360,25 +366,28 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  // Maak een map per ticker uit óf quotes óf results (wat er beschikbaar is)
+  // quotes + results MERGEN → altijd price + 24h d
   const pxByTicker = useMemo(() => {
     const map = new Map<string, { price: number | null, d: number | null }>()
     const quotes = pxData?.quotes as Record<string, any> | undefined
     const results = pxData?.results as Array<{symbol:string, price:number|null, d:number|null}> | undefined
 
-    if (quotes && Object.keys(quotes).length) {
+    if (quotes) {
       for (const [sym, q] of Object.entries(quotes)) {
-        map.set(sym.toUpperCase(), {
-          price: Number.isFinite(Number((q as any).regularMarketPrice)) ? Number((q as any).regularMarketPrice) : null,
-          d: Number.isFinite(Number((q as any).regularMarketChangePercent)) ? Number((q as any).regularMarketChangePercent) : null
-        })
+        const base = String(sym).toUpperCase()
+        const price = Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q.regularMarketPrice) : null
+        const d     = Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q.regularMarketChangePercent) : null
+        map.set(base, { price, d })
       }
-    } else if (Array.isArray(results)) {
+    }
+    if (Array.isArray(results)) {
       for (const r of results) {
-        map.set(String(r.symbol || '').toUpperCase(), {
-          price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
-          d: Number.isFinite(Number(r.d)) ? Number(r.d) : null
-        })
+        const base = String(r.symbol || '').toUpperCase()
+        if (!base) continue
+        const prev = map.get(base)
+        const price = Number.isFinite(Number(r.price)) ? Number(r.price) : (prev?.price ?? null)
+        const d     = Number.isFinite(Number(r.d))     ? Number(r.d)     : (prev?.d ?? null)
+        map.set(base, { price, d })
       }
     }
     return map
@@ -392,7 +401,7 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // 7) Rijen bouwen (score/status + prijs + d/w/m)
+  // 7) Rijen bouwen
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
@@ -402,14 +411,13 @@ function PageInner() {
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
-      // lokale override (detailpagina) via binance-key
       const ta = c.binance ? readAllLocalTA().get(c.binance) : undefined
       if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
         if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      const px = pxByTicker.get(symU) // ← direct op ticker (BTC/ETH/…)
+      const px = pxByTicker.get(symU) // direct op ticker
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
