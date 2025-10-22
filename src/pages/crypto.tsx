@@ -4,64 +4,66 @@ import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { COINS } from '@/lib/coins'
-import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
-function formatFiat(n: number | null | undefined) {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
-  const v = Number(n)
-  if (v >= 1000) return v.toLocaleString('nl-NL', { maximumFractionDigits: 0 })
-  if (v >= 1)    return v.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
-  return v.toLocaleString('nl-NL', { maximumFractionDigits: 6 })
-}
-const fmtPct = (v: number | null | undefined) =>
-  (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
-
-type Status = 'BUY'|'HOLD'|'SELL'
+type Status = 'BUY' | 'HOLD' | 'SELL'
 type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
-function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)) }
-function colorStops(status: Status, score: number) {
-  const s = clamp(score, 0, 100)
-  let hue = 38, sat = 70, light = 42
-  if (status === 'BUY')  { hue = 142; sat = 65; light = 44 - 12 * clamp((s - 66) / 34, 0, 1) }
-  if (status === 'SELL') { hue = 0;   sat = 70; light = 44 - 12 * clamp((33 - s) / 33, 0, 1) }
-  const c1 = `hsl(${hue} ${sat}% ${light}%)`
-  const c2 = `hsl(${hue} ${sat}% ${clamp(light + 8, 20, 62)}%)`
-  return { c1, c2 }
-}
+
 function statusFromScore(score: number): Status {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
 
-// Binance-pair fallback: SYMBOLUSDT behalve stablecoins
+function formatFiat(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  const v = Number(n)
+  if (v >= 1000) return v.toLocaleString('nl-NL', { maximumFractionDigits: 0 })
+  if (v >= 1) return v.toLocaleString('nl-NL', { maximumFractionDigits: 2 })
+  return v.toLocaleString('nl-NL', { maximumFractionDigits: 6 })
+}
+const fmtPct = (v: number | null | undefined) =>
+  (v == null || !Number.isFinite(Number(v))) ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
+
+// Binance-pair fallback: SYMBOL → SYMBOLUSDT (geen stablecoins)
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
+  const skip = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
 
-// ✅ ROBUUST: haal base uit allerlei notaties (BTCUSDT, BTCUSD, BTC-USD, BTC/USD)
-const toBaseTicker = (pair: string | null | undefined): string | null => {
-  if (!pair) return null
-  const clean = pair.toUpperCase().replace(/[^A-Z0-9]/g, '') // strip -, /
+// BTCUSDT / BTCUSD / BTC-USD / BTC/USD -> BTC
+const toBaseTicker = (pairOrSym: string | null | undefined): string | null => {
+  if (!pairOrSym) return null
+  const clean = pairOrSym.toUpperCase().replace(/[^A-Z0-9]/g, '')
   const base = clean.replace(/(USDT|USD|USDC|BUSD|FDUSD|TUSD)$/, '')
   return base || null
 }
 
+/* ====== API shapes ====== */
 type IndResp = {
   symbol: string
-  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
-  rsi?: number|null
-  macd?: { macd: number|null; signal: number|null; hist: number|null }
-  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  ma?: { ma50: number | null; ma200: number | null; cross: 'Golden Cross' | 'Death Cross' | '—' }
+  rsi?: number | null
+  macd?: { macd: number | null; signal: number | null; hist: number | null }
+  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  // backend levert dit ook mee: gebruiken we voor 7d/30d
+  perf?: { d: number | null; w: number | null; m: number | null; q?: number | null }
   score?: number
   status?: Status
   error?: string
+}
+
+type PriceApi = {
+  quotes: Record<string, {
+    symbol: string
+    regularMarketPrice: number | null
+    regularMarketChangePercent: number | null
+    currency?: string
+  }>
 }
 
 /* ====== detail→home localStorage handshake ====== */
@@ -89,7 +91,7 @@ function readAllLocalTA(): Map<string, LocalTA> {
   return out
 }
 
-/* ====== fetch utils ====== */
+/* ====== small utils ====== */
 async function fetchJSON(url: string, { timeoutMs = 9000 } = {}) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -107,7 +109,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-/* ====== rechterkolom ====== */
+/* ====== rechterkolom widgets (zoals bij jou) ====== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
@@ -154,7 +156,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
   const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
   const greenPct = pct(rows.filter(r => (r._d ?? 0) >= 0).length)
 
-  const byScore = [...rows].sort((a,b)=> (b._score ?? 0) - (a._score ?? 0))
+  const byScore = [...rows].sort((a, b) => (b._score ?? 0) - (a._score ?? 0))
   const topUp = byScore.slice(0, Math.min(3, byScore.length))
   const topDown = [...byScore].reverse().slice(0, Math.min(3, byScore.length))
 
@@ -254,21 +256,6 @@ function Heatmap({ rows }: { rows: any[] }) {
         </div>
       </div>
 
-      <div className="mb-2 flex items-center gap-3 text-[10px] text-white/70">
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(142 65% 36%)' }} />
-          BUY
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(38 70% 42%)' }} />
-          HOLD
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: 'hsl(0 70% 36%)' }} />
-          SELL
-        </span>
-      </div>
-
       <div
         className="grid gap-1.5"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}
@@ -276,31 +263,22 @@ function Heatmap({ rows }: { rows: any[] }) {
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
           const status = (c.status as Status) || 'HOLD'
-          const { c1, c2 } = colorStops(status, score)
+          // simpele kleur (zelfde als je had)
+          const cls =
+            status === 'BUY' ? 'bg-green-500/20 ring-green-500/30' :
+            status === 'SELL' ? 'bg-red-500/20 ring-red-500/30' :
+            'bg-amber-500/20 ring-amber-500/30'
           return (
             <Link
               key={c.slug}
               href={`/crypto/${c.slug}`}
               title={`${c.name} (${c.symbol}) • ${status} · ${Math.round(score)}`}
-              className={[
-                'group rounded-[10px] ring-1 ring-white/10',
-                'shadow-[0_6px_16px_rgba(0,0,0,0.30)] hover:shadow-[0_10px_22px_rgba(0,0,0,0.35)]',
-                'transition-transform duration-150 hover:-translate-y-0.5'
-              ].join(' ')}
-              style={{
-                background: `linear-gradient(135deg, ${c1}, ${c2})`,
-                color: '#fff',
-                aspectRatio: '1 / 1',
-              }}
+              className={`group rounded-[10px] ring-1 ${cls} text-white text-center`}
+              style={{ aspectRatio: '1 / 1' }}
             >
-              <div className="relative h-full w-full flex flex-col items-center justify-center">
-                <div className="text-[10px] font-extrabold leading-none tracking-wide drop-shadow-sm">
-                  {c.symbol}
-                </div>
-                <div className="mt-0.5 text-[9px] opacity-95 leading-none">
-                  {Math.round(score)}
-                </div>
-                <div className="pointer-events-none absolute inset-0 rounded-[10px] ring-1 ring-white/10" />
+              <div className="h-full w-full flex flex-col items-center justify-center">
+                <div className="text-[10px] font-extrabold leading-none tracking-wide">{c.symbol}</div>
+                <div className="mt-0.5 text-[9px] opacity-95 leading-none">{Math.round(score)}</div>
               </div>
             </Link>
           )
@@ -310,11 +288,12 @@ function Heatmap({ rows }: { rows: any[] }) {
   )
 }
 
-/* ====== pagina ====== */
+/* ===================== PAGE ===================== */
 type SortKey = 'fav' | 'coin' | 'price' | 'd' | 'w' | 'm' | 'status'
 type SortDir = 'asc' | 'desc'
 
 function PageInner() {
+  // basis-rows uit COINS + binance pair fallback
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
       const fromList = (c as any)?.pairUSD?.binance as string | null | undefined
@@ -336,6 +315,7 @@ function PageInner() {
     })
   }, [])
 
+  // favorieten
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
@@ -355,6 +335,7 @@ function PageInner() {
     })
   }
 
+  // local TA uit detail
   const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(new Map())
   useEffect(() => {
     setLocalTA(readAllLocalTA())
@@ -366,7 +347,7 @@ function PageInner() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // Indicators (batched)
+  // ---------- Indicators ophalen (batches, elke 60s) ----------
   const symbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
   const [indBySym, setIndBySym] = useState<Map<string, IndResp>>(new Map())
   const [indUpdatedAt, setIndUpdatedAt] = useState<number | undefined>(undefined)
@@ -374,72 +355,59 @@ function PageInner() {
   useEffect(() => {
     if (!symbols.length) return
     let aborted = false
+
     async function runOnce() {
-      try {
-        const groups = chunk(symbols, 12)
-        await Promise.all(groups.map(async (group, gi) => {
-          if (gi) await new Promise(r => setTimeout(r, 120 * gi))
-          const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
-          try {
-            const j = await fetchJSON(url, { timeoutMs: 9000 })
-            const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
-            if (aborted) return
-            setIndBySym(prev => {
-              const next = new Map(prev)
-              for (const it of arr) next.set(it.symbol, it)
-              return next
-            })
-            setIndUpdatedAt(Date.now())
-          } catch {}
-        }))
-      } finally {}
+      const groups = chunk(symbols, 12)
+      await Promise.all(groups.map(async (group, gi) => {
+        if (gi) await new Promise(r => setTimeout(r, 120 * gi))
+        const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
+        try {
+          const j = await fetchJSON(url, { timeoutMs: 9000 })
+          const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
+          if (aborted) return
+          setIndBySym(prev => {
+            const next = new Map(prev)
+            for (const it of arr) next.set(it.symbol, it)
+            return next
+          })
+          setIndUpdatedAt(Date.now())
+        } catch {}
+      }))
     }
+
     runOnce()
     const id = setInterval(runOnce, 60_000)
     return () => { aborted = true; clearInterval(id) }
   }, [symbols])
 
-  // ✅ Prijs + 24h% uit /api/crypto-light/prices (mapping via toBaseTicker)
-  const baseToBinance = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const s of symbols) {
-      const base = toBaseTicker(s)
-      if (base) m.set(base, s) // bv. 'BTC' -> 'BTCUSDT' of 'BTCUSD'
-    }
-    return m
+  // ---------- Prijzen ophalen (via quotes-object) ----------
+  const bases = useMemo(() => {
+    const b = symbols.map(s => toBaseTicker(s)).filter(Boolean) as string[]
+    // de /api/crypto-light/prices endpoint verwacht bv "BTC,ETH,SOL"
+    return Array.from(new Set(b))
   }, [symbols])
 
-  const cgSymbolsCsv = useMemo(() => Array.from(baseToBinance.keys()).join(','), [baseToBinance])
-
-  type PriceApi = {
-    quotes: Record<string, {
-      symbol: string
-      regularMarketPrice: number | null
-      regularMarketChangePercent: number | null
-      currency?: string
-    }>
-  }
-
   const { data: pxData } = useSWR<PriceApi>(
-    cgSymbolsCsv ? `/api/crypto-light/prices?symbols=${encodeURIComponent(cgSymbolsCsv)}` : null,
+    bases.length ? `/api/crypto-light/prices?symbols=${encodeURIComponent(bases.join(','))}` : null,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  const pxBySym = useMemo(() => {
-    const map = new Map<string, { price: number|null, d: number|null, w: number|null, m: number|null }>()
-    const quotes = pxData?.quotes || {}
-    for (const [base, q] of Object.entries(quotes)) {
-      const binanceSym = baseToBinance.get(base)
-      if (!binanceSym) continue
-      const price = Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null
-      const dPct  = Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null
-      map.set(binanceSym, { price, d: dPct, w: null, m: null })
+  const pxByBase = useMemo(() => {
+    const map = new Map<string, { price: number | null, d: number | null }>()
+    const quotes = (pxData as any)?.quotes as PriceApi['quotes'] | undefined
+    if (quotes) {
+      for (const [base, q] of Object.entries(quotes)) {
+        map.set(base.toUpperCase(), {
+          price: Number.isFinite(Number(q.regularMarketPrice)) ? Number(q.regularMarketPrice) : null,
+          d: Number.isFinite(Number(q.regularMarketChangePercent)) ? Number(q.regularMarketChangePercent) : null
+        })
+      }
     }
     return map
-  }, [pxData, baseToBinance])
+  }, [pxData])
 
-  // Sorting
+  // ---------- Sorting ----------
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
@@ -447,57 +415,67 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // rows verrijken met score + prijs/perf
+  // ---------- rows opbouwen ----------
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
-      const ind  = c.binance ? indBySym.get(c.binance) : undefined
+      const ind = c.binance ? indBySym.get(c.binance) : undefined
 
-      const result = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
-      let finalScore = Number(result?.score ?? 50)
+      // score altijd via dezelfde helper als elders
+      const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
+      let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 
+      // verse local override (detailpagina)
       const localKey = c.binance
       if (localKey) {
-        const ta = localTA.get(localKey)
+        const ta = (readAllLocalTA().get(localKey) ?? null) || null
         if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
           if (Number.isFinite(ta.score)) finalScore = ta.score
           if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
         }
       }
 
-      const px = c.binance ? pxBySym.get(c.binance) : undefined
+      // prijzen uit quotes (base-ticker)
+      const base = toBaseTicker(c.binance)
+      const px = base ? pxByBase.get(base) : undefined
+
+      // 7d/30d uit indicators.perf (indicators biedt dat al)
+      const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
+      const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
+
       return {
         ...c,
         _fav: faves.includes(symU),
         _score: finalScore,
         status: finalStatus,
         _price: px?.price ?? null,
-        _d: px?.d ?? null,
-        _w: px?.w ?? null,
-        _m: px?.m ?? null,
+        _d: px?.d ?? null,   // 24h %
+        _w: w,
+        _m: m,
       }
     })
+
     const dir = sortDir === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
       switch (sortKey) {
-        case 'fav':   return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
-        case 'coin':  return (a._rank - b._rank) * dir
+        case 'fav': return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
+        case 'coin': return (a._rank - b._rank) * dir
         case 'price':
           if (a._price == null && b._price == null) return 0
           if (a._price == null) return 1
           if (b._price == null) return -1
           return (a._price - b._price) * dir
-        case 'd':     return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
-        case 'w':     return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
-        case 'm':     return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
-        case 'status':return (a._score - b._score) * dir
-        default:      return 0
+        case 'd': return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
+        case 'w': return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
+        case 'm': return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
+        case 'status': return (a._score - b._score) * dir
+        default: return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxBySym, localTA])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase])
 
-  const updatedAt = (indUpdatedAt || pxData) ? (indUpdatedAt ?? Date.now()) : undefined
+  const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
@@ -509,6 +487,7 @@ function PageInner() {
       </header>
 
       <div className="grid gap-6 lg:grid-cols-12">
+        {/* LINKS: TABEL */}
         <div className="lg:col-span-8">
           <div className="table-card overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -552,7 +531,7 @@ function PageInner() {
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
                   const statusByScore: Status = statusFromScore(scoreNum)
                   const badgeCls =
-                    statusByScore === 'BUY'  ? 'badge-buy'  :
+                    statusByScore === 'BUY' ? 'badge-buy' :
                     statusByScore === 'SELL' ? 'badge-sell' : 'badge-hold'
 
                   return (
@@ -599,6 +578,7 @@ function PageInner() {
           </div>
         </div>
 
+        {/* RECHTS: AI-ADVIES + SAMENVATTING + HEATMAP */}
         <div className="lg:col-span-4">
           <div className="sticky top-6 space-y-6">
             <AISummary rows={rows} updatedAt={updatedAt} />
