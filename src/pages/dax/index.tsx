@@ -7,211 +7,131 @@ import { DAX } from '@/lib/dax'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
-type Quote = {
+type SnapItem = {
   symbol: string
-  regularMarketPrice: number | null
-  regularMarketChange: number | null
-  regularMarketChangePercent: number | null
-  currency?: string
+  price?: number | null
+  change?: number | null
+  changePct?: number | null
+  ret7Pct?: number | null
+  ret30Pct?: number | null
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   number | null
+  macd?:  { macd: number | null; signal: number | null; hist: number | null }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null }
+  score?: number
 }
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status: Advice; points: number }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status: Advice; points: number }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status: Advice; points: number }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status: Advice; points: number }
 
 function num(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
-function fmtPrice(v: number | null | undefined, ccy?: string) {
+function fmtPrice(v: number | null | undefined, ccy: string = 'EUR') {
   if (v == null || !Number.isFinite(v)) return '—'
-  try {
-    if (ccy) return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: ccy }).format(v as number)
-  } catch {}
+  try { return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: ccy }).format(v as number) } catch {}
   return (v as number).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
 
-function statusFromScore(score: number): Advice {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
+const statusFromScore = (score?: number): Advice => {
+  const s = Number(score)
+  if (!Number.isFinite(s)) return 'HOLD'
+  return s >= 66 ? 'BUY' : s <= 33 ? 'SELL' : 'HOLD'
+}
+
+// batching helpers (zelfde als NASDAQ/SP500/Dow)
+const CHUNK = 50
+const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
+function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
+async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promise<R[]>{
+  const out: R[] = new Array(arr.length) as any
+  let i=0
+  const workers = new Array(Math.min(n,arr.length)).fill(0).map(async()=> {
+    while(true){ const idx=i++; if(idx>=arr.length) break; out[idx]=await fn(arr[idx], idx) }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 export default function Dax() {
   const symbols = useMemo(() => DAX.map(x => x.symbol), [])
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
-  const [qErr, setQErr] = useState<string | null>(null)
 
-  // Quotes (poll)
+  // 1) Snapshot (batches, één endpoint voor alles)
+  const [items, setItems] = useState<SnapItem[]>([])
+  const [snapErr, setSnapErr] = useState<string | null>(null)
+
   useEffect(() => {
-    let timer: any, aborted = false
+    let timer:any, aborted=false
     async function load() {
       try {
-        setQErr(null)
-        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j: { quotes: Record<string, Quote> } = await r.json()
-        if (!aborted) setQuotes(j.quotes || {})
-      } catch (e: any) {
-        if (!aborted) setQErr(String(e?.message || e))
+        setSnapErr(null)
+        const groups = chunk(symbols, CHUNK)
+        const parts = await pool(groups, 4, async (group, gi) => {
+          if (gi) await sleep(80)
+          const url = `/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
+          const r = await fetch(url, { cache:'no-store' })
+          if (!r.ok) throw new Error(`HTTP ${r.status} @ snapshot[${gi}]`)
+          const j: { items: SnapItem[] } = await r.json()
+          return j.items || []
+        })
+        if (!aborted) setItems(parts.flat())
+      } catch (e:any) {
+        if (!aborted) setSnapErr(String(e?.message || e))
       } finally {
-        if (!aborted) timer = setTimeout(load, 20000)
+        if (!aborted) timer = setTimeout(load, 30000) // elke 30s verversen
       }
     }
     load()
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // Samengesteld advies per symbool (scores 0..100)
-  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
-  useEffect(() => {
-    let aborted = false
-
-    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-    const toPts = (status?: Advice, pts?: number | null) => {
-      if (Number.isFinite(pts as number)) return clamp(Number(pts), -2, 2)
-      if (status === 'BUY') return 2
-      if (status === 'SELL') return -2
-      return 0
-    }
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-
-    async function calcFor(sym: string): Promise<number | null> {
-      try {
-        const [rMa, rRsi, rMacd, rVol] = await Promise.all([
-          fetch(`/api/indicators/ma-cross/${encodeURIComponent(sym)}`, { cache: 'no-store' }),
-          fetch(`/api/indicators/rsi/${encodeURIComponent(sym)}?period=14`, { cache: 'no-store' }),
-          fetch(`/api/indicators/macd/${encodeURIComponent(sym)}?fast=12&slow=26&signal=9`, { cache: 'no-store' }),
-          fetch(`/api/indicators/vol20/${encodeURIComponent(sym)}?period=20`, { cache: 'no-store' }),
-        ])
-        if (!(rMa.ok && rRsi.ok && rMacd.ok && rVol.ok)) return null
-
-        const [ma, rsi, macd, vol] = await Promise.all([rMa.json(), rRsi.json(), rMacd.json(), rVol.json()]) as [MaCrossResp, RsiResp, MacdResp, Vol20Resp]
-
-        const pMA   = toPts(ma?.status,   ma?.points)
-        const pMACD = toPts(macd?.status, macd?.points)
-        const pRSI  = toPts(rsi?.status,  rsi?.points)
-        const pVOL  = toPts(vol?.status,  vol?.points)
-
-        const nMA   = (pMA   + 2) / 4
-        const nMACD = (pMACD + 2) / 4
-        const nRSI  = (pRSI  + 2) / 4
-        const nVOL  = (pVOL  + 2) / 4
-
-        const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-        return Math.round(agg * 100)
-      } catch {
-        return null
-      }
-    }
-
-    async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-      const out: R[] = new Array(arr.length) as any
-      let i = 0
-      const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= arr.length) break
-          out[idx] = await fn(arr[idx], idx)
-        }
-      })
-      await Promise.all(workers)
-      return out
-    }
-
-    ;(async () => {
-      const list = DAX.map(x => x.symbol)
-      const results = await pool(list, 4, async (sym, idx) => {
-        if (idx) await sleep(80)
-        return await calcFor(sym)
-      })
-      if (!aborted) {
-        const map: Record<string, number> = {}
-        results.forEach((s, i) => { if (Number.isFinite(s as number)) map[list[i]] = s as number })
-        setScoreMap(map)
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
-  // 7d / 30d procent-verandering (batch)
-  const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
-  const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
-
-  useEffect(() => {
-    let aborted = false
-    const list = DAX.map(x => x.symbol)
-
-    async function loadDays(days: 7 | 30) {
-      const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(list.join(','))}`
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) return {}
-      const j = await r.json() as { items: { symbol: string; days: number; pct: number | null }[] }
-      const map: Record<string, number> = {}
-      j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
-      return map
-    }
-
-    ;(async () => {
-      const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
-      if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
-    })()
-
-    return () => { aborted = true }
-  }, [])
-
   // Hydration-safe klok
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
-    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
-    upd()
-    const id = setInterval(upd, 1000)
-    return () => clearInterval(id)
+    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12:false }))
+    upd(); const id=setInterval(upd,1000); return ()=>clearInterval(id)
   }, [])
 
-  // Samenvatting
+  // Index: sym -> snapshot item
+  const bySym = useMemo(() => {
+    const m: Record<string, SnapItem> = {}
+    items.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    return m
+  }, [items])
+
+  // Samenvatting (zelfde UI, data uit snapshot)
   const summary = useMemo(() => {
-    const withScore = DAX.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
-    const totalWithScore = withScore.length || 0
-    const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
-    const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
-    const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = totalWithScore
-      ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore)
-      : 50
+    const rows = DAX.map(a => bySym[a.symbol]).filter(Boolean) as SnapItem[]
+    const total = rows.length
+    const status = rows.map(r => statusFromScore(r.score))
+    const buy  = status.filter(s => s==='BUY').length
+    const hold = status.filter(s => s==='HOLD').length
+    const sell = status.filter(s => s==='SELL').length
 
-    const pctArr = DAX.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent))
-      .filter(v => Number.isFinite(v)) as number[]
-    const greenCount = pctArr.filter(v => v > 0).length
-    const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
+    const avgScore = total ? Math.round(rows.reduce((s,r)=> s + (Number(r.score) || 0), 0) / total) : 50
 
-    const rows = DAX.map(a => ({
-      symbol: a.symbol,
-      pct: Number(quotes[a.symbol]?.regularMarketChangePercent)
-    })).filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
-    const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
-    const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
+    const pctArr = rows.map(r => Number(r.changePct)).filter(v => Number.isFinite(v)) as number[]
+    const green = pctArr.filter(v => v>0).length
+    const breadthPct = pctArr.length ? Math.round((green / pctArr.length) * 100) : 0
 
-    return {
-      counts: { buy, hold, sell, total: totalWithScore },
-      avgScore, breadthPct, topGainers, topLosers
-    }
-  }, [quotes, scoreMap])
+    const priced = DAX.map(a => ({ symbol:a.symbol, pct: Number(bySym[a.symbol]?.changePct) }))
+      .filter(x => Number.isFinite(x.pct)) as {symbol:string; pct:number}[]
+    const topGainers = [...priced].sort((a,b)=> b.pct - a.pct).slice(0,3)
+    const topLosers  = [...priced].sort((a,b)=> a.pct - b.pct).slice(0,3)
+
+    return { counts:{ buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
+  }, [bySym])
 
   // Heatmap filter
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = DAX.map(a => {
-      const score = scoreMap[a.symbol]
-      const status = Number.isFinite(score as number) ? statusFromScore(score as number) : 'HOLD'
-      return { symbol: a.symbol, score: (score as number) ?? 50, status }
+      const it = bySym[a.symbol]
+      const score = Number(it?.score)
+      const status = statusFromScore(score)
+      return { symbol:a.symbol, score: Number.isFinite(score) ? score : 50, status }
     })
-    return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
-  }, [scoreMap, filter])
+    return filter==='ALL' ? rows : rows.filter(r => r.status===filter)
+  }, [bySym, filter])
 
   return (
     <>
@@ -223,10 +143,10 @@ export default function Dax() {
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
-          {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
+          {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden: {snapErr}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Lijst in crypto-stijl table */}
+            {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
@@ -242,13 +162,13 @@ export default function Dax() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {DAX.map((row, i) => {
-                    const q = quotes[row.symbol]
-                    const price = fmtPrice(q?.regularMarketPrice, q?.currency || 'EUR')
-                    const chg = q?.regularMarketChange
-                    const pct = q?.regularMarketChangePercent
-                    const r7  = ret7Map[row.symbol]
-                    const r30 = ret30Map[row.symbol]
-                    const score = scoreMap[row.symbol]
+                    const it = bySym[row.symbol]
+                    const price = fmtPrice(it?.price, 'EUR')
+                    const chg = it?.change
+                    const pct = it?.changePct
+                    const r7  = Number(it?.ret7Pct)
+                    const r30 = Number(it?.ret30Pct)
+                    const score = Number(it?.score)
 
                     return (
                       <tr key={row.symbol} className="hover:bg-gray-50">
@@ -271,15 +191,15 @@ export default function Dax() {
                             : '—'}
                         </td>
                         <td className={`px-4 py-3 ${pctCls(r7)}`}>
-                          {Number.isFinite(r7 as number) ? `${(r7 as number) >= 0 ? '+' : ''}${num(r7, 2)}%` : '—'}
+                          {Number.isFinite(r7) ? `${r7 >= 0 ? '+' : ''}${num(r7, 2)}%` : '—'}
                         </td>
                         <td className={`px-4 py-3 ${pctCls(r30)}`}>
-                          {Number.isFinite(r30 as number) ? `${(r30 as number) >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
+                          {Number.isFinite(r30) ? `${r30 >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end">
-                            {Number.isFinite(score as number)
-                              ? <ScoreBadge score={score as number} />
+                            {Number.isFinite(score)
+                              ? <ScoreBadge score={score} />
                               : <span className="badge badge-hold">HOLD · 50</span>}
                           </div>
                         </td>
@@ -305,30 +225,21 @@ export default function Dax() {
                   <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">BUY</div>
                     <div className="text-lg font-bold text-green-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.buy / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
                     </div>
                     <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
                   </div>
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">HOLD</div>
                     <div className="text-lg font-bold text-amber-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.hold / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
                     </div>
                     <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
                   </div>
                   <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
                     <div className="text-xs text-gray-600">SELL</div>
                     <div className="text-lg font-bold text-red-700">
-                      {(() => {
-                        const t = summary.counts.total || 0
-                        return t ? Math.round((summary.counts.sell / t) * 100) : 0
-                      })()}%
+                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
                     </div>
                     <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
                   </div>
