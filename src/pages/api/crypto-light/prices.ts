@@ -32,7 +32,6 @@ type MetaDebug = {
 }
 type Resp = {
   quotes: Record<string, Quote>
-  // ⬇️ extra shape die de UI verwacht
   results?: Array<{ symbol: string; price: number|null; d: number|null; w: number|null; m: number|null }>
   meta?: {
     requested: number
@@ -101,16 +100,17 @@ function cgHeaders() {
 }
 
 /* ===== CoinGecko sym→id map ===== */
-async function fetchCgTopSymbols(req: NextApiRequest, dbg: MetaDebug): Promise<Record<string,string>> {
+async function fetchCgTopSymbols(req: NextApiRequest, dbg?: MetaDebug): Promise<Record<string,string>> {
   const t0 = time()
   const base = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&sparkline=false'
   const [p1, p2] = await Promise.all([
     fetch(`${base}&page=1`, { cache: 'no-store', headers: cgHeaders() }),
     fetch(`${base}&page=2`, { cache: 'no-store', headers: cgHeaders() }),
   ])
-  dbg.timings['cg_map_fetch'] = Math.round(time() - t0)
+  dbg?.timings && (dbg.timings['cg_map_fetch'] = Math.round(time() - t0))
   if (!p1.ok || !p2.ok) {
-    dbg.cg = { status: (!p1.ok ? p1.status : p2.status), rateLimited: p1.status===429 || p2.status===429 }
+    if (!dbg?.cg) dbg && (dbg.cg = {})
+    dbg && (dbg.cg = { ...dbg.cg, status: (!p1.ok ? p1.status : p2.status), rateLimited: p1.status===429 || p2.status===429 })
     throw new Error(`CG markets HTTP ${p1.status}/${p2.status}`)
   }
   const a1: any[] = await okJson(p1)
@@ -123,7 +123,7 @@ async function fetchCgTopSymbols(req: NextApiRequest, dbg: MetaDebug): Promise<R
   }
   return Object.fromEntries(map)
 }
-async function getCgSymMap(req: NextApiRequest, dbg: MetaDebug): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
+async function getCgSymMap(req: NextApiRequest, dbg?: MetaDebug): Promise<{map:Record<string,string>, source: 'fresh'|'stale'|'static'|'error'}> {
   const key = 'cg:symmap:v1'
   type MapSnap = { map: Record<string,string>; updatedAt: number }
 
@@ -133,14 +133,14 @@ async function getCgSymMap(req: NextApiRequest, dbg: MetaDebug): Promise<{map:Re
       async () => {
         const t0 = time()
         const map = await fetchCgTopSymbols(req, dbg)
-        dbg.timings['kv_set_map'] = Math.round(time() - t0)
+        dbg?.timings && (dbg.timings['kv_set_map'] = Math.round(time() - t0))
         const payload: MapSnap = { map, updatedAt: Date.now() }
         try { await kvSetJSON(key, payload, MAP_TTL_SEC) } catch (e:any) { err(req, 'KV set map fail', e?.message || e) }
         return payload
       }
     )
     if (snap?.map && Object.keys(snap.map).length) {
-      dbg.path.map = 'fresh'
+      dbg && (dbg.path.map = 'fresh')
       return { map: snap.map, source: 'fresh' }
     }
   } catch (e:any) {
@@ -150,26 +150,27 @@ async function getCgSymMap(req: NextApiRequest, dbg: MetaDebug): Promise<{map:Re
   try {
     const stale: any = await kvGetJSON(key)
     if (stale?.map && Object.keys(stale.map).length) {
-      dbg.path.map = 'stale'
+      dbg && (dbg.path.map = 'stale')
       return { map: stale.map, source: 'stale' }
     }
   } catch (e:any) {
     err(req, 'stale map error', e?.message || e)
   }
 
-  dbg.path.map = 'static'
+  dbg && (dbg.path.map = 'static')
   return { map: { ...STATIC_CG_MAP }, source: 'static' }
 }
 
 /* ===== Price providers ===== */
-async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg: MetaDebug): Promise<Record<string, Quote>> {
+async function coingeckoBatchByIds(ids: string[], idToSym: Record<string,string>, req: NextApiRequest, dbg?: MetaDebug): Promise<Record<string, Quote>> {
   if (!ids.length) return {}
   const t0 = time()
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids.join(','))}&vs_currencies=usd&include_24hr_change=true`
   const r = await fetch(url, { cache: 'no-store', headers: cgHeaders() })
-  dbg.timings['cg_price_fetch'] = Math.round(time() - t0)
+  dbg?.timings && (dbg.timings['cg_price_fetch'] = Math.round(time() - t0))
   if (!r.ok) {
-    dbg.cg = { ...(dbg.cg||{}), status: r.status, rateLimited: r.status === 429 }
+    if (!dbg?.cg) dbg && (dbg.cg = {})
+    dbg && (dbg.cg = { ...dbg.cg, status: r.status, rateLimited: r.status === 429 })
     return {}
   }
   const j: any = await r.json()
@@ -244,7 +245,7 @@ async function yahooQuote(symbol: string): Promise<Quote> {
 }
 
 /* ===== Builder ===== */
-async function buildPrices(symbols: string[], req: NextApiRequest, dbg: MetaDebug) {
+async function buildPrices(symbols: string[], req: NextApiRequest, dbg?: MetaDebug) {
   const errors: string[] = []
   const out: Record<string, Quote> = {}
 
@@ -253,7 +254,7 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: MetaDebu
   const symToId = mapRes.map
   const idToSym: Record<string,string> = {}
   Object.entries(symToId).forEach(([sym, id]) => { idToSym[id] = sym })
-  dbg.mapStats = { size: Object.keys(symToId).length, keysExample: Object.keys(symToId).slice(0,6) }
+  dbg && (dbg.mapStats = { size: Object.keys(symToId).length, keysExample: Object.keys(symToId).slice(0,6) })
 
   const cgSyms  = symbols.filter(s => !!symToId[s])
 
@@ -294,7 +295,7 @@ async function buildPrices(symbols: string[], req: NextApiRequest, dbg: MetaDebu
     : (Object.keys(cgOut).length && missing.length ? 'mixed'
       : Object.keys(cgOut).length ? 'coingecko' : 'yahoo')
 
-  dbg.path.prices = pathPrices as any
+  dbg && (dbg.path.prices = pathPrices as any)
   return { quotes: out, errors }
 }
 
@@ -303,7 +304,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   res.setHeader('Cache-Control', `public, s-maxage=${EDGE_S_MAXAGE}, stale-while-revalidate=${EDGE_SWR}`)
   const debug = req.query.debug === '1'
 
-  // we bewaren ook de originele query-symbols (kunnen Binance-pairs zijn)
   const raw = Array.isArray(req.query.symbols) ? req.query.symbols.join(',') : (req.query.symbols as string|undefined) || ''
   const originalSymbols = raw.split(',').map(s => s.trim()).filter(Boolean)
 
@@ -333,42 +333,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       kvKey, KV_TTL_SEC, KV_REVALIDATE,
       async () => {
         const tBuild0 = time()
-        const payload = await buildPrices(symbols, req, dbg!)
+        const payload = await buildPrices(symbols, req, dbg)
         const withTs = { ...payload, updatedAt: Date.now() }
         try { await kvSetJSON(kvKey, withTs, KV_TTL_SEC) } catch (e:any) { err(req, 'KV set snapshot fail', e?.message || e) }
-        if (dbg) dbg.timings['build_prices_ms'] = Math.round(time() - tBuild0)
+        dbg?.timings && (dbg.timings['build_prices_ms'] = Math.round(time() - tBuild0))
         return withTs
       }
     )
 
     const data = snap || await (async () => {
       const tBuild0 = time()
-      const payload = await buildPrices(symbols, req, dbg!)
+      const payload = await buildPrices(symbols, req, dbg)
       const withTs = { ...payload, updatedAt: Date.now() }
       try { await kvSetJSON(kvKey, withTs, KV_TTL_SEC) } catch (e:any) { err(req, 'KV set snapshot fail (no-snap)', e?.message || e) }
-      if (dbg) dbg.timings['build_prices_ms'] = Math.round(time() - tBuild0)
+      dbg?.timings && (dbg.timings['build_prices_ms'] = Math.round(time() - tBuild0))
       return withTs
     })()
 
     const received = Object.values(data.quotes).filter(q => q.regularMarketPrice != null).length
     const partial  = Object.values(data.quotes).some(q => q.regularMarketPrice == null)
 
-    if (dbg) {
-      dbg.timings['total_ms'] = Math.round(time() - t0)
-      dbg.yahoo = dbg.yahoo || { attempts: 0, errors: [] }
-    }
+    dbg && (dbg.timings['total_ms'] = Math.round(time() - t0))
+    dbg && (dbg.yahoo = dbg.yahoo || { attempts: 0, errors: [] })
 
-    // === 🔑 ADD: results[] voor de UI ===
-    // We mappen terug naar de originele (mogelijk Binance) symbols
-    // Voor d (24h) nemen we CG/Yahoo changePercent; w/m laten we ongemoeid.
     const results = originalSymbols.map(symRaw => {
       const base = toBaseSymbol(symRaw) || symRaw.toUpperCase()
       const q = data.quotes[base]
       return {
-        symbol: symRaw,                                 // bv. BTCUSDT
-        price: q?.regularMarketPrice ?? null,           // prijs
-        d: q?.regularMarketChangePercent ?? null,       // 24h %
-        w: null as number | null,                       // compat-velden
+        symbol: symRaw,
+        price: q?.regularMarketPrice ?? null,
+        d: q?.regularMarketChangePercent ?? null,
+        w: null as number | null,
         m: null as number | null,
       }
     })
@@ -381,7 +376,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         received,
         partial,
         errors: data.errors?.length ? data.errors.slice(0,8) : undefined,
-        used: `cg-map(${dbg?.path.map})+prices(${dbg?.path.prices})+kv`,
+        used: `cg-map(${dbg?.path.map ?? '—'})+prices(${dbg?.path.prices ?? '—'})+kv`,
         ...(debug ? { debug: dbg } : {})
       }
     })
