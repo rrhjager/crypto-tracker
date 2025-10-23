@@ -97,6 +97,52 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
+/* ===== UI failsafe: haal prijs direct uit quotes of results, met meerdere matchpaden ===== */
+function pickPx(pxData: any, baseSym: string, binance?: string) {
+  // 1) rechtstreeks in quotes op BASE (BTC/ETH/…)
+  const q1 = pxData?.quotes?.[baseSym]
+  if (q1 && Number.isFinite(Number(q1.regularMarketPrice))) {
+    return {
+      price: Number(q1.regularMarketPrice),
+      d: Number.isFinite(Number(q1.regularMarketChangePercent)) ? Number(q1.regularMarketChangePercent) : null,
+    }
+  }
+
+  // 2) via base uit binance-pair (BTCUSDT -> BTC)
+  const baseFromBinance = toBaseTicker(binance || '')
+  const q2 = baseFromBinance ? pxData?.quotes?.[baseFromBinance] : undefined
+  if (q2 && Number.isFinite(Number(q2.regularMarketPrice))) {
+    return {
+      price: Number(q2.regularMarketPrice),
+      d: Number.isFinite(Number(q2.regularMarketChangePercent)) ? Number(q2.regularMarketChangePercent) : null,
+    }
+  }
+
+  // 3) fallback naar results[]
+  const results: Array<{symbol:string, price:number|null, d:number|null}> =
+    Array.isArray(pxData?.results) ? pxData.results : []
+
+  // 3a) exact BASE
+  let r = results.find(it => String(it.symbol || '').toUpperCase() === baseSym)
+  // 3b) exact base van binance-pair
+  if (!r && baseFromBinance) {
+    r = results.find(it => String(it.symbol || '').toUpperCase() === baseFromBinance)
+  }
+  // 3c) vergelijk door elk result naar base om te zetten
+  if (!r && results.length) {
+    r = results.find(it => toBaseTicker(String(it.symbol)) === baseSym)
+  }
+
+  if (r && Number.isFinite(Number(r.price))) {
+    return {
+      price: Number(r.price),
+      d: Number.isFinite(Number(r.d)) ? Number(r.d) : null,
+    }
+  }
+
+  return { price: null as number | null, d: null as number | null }
+}
+
 /* ===== Widgets ===== */
 function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
   if (!rows?.length) return null
@@ -354,40 +400,6 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  // === Belangrijk: map zowel quotes (BTC/ETH/…) als results (bv. BTCUSDT) naar BASE tickers ===
-  const pxByBase = useMemo(() => {
-    const map = new Map<string, { price: number | null, d: number | null }>()
-
-    const quotes = pxData?.quotes as Record<string, {
-      regularMarketPrice: number | null
-      regularMarketChangePercent: number | null
-    }> | undefined
-
-    if (quotes && Object.keys(quotes).length) {
-      for (const [base, q] of Object.entries(quotes)) {
-        map.set(base.toUpperCase(), {
-          price: Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null,
-          d: Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null,
-        })
-      }
-    }
-
-    const results = pxData?.results as Array<{ symbol: string; price: number|null; d: number|null }> | undefined
-    if (Array.isArray(results) && results.length) {
-      for (const it of results) {
-        const base = toBaseTicker(String(it.symbol)) || String(it.symbol).toUpperCase()
-        if (!map.has(base)) {
-          map.set(base, {
-            price: Number.isFinite(Number(it.price)) ? Number(it.price) : null,
-            d: Number.isFinite(Number(it.d)) ? Number(it.d) : null,
-          })
-        }
-      }
-    }
-
-    return map
-  }, [pxData])
-
   // 6) Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
@@ -396,11 +408,11 @@ function PageInner() {
     else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
   }
 
-  // 7) Rijen bouwen
+  // 7) Rijen bouwen (gebruik pickPx om prijs robuust te vinden)
   const rows = useMemo(() => {
     const list = baseRows.map((c) => {
       const symU = String(c.symbol || '').toUpperCase()
-      const ind = c.binance ? indBySym.get(c.binance) : undefined
+      const ind  = c.binance ? indBySym.get(c.binance) : undefined
 
       const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(calc?.score ?? 50)
@@ -410,11 +422,10 @@ function PageInner() {
       const ta = c.binance ? localTA.get(c.binance) : undefined
       if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
-        if (ta.status === 'BUY' || 'HOLD' || 'SELL') finalStatus = ta.status
+        if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      // prijs lookup op BASE ticker (BTC/ETH/…)
-      const px = pxByBase.get(symU)
+      const pxPicked = pickPx(pxData, symU, c.binance) // 🔑 hier de robuuste prijs
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
@@ -423,8 +434,8 @@ function PageInner() {
         _fav: faves.includes(symU),
         _score: finalScore,
         status: finalStatus,
-        _price: px?.price ?? null,
-        _d: px?.d ?? null,
+        _price: pxPicked.price,
+        _d: pxPicked.d,
         _w: w,
         _m: m,
       }
@@ -447,7 +458,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase, localTA])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxData, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
