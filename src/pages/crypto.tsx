@@ -143,6 +143,166 @@ function pickPx(pxData: any, baseSym: string, binance?: string) {
   return { price: null as number | null, d: null as number | null }
 }
 
+/* ===== Widgets ===== */
+function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
+  if (!rows?.length) return null
+  const total = rows.length
+  const buy = rows.filter(r => r.status === 'BUY').length
+  const sell = rows.filter(r => r.status === 'SELL').length
+  const buyPct = Math.round((buy / total) * 100)
+  const sellPct = Math.round((sell / total) * 100)
+  const greenPct = Math.round((rows.filter(r => (r._d ?? 0) >= 0).length / total) * 100)
+  const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
+  const avgD = rows.reduce((s, r) => s + (r._d ?? 0), 0) / Math.max(1, total)
+  let bias: 'Bullish' | 'Bearish' | 'Neutraal' = 'Neutraal'
+  if ((buyPct - sellPct) >= 10 || avgScore >= 58 || avgD >= 0.5) bias = 'Bullish'
+  if ((sellPct - buyPct) >= 10 || avgScore <= 42 || avgD <= -0.5) bias = 'Bearish'
+  const biasCls = bias === 'Bullish' ? 'badge-buy' : bias === 'Bearish' ? 'badge-sell' : 'badge-hold'
+  return (
+    <aside className="table-card">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-bold">AI-advies (markt)</h3>
+        <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
+      </div>
+      <div className="text-sm mb-3">
+        <span className={`${biasCls} mr-2`}>{bias}</span>
+        <span className="text-white/80">BUY {buyPct}% · SELL {sellPct}% · 24h groen {greenPct}%</span>
+      </div>
+      <div className="flex items-center gap-2 text-[11px] text-white/70">
+        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">Gem. score <b className="text-white/90">{avgScore}</b></span>
+        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">Gem. 24h <b className={`text-white/90 ${avgD >= 0 ? 'text-green-300' : 'text-red-300'}`}>{avgD >= 0 ? '+' : ''}{avgD.toFixed(2)}%</b></span>
+      </div>
+    </aside>
+  )
+}
+
+function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
+  if (!rows?.length) return null
+  const total = rows.length
+  const buy = rows.filter(r => r.status === 'BUY').length
+  const hold = rows.filter(r => r.status === 'HOLD').length
+  const sell = rows.filter(r => r.status === 'SELL').length
+  const pct = (n: number) => Math.round((n / Math.max(1, total)) * 100)
+  const avgScore = Math.round(rows.reduce((s, r) => s + (r._score ?? 0), 0) / Math.max(1, total))
+  const greenPct = pct(rows.filter(r => (r._d ?? 0) >= 0).length)
+  const byScore = [...rows].sort((a, b) => (b._score ?? 0) - (a._score ?? 0))
+  const topUp = byScore.slice(0, Math.min(3, byScore.length))
+  const topDown = [...byScore].reverse().slice(0, Math.min(3, byScore.length))
+  return (
+    <aside className="table-card">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-bold">Dagelijkse samenvatting</h3>
+        <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">BUY</div>
+          <div className="flex items-end justify-between"><div className="text-lg font-bold text-green-300">{pct(buy)}%</div><div className="text-xs text-white/60">{buy}/{total}</div></div>
+        </div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">HOLD</div>
+          <div className="flex items-end justify-between"><div className="text-lg font-bold text-amber-300">{pct(hold)}%</div><div className="text-xs text-white/60">{hold}/{total}</div></div>
+        </div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">SELL</div>
+          <div className="flex items-end justify-between"><div className="text-lg font-bold text-red-300">{pct(sell)}%</div><div className="text-xs text-white/60">{sell}/{total}</div></div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Breadth (24h groen)</div><div className="text-lg font-bold">{greenPct}%</div></div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Gem. score</div><div className="text-lg font-bold">{avgScore}</div></div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">Top scores</div>
+          <ul className="space-y-1">
+            {topUp.map((r) => (
+              <li key={`up-${r.slug}`} className="flex items-center justify-between text-xs">
+                <span className="font-semibold">{r.symbol}</span>
+                <span className="text-green-300">{r._score}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">Laagste scores</div>
+          <ul className="space-y-1">
+            {topDown.map((r) => (
+              <li key={`down-${r.slug}`} className="flex items-center justify-between text-xs">
+                <span className="font-semibold">{r.symbol}</span>
+                <span className="text-red-300">{r._score}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+function Heatmap({ rows }: { rows: any[] }) {
+  const [filter, setFilter] = useState<StatusFilter>('ALL')
+  const filtered = useMemo(() => {
+    if (!rows) return []
+    if (filter === 'ALL') return rows
+    return rows.filter((r) => (r.status || 'HOLD') === filter)
+  }, [rows, filter])
+  if (!rows || rows.length === 0) return null
+  const Chip = ({ value, label }: { value: StatusFilter, label: string }) => {
+    const active = filter === value
+    return (
+      <button
+        onClick={() => setFilter(value)}
+        className={[
+          'px-2.5 py-1 rounded-full text-[11px] transition',
+          'border',
+          active ? 'bg-white/10 border-white/30 text-white'
+                 : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:border-white/20'
+        ].join(' ')}
+      >
+        {label}
+      </button>
+    )
+  }
+  return (
+    <div className="table-card">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold">Heatmap</h3>
+        <div className="flex items-center gap-1.5">
+          <Chip value="ALL" label="All" />
+          <Chip value="BUY" label="Buy" />
+          <Chip value="HOLD" label="Hold" />
+          <Chip value="SELL" label="Sell" />
+        </div>
+      </div>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(46px, 1fr))' }}>
+        {filtered.map((c: any) => {
+          const score = Number(c._score ?? 0)
+          const status = (c.status as Status) || 'HOLD'
+          const cls =
+            status === 'BUY' ? 'bg-green-500/20 ring-green-500/30' :
+            status === 'SELL' ? 'bg-red-500/20 ring-red-500/30' :
+            'bg-amber-500/20 ring-amber-500/30'
+          return (
+            <Link
+              key={c.slug}
+              href={`/crypto/${c.slug}`}
+              title={`${c.name} (${c.symbol}) • ${status} · ${Math.round(score)}`}
+              className={`group rounded-[10px] ring-1 ${cls} text-white text-center`}
+              style={{ aspectRatio: '1 / 1' }}
+            >
+              <div className="h-full w-full flex flex-col items-center justify-center">
+                <div className="text-[10px] font-extrabold leading-none tracking-wide">{c.symbol}</div>
+                <div className="mt-0.5 text-[9px] opacity-95 leading-none">{Math.round(score)}</div>
+              </div>
+            </Link>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /* ===================== PAGE ===================== */
 function PageInner() {
   // 1) Basisrijen (Binance pair alleen voor indicators)
@@ -188,7 +348,6 @@ function PageInner() {
   }
 
   // 3) (optioneel) localStorage TA
-  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(readAllLocalTA())
   useEffect(() => {
     function onStorage(ev: StorageEvent) {
       if (!ev.key || !ev.key.startsWith(TA_KEY_PREFIX)) return
@@ -197,6 +356,7 @@ function PageInner() {
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
+  const [localTA, setLocalTA] = useState<Map<string, LocalTA>>(readAllLocalTA())
 
   // 4) Indicators (via Binance-keys), batched elke 60s
   const binanceSymbols = useMemo(() => baseRows.map(r => r.binance).filter(Boolean) as string[], [baseRows])
@@ -239,12 +399,6 @@ function PageInner() {
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
-
-  // --- zichtbare debug (eenmalig controleren in console) ---
-  useEffect(() => {
-    // Verwijder gerust later: bevestigt dat prijzen daadwerkelijk binnenkomen
-    console.log('DEBUG pxData', pxData)
-  }, [pxData])
 
   // 6) Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
@@ -304,7 +458,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxData, localTA]) // ⬅ pxData toegevoegd
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxData, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
@@ -341,7 +495,7 @@ function PageInner() {
                     <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover-text-white transition w-full justify-end">7d</button>
+                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
                   </th>
                   <th className="text-right py-2">
                     <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
@@ -384,10 +538,9 @@ function PageInner() {
                         </Link>
                       </td>
 
+                      {/* Prijs + % met duidelijke fallback zodat je ziet als mapping faalt */}
                       <td className="py-3 text-right">
-                        {c._price == null
-                          ? <span className="text-white/50">— (geen prijs voor {c.symbol})</span>
-                          : formatFiat(c._price)}
+                        {c._price == null ? <span className="text-white/50">— (geen prijs voor {c.symbol})</span> : formatFiat(c._price)}
                       </td>
                       <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
 
