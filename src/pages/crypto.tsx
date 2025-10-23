@@ -36,6 +36,14 @@ const toBinancePair = (symbol: string) => {
   return `${s}USDT`
 }
 
+// BTCUSDT / BTCUSD / BTC-USD / BTC/USD -> BTC (BASE ticker)
+const toBaseTicker = (pairOrSym: string | null | undefined): string | null => {
+  if (!pairOrSym) return null
+  const clean = pairOrSym.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const base = clean.replace(/(USDT|USD|USDC|BUSD|FDUSD|TUSD)$/, '')
+  return base || null
+}
+
 /* ===== types van je light-indicators API ===== */
 type IndResp = {
   symbol: string // Binance pair, bv. BTCUSDT
@@ -297,7 +305,6 @@ function PageInner() {
   useEffect(() => {
     function onStorage(ev: StorageEvent) {
       if (!ev.key || !ev.key.startsWith(TA_KEY_PREFIX)) return
-      // force rerender via state toggle
       setLocalTA(new Map(readAllLocalTA()))
     }
     window.addEventListener('storage', onStorage)
@@ -336,7 +343,7 @@ function PageInner() {
     return () => { aborted = true; clearInterval(id) }
   }, [binanceSymbols])
 
-  // 5) Prijzen (direct per ticker)
+  // 5) Prijzen (direct per ticker → API normaliseert en limiteert tot 60)
   const tickers = useMemo(
     () => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))),
     [baseRows]
@@ -347,26 +354,37 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
-  // quotes of results → map per ticker
-  const pxByTicker = useMemo(() => {
+  // === Belangrijk: map zowel quotes (BTC/ETH/…) als results (bv. BTCUSDT) naar BASE tickers ===
+  const pxByBase = useMemo(() => {
     const map = new Map<string, { price: number | null, d: number | null }>()
-    const quotes = pxData?.quotes as Record<string, any> | undefined
-    const results = pxData?.results as Array<{symbol:string, price:number|null, d:number|null}> | undefined
+
+    const quotes = pxData?.quotes as Record<string, {
+      regularMarketPrice: number | null
+      regularMarketChangePercent: number | null
+    }> | undefined
+
     if (quotes && Object.keys(quotes).length) {
-      for (const [sym, q] of Object.entries(quotes)) {
-        map.set(sym.toUpperCase(), {
-          price: Number.isFinite(Number((q as any).regularMarketPrice)) ? Number((q as any).regularMarketPrice) : null,
-          d: Number.isFinite(Number((q as any).regularMarketChangePercent)) ? Number((q as any).regularMarketChangePercent) : null
-        })
-      }
-    } else if (Array.isArray(results)) {
-      for (const r of results) {
-        map.set(String(r.symbol || '').toUpperCase(), {
-          price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
-          d: Number.isFinite(Number(r.d)) ? Number(r.d) : null
+      for (const [base, q] of Object.entries(quotes)) {
+        map.set(base.toUpperCase(), {
+          price: Number.isFinite(Number(q?.regularMarketPrice)) ? Number(q!.regularMarketPrice) : null,
+          d: Number.isFinite(Number(q?.regularMarketChangePercent)) ? Number(q!.regularMarketChangePercent) : null,
         })
       }
     }
+
+    const results = pxData?.results as Array<{ symbol: string; price: number|null; d: number|null }> | undefined
+    if (Array.isArray(results) && results.length) {
+      for (const it of results) {
+        const base = toBaseTicker(String(it.symbol)) || String(it.symbol).toUpperCase()
+        if (!map.has(base)) {
+          map.set(base, {
+            price: Number.isFinite(Number(it.price)) ? Number(it.price) : null,
+            d: Number.isFinite(Number(it.d)) ? Number(it.d) : null,
+          })
+        }
+      }
+    }
+
     return map
   }, [pxData])
 
@@ -392,10 +410,11 @@ function PageInner() {
       const ta = c.binance ? localTA.get(c.binance) : undefined
       if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
-        if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
+        if (ta.status === 'BUY' || 'HOLD' || 'SELL') finalStatus = ta.status
       }
 
-      const px = pxByTicker.get(symU) // ← direct op ticker
+      // prijs lookup op BASE ticker (BTC/ETH/…)
+      const px = pxByBase.get(symU)
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
@@ -428,7 +447,7 @@ function PageInner() {
         default:      return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByTicker, localTA])
+  }, [baseRows, faves, sortKey, sortDir, indBySym, pxByBase, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
