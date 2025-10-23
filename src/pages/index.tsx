@@ -330,6 +330,35 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
   )
 }
 
+/* ======== ⬇️ NIEUW: mini relative-date helpers (client-side fallback) ⬇️ ======== */
+function isoDaysAgo(days: number): string {
+  const d = new Date()
+  // normaliseer naar lokale dag voor UI-consistentie
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+function toISORelative(raw?: string | null): string | null {
+  if (!raw) return null
+  const t = raw.trim().toLowerCase()
+  let m = t.match(/(\d+)\s*day(?:s)?\s*ago/)
+  if (m) return isoDaysAgo(parseInt(m[1], 10))
+  m = t.match(/(\d+)\s*hour(?:s)?\s*ago/)
+  if (m) return isoDaysAgo(0)
+  if (/\bjust\s*now\b/.test(t) || /\bminute(?:s)?\s*ago\b/.test(t)) return isoDaysAgo(0)
+  return null
+}
+function coerceISO(raw?: string | null): string | null {
+  if (!raw) return null
+  // yyyy-mm-dd
+  if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0, 10)
+  // probeer Date parse
+  const ts = Date.parse(raw)
+  if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10)
+  return null
+}
+/* ======== ⬆️ EINDE helpers ⬆️ ======== */
+
 /* ---------------- page ---------------- */
 export default function Homepage() {
   const router = useRouter()
@@ -637,15 +666,29 @@ export default function Homepage() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json() as { items?: any[] }
         const arr = Array.isArray(j?.items) ? j.items : []
-        const norm: CongressTrade[] = (arr || []).map((x: any) => ({
-          person: x.person || '',
-          ticker: x.ticker || '',
-          side: String(x.side || '').toUpperCase(),
-          amount: x.amount || '',
-          price: x.price ?? null,
-          date: x.publishedISO || x.tradedISO || '',
-          url: x.url || '',
-        }))
+        const norm: CongressTrade[] = (arr || []).map((x: any) => {
+          // ✅ Neem ISO van server als beschikbaar; anders client-fallback uit eventuele relatieve labels
+          const fallbackISO =
+            toISORelative(x.published || x.traded || x.date) ||
+            coerceISO(x.published || x.traded || x.date)
+          const iso = x.publishedISO || x.tradedISO || fallbackISO || ''
+          return {
+            person: x.person || '',
+            ticker: x.ticker || '',
+            side: String(x.side || '').toUpperCase(),
+            amount: x.amount || '',
+            price: x.price ?? null,
+            date: iso,
+            url: x.url || '',
+          }
+        })
+        // ✅ Altijd desc sorteren op datum, zodat laatste trades bovenaan staan
+        norm.sort((a, b) => {
+          const ta = a.date ? Date.parse(a.date) : 0
+          const tb = b.date ? Date.parse(b.date) : 0
+          return tb - ta
+        })
+
         if (!aborted) {
           setTrades(norm)
           setCache('home:congress', norm)
