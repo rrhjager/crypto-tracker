@@ -331,6 +331,7 @@ function PageInner() {
   const [faves, setFaves] = useState<string[]>([])
   useEffect(() => {
     try {
+      // ❗ FIX: haakjes
       const raw = typeof window !== 'undefined' ? localStorage.getItem('faves') : null
       if (raw) {
         const arr = JSON.parse(raw)
@@ -400,6 +401,11 @@ function PageInner() {
     { revalidateOnFocus: false, refreshInterval: 15_000 }
   )
 
+  // DEBUG: toon ruwe prijsdata zodra het binnenkomt
+  useEffect(() => {
+    if (pxData) console.log('DEBUG pxData:', JSON.stringify(pxData, null, 2))
+  }, [pxData])
+
   // 6) Sorting
   const [sortKey, setSortKey] = useState<SortKey>('coin')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
@@ -426,6 +432,10 @@ function PageInner() {
       }
 
       const pxPicked = pickPx(pxData, symU, c.binance) // 🔑 hier de robuuste prijs
+      if (pxPicked?.price != null) {
+        console.log('DEBUG prijs gevonden voor', symU, pxPicked.price, '(binance:', c.binance, ')')
+      }
+
       const w = Number.isFinite(Number(ind?.perf?.w)) ? Number(ind?.perf?.w) : null
       const m = Number.isFinite(Number(ind?.perf?.m)) ? Number(ind?.perf?.m) : null
 
