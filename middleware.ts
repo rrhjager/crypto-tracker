@@ -8,9 +8,13 @@ const PUBLIC_ALLOW = [
   '/api/indicators/ret-batch',
   '/api/indicators/snapshot',
   '/api/indicators/snapshot-list',
-  '/api/crypto-light/indicators', // crypto indicators (als je /crypto gebruikt)
-  '/api/crypto-light/prices',     // ✅ crypto prijzen endpoint (nieuw)
-  '/api/market/',                 // ✅ alle Market-Intel subroutes (sectors/macro/hedgefunds/congress/aggregate)
+  '/api/crypto-light/indicators', // crypto indicators
+  '/api/crypto-light/prices',     // crypto prijzen
+  '/api/market/',                 // alle Market-Intel subroutes
+
+  // ✅ toegevoegd voor homepage
+  '/api/news/',                   // Google/Equities/Crypto news
+  '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -87,29 +91,36 @@ export function middleware(req: NextRequest) {
   }
 
   // === Limiter op query-grootte (quotes/snapshot/ret-batch/crypto) ===
-  const isQuotes = pathname.startsWith('/api/quotes')
-  const isSnap   = pathname.startsWith('/api/indicators/snapshot-list')
-  const isRet    = pathname.startsWith('/api/indicators/ret-batch')
-  const isCryptoI= pathname.startsWith('/api/crypto-light/indicators')
-  const isCryptoP= pathname.startsWith('/api/crypto-light/prices')
+  const isQuotes  = pathname.startsWith('/api/quotes')
+  const isSnap    = pathname.startsWith('/api/indicators/snapshot-list')
+  const isRet     = pathname.startsWith('/api/indicators/ret-batch')
+  const isCryptoI = pathname.startsWith('/api/crypto-light/indicators')
+  const isCryptoP = pathname.startsWith('/api/crypto-light/prices')
 
   if (isQuotes || isSnap || isRet || isCryptoI || isCryptoP) {
     const symCount = countSymbols(searchParams.get('symbols'))
     if (symCount > 60) {
       return new NextResponse('Too many symbols (max 60)', { status: 400 })
     }
-
     const market = searchParams.get('market')
     if (market && !MARKET_ALLOW.has(market)) {
       return new NextResponse('Unknown market', { status: 400 })
     }
-
     const rawQuery = req.url.split('?', 2)[1] || ''
     if (rawQuery.length > 2048) {
       return new NextResponse('Query too long', { status: 414 })
     }
   }
 
+  // === Kleine limiter voor news endpoints (voorkomt misbruik) ===
+  if (pathname.startsWith('/api/news/')) {
+    const limitParam = Number(searchParams.get('limit') || searchParams.get('n') || '0')
+    if (Number.isFinite(limitParam) && limitParam > 30) {
+      return new NextResponse('News limit too high (max 30)', { status: 400 })
+    }
+  }
+
+  // Per-symbool score endpoint is cheap; geen limiter nodig.
   return NextResponse.next()
 }
 
