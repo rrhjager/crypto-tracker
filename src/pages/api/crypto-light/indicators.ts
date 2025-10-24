@@ -4,12 +4,22 @@ export const config = { runtime: 'nodejs' }
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { cache5min } from '@/lib/cacheHeaders'
 
-// ⬇️ NIEUW: KV snapshot helpers
+// ⬇️ KV snapshot helpers
 import { getOrRefreshSnap, snapKey } from '@/lib/kvSnap'
 
 // ---------- helpers (general) ----------
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+
+// ⬇️ NIEUW: detecteer “platte” reeksen en forceer fallback
+function isSeriesFlat(closes: number[], { minLen = 50, eps = 1e-9, window = 30 } = {}) {
+  if (!closes || closes.length < minLen) return true
+  const tail = closes.slice(-window)
+  const min = Math.min(...tail)
+  const max = Math.max(...tail)
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return true
+  return (max - min) <= eps
+}
 
 // ---- Binance-style symbol -> CoinGecko ID ALIASES ----
 const CG_ALIASES: Record<string, string[]> = {
@@ -130,6 +140,8 @@ async function okxFetch(instId: string): Promise<MarketData | null> {
   const closes = rows.map(x => Number(x?.[4])).filter(Number.isFinite)
   const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
   if (closes.length < 50) return null
+  // ⬇️ blokkeer platte feed → forceer fallback
+  if (isSeriesFlat(closes)) return null
   return { closes, volumes }
 }
 
@@ -143,6 +155,8 @@ async function bitfinexFetch(tSymbol: string): Promise<MarketData | null> {
   const closes = rows.map(x => Number(x?.[2])).filter(Number.isFinite)
   const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
   if (closes.length < 50) return null
+  // ⬇️ blokkeer platte feed → forceer fallback
+  if (isSeriesFlat(closes)) return null
   return { closes, volumes }
 }
 
@@ -162,6 +176,8 @@ async function coingeckoFetchOne(id: string): Promise<MarketData | null> {
   const closes = (j.prices || []).map(p => Number(p[1])).filter(Number.isFinite)
   const volumes = (j.total_volumes || []).map(v => Number(v[1])).filter(Number.isFinite)
   if (closes.length < 50) return null
+  // CG kan ook wel eens vlak zijn → vang ook dat af
+  if (isSeriesFlat(closes)) return null
   return { closes, volumes }
 }
 async function coingeckoWithAliases(aliases: string[]): Promise<MarketData | null> {
@@ -280,10 +296,43 @@ function symbolToBitfinex(symUSDT: string) {
   return [`t${base}USD`, `t${base}UST`]
 }
 
+// ⬇️ NIEUW: per-coin bronoverride (alleen VET geforceerd naar CG)
+const SOURCE_OVERRIDE: Record<string, 'okx' | 'bitfinex' | 'coingecko'> = {
+  VETUSDT: 'coingecko',
+}
+
 // ---------- fetch chain for one symbol ----------
 async function fetchMarketDataFor(symUSDT: string): Promise<
   { ok: true; data: MarketData; source: string } | { ok: false; error: string }
 > {
+  // 1) Optional override (nu alleen VET → CG)
+  const override = SOURCE_OVERRIDE[symUSDT]
+  if (override === 'coingecko') {
+    const aliases = CG_ALIASES[symUSDT] || [symUSDT.replace(/USDT$/, '').toLowerCase()]
+    try {
+      const d = await coingeckoWithAliases(aliases)
+      if (d) return { ok: true, data: d, source: 'coingecko:override' }
+    } catch {}
+    // als override faalt, val terug op normale chain
+  } else if (override === 'okx') {
+    const okxId = symbolToOkx(symUSDT)
+    if (okxId) {
+      try {
+        const d = await okxFetch(okxId)
+        if (d) return { ok: true, data: d, source: 'okx:override' }
+      } catch {}
+    }
+  } else if (override === 'bitfinex') {
+    const tSymbols = symbolToBitfinex(symUSDT)
+    for (const t of tSymbols) {
+      try {
+        const d = await bitfinexFetch(t)
+        if (d) return { ok: true, data: d, source: `bitfinex:override:${t}` }
+      } catch {}
+    }
+  }
+
+  // 2) Normale bron-volgorde met flat-detectie in de fetchers
   const okxId = symbolToOkx(symUSDT)
   if (okxId) {
     try {
@@ -323,17 +372,16 @@ function chunk<T>(arr: T[], size: number) {
 // ---------- API handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // ⬇️ Cache headers (CDN) — 5 min + SWR
+    // CDN-cache: 5 min fresh, 30 min SWR
     cache5min(res, 300, 1800)
 
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
 
-    // Unieke KV key per batch (debug gescheiden):
-    const kvKey = snapKey.cryptoInd(encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
+    // Unieke KV key per batch (debug gescheiden) + versie bump
+    const kvKey = snapKey.cryptoInd('v2:' + encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
 
-    // ⬇️ De volledige bestaande berekening in compute() (ongewijzigd)
     const compute = async () => {
       const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
       const dbg = debug ? { requested: symbols, used: [] as any[], missing: [] as string[] } : null
@@ -369,7 +417,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return { results }
     }
 
-    // ⬇️ Serve-from-KV met background revalidate (ms-responses)
+    // Serve-from-KV met background revalidate
     const { data } = await getOrRefreshSnap(kvKey, compute)
 
     return res.status(200).json(data)
