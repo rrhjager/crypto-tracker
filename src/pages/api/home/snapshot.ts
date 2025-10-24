@@ -1,5 +1,9 @@
-import type { NextRequest } from 'next/server'
-import type { NextApiResponse } from 'next'
+// src/pages/api/home/snapshot.ts
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { computeScoreStatus } from '@/lib/taScore'
+import { kvGetJSON, kvSetJSON } from '@/lib/kv'
+
+// Let op: pas deze imports aan naar jouw eigen exports/locaties als dat anders is
 import { AEX } from '@/lib/aex'
 import { SP500 } from '@/lib/sp500'
 import { NASDAQ } from '@/lib/nasdaq'
@@ -9,188 +13,245 @@ import { FTSE100 } from '@/lib/ftse100'
 import { NIKKEI225 } from '@/lib/nikkei225'
 import { HANGSENG } from '@/lib/hangseng'
 import { SENSEX } from '@/lib/sensex'
-import { computeScoreStatus } from '@/lib/taScore'
 
-// Edge-friendly
-export const config = { api: { bodyParser: false } }
+// === Types ===
+export const config = { runtime: 'edge' } // edge = sneller cold start
 
-type MarketLabel = 'AEX'|'S&P 500'|'NASDAQ'|'Dow Jones'|'DAX'|'FTSE 100'|'Nikkei 225'|'Hang Seng'|'Sensex'
-type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string|null }
-type ScoredEq = { symbol: string; name: string; market: MarketLabel; score: number }
+type Advice = 'BUY' | 'SELL' | 'HOLD'
+type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
+type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number }
 type ScoredCoin = { symbol: string; name: string; score: number }
-type CongressTrade = { person?: string; ticker?: string; side?: 'BUY'|'SELL'|string; amount?: string|number; price?: string|number|null; date?: string; url?: string; }
+
 type Snapshot = {
   newsCrypto: NewsItem[]
   newsEq: NewsItem[]
-  topBuy: (ScoredEq & { signal: 'BUY'|'HOLD'|'SELL' })[]
-  topSell:(ScoredEq & { signal: 'BUY'|'HOLD'|'SELL' })[]
-  coinTopBuy: (ScoredCoin & { signal: 'BUY'|'HOLD'|'SELL' })[]
-  coinTopSell:(ScoredCoin & { signal: 'BUY'|'HOLD'|'SELL' })[]
   academy: { title: string; href: string }[]
-  congress: CongressTrade[]
+  congress: any[]
+  topBuy: (ScoredEq & { signal: Advice })[]
+  topSell: (ScoredEq & { signal: Advice })[]
+  coinTopBuy: (ScoredCoin & { signal: Advice })[]
+  coinTopSell: (ScoredCoin & { signal: Advice })[]
 }
 
-const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+const TTL_SEC = 300 // KV TTL
 const localeQS = 'hl=en-US&gl=US&ceid=US:en'
+const BASE = process.env.NEXT_PUBLIC_BASE_URL || 'https://signalhub.tech'
 
-// === In-memory cache (5 min) ===
-let CACHE: { ts: number; data: Snapshot } | null = null
-const TTL_MS = 5 * 60 * 1000
+// === helpers ===
+function statusFromScore(score: number): Advice {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
+}
 
-const BASE = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
+async function fetchJSON<T>(url: string): Promise<T | null> {
+  try {
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) return null
+    return await r.json() as T
+  } catch {
+    return null
+  }
+}
 
-const clamp = (n:number,a:number,b:number)=>Math.max(a,Math.min(b,n))
-const statusFromScore = (score:number)=> score>=66?'BUY': score<=33?'SELL':'HOLD'
-const chunk = <T,>(arr:T[], size:number)=>{ const out:T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
-
-function constituentsForMarket(label: MarketLabel) {
-  if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
-    return SP500.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'NASDAQ' && Array.isArray(NASDAQ) && NASDAQ.length)
-    return NASDAQ.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'Dow Jones' && Array.isArray(DOWJONES) && DOWJONES.length)
-    return DOWJONES.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'DAX' && Array.isArray(DAX_FULL) && DAX_FULL.length)
-    return DAX_FULL.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'FTSE 100' && Array.isArray(FTSE100) && FTSE100.length)
-    return FTSE100.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'Nikkei 225' && Array.isArray(NIKKEI225) && NIKKEI225.length)
-    return NIKKEI225.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'Hang Seng' && Array.isArray(HANGSENG) && HANGSENG.length)
-    return HANGSENG.map((x:any)=>({symbol:x.symbol,name:x.name}))
-  if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
-    return SENSEX.map((x:any)=>({symbol:x.symbol,name:x.name}))
+function marketList(label: MarketLabel) {
+  if (label === 'AEX') return AEX
+  if (label === 'S&P 500') return SP500
+  if (label === 'NASDAQ') return NASDAQ
+  if (label === 'Dow Jones') return DOWJONES
+  if (label === 'DAX') return DAX_FULL
+  if (label === 'FTSE 100') return FTSE100
+  if (label === 'Nikkei 225') return NIKKEI225
+  if (label === 'Hang Seng') return HANGSENG
+  if (label === 'Sensex') return SENSEX
   return []
 }
 
-function isoDaysAgo(days: number): string {
-  const x = new Date(); x.setHours(0,0,0,0); x.setDate(x.getDate()-days); return x.toISOString().slice(0,10)
-}
-function toISORelOrCoerce(raw?:string|null){
-  if (!raw) return null
-  const t = raw.trim().toLowerCase()
-  let m = t.match(/(\d+)\s*day(?:s)?\s*ago/); if (m) return isoDaysAgo(parseInt(m[1],10))
-  m = t.match(/(\d+)\s*hour(?:s)?\s*ago/); if (m) return isoDaysAgo(0)
-  if (/\bjust\s*now\b/.test(t) || /\bminute(?:s)?\s*ago\b/.test(t)) return isoDaysAgo(0)
-  if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0,10)
-  const ts = Date.parse(raw); return Number.isNaN(ts) ? null : new Date(ts).toISOString().slice(0,10)
-}
+// Klein in-memory cache op de edge-runtime (per region/process)
+let CACHE: { ts: number; data: Snapshot } | null = null
+const MEM_TTL_MS = 60 * 1000 // 1 minuut, om latency nog verder te drukken
 
-async function fetchJSON(url: string) {
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) return null
-  return r.json()
-}
-
-export default async function handler(req: NextRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    if (CACHE && Date.now() - CACHE.ts < TTL_MS) {
-      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=120')
+    // 1) Edge in-memory cache eerst
+    if (CACHE && (Date.now() - CACHE.ts) < MEM_TTL_MS) {
+      res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
       return res.status(200).json(CACHE.data)
     }
 
-    const minuteTag = Math.floor(Date.now() / 60_000)
+    // 2) KV cache
+    const kvKey = 'home:snapshot:v1'
+    const cached = await kvGetJSON<Snapshot>(kvKey)
+    if (cached) {
+      CACHE = { ts: Date.now(), data: cached }
+      res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
+      return res.status(200).json(cached)
+    }
 
-    // ---------- NEWS ----------
-    const [newsCryptoJson, newsEqJson] = await Promise.all([
-      fetchJSON(`${BASE}/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${localeQS}&v=${minuteTag}`),
-      fetchJSON(`${BASE}/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${localeQS}&v=${minuteTag}`),
+    // 3) Verse build
+    const v = Math.floor(Date.now() / 60_000)
+
+    // News
+    const [newsCryptoResp, newsEqResp] = await Promise.all([
+      fetchJSON<any>(`${BASE}/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${localeQS}&v=${v}`),
+      fetchJSON<any>(`${BASE}/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${localeQS}&v=${v}`)
     ])
-    const newsCrypto: NewsItem[] = ((newsCryptoJson?.items)||[]).slice(0,6).map((x:any)=>({
-      title: x.title || '', url: x.link, source: x.source || '', published: x.pubDate || '', image: null
+
+    const newsCrypto: NewsItem[] = (newsCryptoResp?.items || []).slice(0, 6).map((x: any) => ({
+      title: x.title || '',
+      url: x.link,
+      source: x.source || '',
+      published: x.pubDate || '',
+      image: null,
     }))
-    const newsEq: NewsItem[] = ((newsEqJson?.items)||[]).slice(0,6).map((x:any)=>({
-      title: x.title || '', url: x.link, source: x.source || '', published: x.pubDate || '', image: null
+    const newsEq: NewsItem[] = (newsEqResp?.items || []).slice(0, 6).map((x: any) => ({
+      title: x.title || '',
+      url: x.link,
+      source: x.source || '',
+      published: x.pubDate || '',
+      image: null,
     }))
 
-    // ---------- ACADEMY ----------
-    const academyJson = await fetchJSON(`${BASE}/api/academy/list?v=${minuteTag}`)
-    const academy = Array.isArray(academyJson?.items) ? academyJson.items.slice(0,8) : []
+    // Academy
+    const academyResp = await fetchJSON<any>(`${BASE}/api/academy/list?v=${v}`)
+    const academy: { title: string; href: string }[] = academyResp?.items?.slice(0, 8) || []
 
-    // ---------- CONGRESS ----------
-    const congressJson = await fetchJSON(`${BASE}/api/market/congress?limit=30&v=${minuteTag}`)
-    const congressArr = Array.isArray(congressJson?.items) ? congressJson.items : []
-    const congress: CongressTrade[] = congressArr.map((x:any)=>({
-      person: x.person || '', ticker: x.ticker || '', side: String(x.side || '').toUpperCase(),
-      amount: x.amount || '', price: x.price ?? null,
-      date: x.publishedISO || x.tradedISO || toISORelOrCoerce(x.published || x.traded || x.date) || '',
-      url: x.url || '',
-    })).sort((a,b)=> (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
+    // Congress (laatste bovenaan sorteren gebeurt al op de homepage; hier gewoon doorgeven)
+    const congressResp = await fetchJSON<any>(`${BASE}/api/market/congress?limit=30&v=${v}`)
+    const congress = congressResp?.items || []
 
-    // ---------- EQUITIES (Top/Bottom per markt; limiet per markt om verbruik te beperken) ----------
-    const LIMIT_PER_MARKET = 150 // balans: snel & zuinig; Top/Bottom vrijwel identiek vs. full scan
-    async function batchScoresForSymbols(symbols: string[]): Promise<Record<string, number>> {
-      const out: Record<string, number> = {}
-      const parts = chunk(symbols, 60) // middleware limit
-      for (const p of parts) {
-        const j = await fetchJSON(`${BASE}/api/indicators/snapshot-list?symbols=${encodeURIComponent(p.join(','))}`)
-        const rows = (j?.results)||[]
-        for (const r of rows) {
-          const { score } = computeScoreStatus({ ma: r?.ma, rsi: r?.rsi, macd: r?.macd, volume: r?.volume } as any)
-          if (Number.isFinite(score)) out[r.symbol] = Math.round(Number(score))
-        }
+    // Equities top buy/sell per markt
+    const MARKETS: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+
+    const topBuy: (ScoredEq & { signal: Advice })[] = []
+    const topSell: (ScoredEq & { signal: Advice })[] = []
+
+    for (const label of MARKETS) {
+      const list = marketList(label)
+      if (!Array.isArray(list) || list.length === 0) continue
+      // Gebruik snapshot-list endpoint dat zelf KV gebruikt (zuinig)
+      const symbols = list.map((x: any) => x.symbol).slice(0, 60)
+      const snapList = await fetchJSON<any>(`${BASE}/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`)
+
+      const rows: (ScoredEq & { signal: Advice })[] =
+        (snapList?.results || []).map((row: any) => {
+          const found = list.find((x: any) => x.symbol === row.symbol)
+          const { score } = computeScoreStatus(row)
+          const s = typeof score === 'number' ? Math.round(score) : 50
+          return {
+            symbol: row.symbol,
+            name: found?.name || row.symbol,
+            market: label,
+            score: s,
+            signal: statusFromScore(s)
+          }
+        }).filter((r: any) => Number.isFinite(r.score))
+
+      if (rows.length) {
+        const best = [...rows].sort((a, b) => b.score - a.score)[0]
+        const worst = [...rows].sort((a, b) => a.score - b.score)[0]
+        if (best) topBuy.push(best)
+        if (worst) topSell.push(worst)
       }
-      return out
     }
 
-    let topBuy: (ScoredEq & { signal:'BUY'|'HOLD'|'SELL' })[] = []
-    let topSell:(ScoredEq & { signal:'BUY'|'HOLD'|'SELL' })[] = []
-    for (const m of MARKET_ORDER) {
-      const consFull = constituentsForMarket(m)
-      const cons = consFull.slice(0, LIMIT_PER_MARKET) // beperk verbruik
-      if (!cons.length) continue
-      const scoresMap = await batchScoresForSymbols(cons.map(c=>c.symbol))
-      const rows = cons
-        .map(c => ({ symbol:c.symbol, name:c.name, market:m as MarketLabel, score: scoresMap[c.symbol] }))
-        .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
-      if (!rows.length) continue
-      const best = [...rows].sort((a,b)=> b.score - a.score)[0]
-      const worst = [...rows].sort((a,b)=> a.score - b.score)[0]
-      if (best) topBuy.push({ ...best, signal: statusFromScore(best.score) })
-      if (worst) topSell.push({ ...worst, signal: statusFromScore(worst.score) })
-    }
-    const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-    topBuy  = topBuy.sort((a,b)=> order(a.market)-order(b.market))
-    topSell = topSell.sort((a,b)=> order(a.market)-order(b.market))
-
-    // ---------- CRYPTO ----------
-    const COINS = [
-      'BTC-USD','ETH-USD','BNB-USD','SOL-USD','XRP-USD','ADA-USD','DOGE-USD','TON-USD','TRX-USD','AVAX-USD',
-      'DOT-USD','LINK-USD','BCH-USD','LTC-USD','MATIC-USD','XLM-USD','NEAR-USD','ICP-USD','ETC-USD','FIL-USD',
-      'XMR-USD','APT-USD','ARB-USD','OP-USD','SUI-USD','HBAR-USD','ALGO-USD','VET-USD','EGLD-USD','AAVE-USD',
-      'INJ-USD','MKR-USD','RUNE-USD','IMX-USD','FLOW-USD','SAND-USD','MANA-USD','AXS-USD','QNT-USD','GRT-USD',
-      'CHZ-USD','CRV-USD','ENJ-USD','FTM-USD','XTZ-USD','LDO-USD','SNX-USD','STX-USD','AR-USD','GMX-USD',
+    // Crypto universe (zelfde set als op de homepage)
+    const COINS: { symbol: string; name: string }[] = [
+      { symbol: 'BTC-USD',  name: 'Bitcoin' },
+      { symbol: 'ETH-USD',  name: 'Ethereum' },
+      { symbol: 'BNB-USD',  name: 'BNB' },
+      { symbol: 'SOL-USD',  name: 'Solana' },
+      { symbol: 'XRP-USD',  name: 'XRP' },
+      { symbol: 'ADA-USD',  name: 'Cardano' },
+      { symbol: 'DOGE-USD', name: 'Dogecoin' },
+      { symbol: 'TON-USD',  name: 'Toncoin' },
+      { symbol: 'TRX-USD',  name: 'TRON' },
+      { symbol: 'AVAX-USD', name: 'Avalanche' },
+      { symbol: 'DOT-USD',  name: 'Polkadot' },
+      { symbol: 'LINK-USD', name: 'Chainlink' },
+      { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
+      { symbol: 'LTC-USD',  name: 'Litecoin' },
+      { symbol: 'MATIC-USD', name: 'Polygon' },
+      { symbol: 'XLM-USD',  name: 'Stellar' },
+      { symbol: 'NEAR-USD', name: 'NEAR' },
+      { symbol: 'ICP-USD',  name: 'Internet Computer' },
+      { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
+      { symbol: 'FIL-USD',  name: 'Filecoin' },
+      { symbol: 'XMR-USD',  name: 'Monero' },
+      { symbol: 'APT-USD',  name: 'Aptos' },
+      { symbol: 'ARB-USD',  name: 'Arbitrum' },
+      { symbol: 'OP-USD',   name: 'Optimism' },
+      { symbol: 'SUI-USD',  name: 'Sui' },
+      { symbol: 'HBAR-USD', name: 'Hedera' },
+      { symbol: 'ALGO-USD', name: 'Algorand' },
+      { symbol: 'VET-USD',  name: 'VeChain' },
+      { symbol: 'EGLD-USD', name: 'MultiversX' },
+      { symbol: 'AAVE-USD', name: 'Aave' },
+      { symbol: 'INJ-USD',  name: 'Injective' },
+      { symbol: 'MKR-USD',  name: 'Maker' },
+      { symbol: 'RUNE-USD', name: 'THORChain' },
+      { symbol: 'IMX-USD',  name: 'Immutable' },
+      { symbol: 'FLOW-USD', name: 'Flow' },
+      { symbol: 'SAND-USD', name: 'The Sandbox' },
+      { symbol: 'MANA-USD', name: 'Decentraland' },
+      { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+      { symbol: 'QNT-USD',  name: 'Quant' },
+      { symbol: 'GRT-USD',  name: 'The Graph' },
+      { symbol: 'CHZ-USD',  name: 'Chiliz' },
+      { symbol: 'CRV-USD',  name: 'Curve DAO' },
+      { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
+      { symbol: 'FTM-USD',  name: 'Fantom' },
+      { symbol: 'XTZ-USD',  name: 'Tezos' },
+      { symbol: 'LDO-USD',  name: 'Lido DAO' },
+      { symbol: 'SNX-USD',  name: 'Synthetix' },
+      { symbol: 'STX-USD',  name: 'Stacks' },
+      { symbol: 'AR-USD',   name: 'Arweave' },
+      { symbol: 'GMX-USD',  name: 'GMX' },
     ]
-    const toPair = (sym:string) => {
-      const s = sym.replace('-USD','').toUpperCase()
-      const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-      return skip.has(s) ? null : `${s}USDT`
-    }
-    const pairs = COINS.map(c => ({ c, p: toPair(c) })).filter(x => x.p) as { c:string; p:string }[]
-    const parts = chunk(pairs, 60)
-    const cryptoRows: ScoredCoin[] = []
-    for (const part of parts) {
-      const csv = part.map(x=>x.p).join(',')
-      const j = await fetchJSON(`${BASE}/api/crypto-light/indicators?symbols=${encodeURIComponent(csv)}`)
-      const results = (j?.results)||[]
-      for (const r of results) {
-        const { score } = computeScoreStatus({ ma: r?.ma, rsi: r?.rsi, macd: r?.macd, volume: r?.volume } as any)
-        const back = part.find(x => x.p === r.symbol)
-        if (Number.isFinite(score) && back) {
-          cryptoRows.push({ symbol: back.c, name: back.c.replace('-USD',''), score: Math.round(Number(score)) })
+
+    const pairs = COINS.map(c => ({ c, pair: c.symbol.replace('-USD', '') + 'USDT' }))
+    const cryptoResp = await fetchJSON<any>(`${BASE}/api/crypto-light/indicators?symbols=${encodeURIComponent(pairs.map(p => p.pair).join(','))}`)
+    const cryptoRows: { symbol: string; name: string; score: number }[] =
+      (cryptoResp?.results || []).map((row: any) => {
+        const found = pairs.find(p => p.pair === row.symbol)
+        const { score } = computeScoreStatus(row)
+        return {
+          symbol: found?.c.symbol || row.symbol,
+          name: found?.c.name || row.symbol,
+          score: typeof score === 'number' ? Math.round(score) : 50,
         }
-      }
+      })
+
+    const coinTopBuy: (ScoredCoin & { signal: Advice })[] =
+      [...cryptoRows].sort((a, b) => b.score - a.score).slice(0, 5)
+        .map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+    const coinTopSell: (ScoredCoin & { signal: Advice })[] =
+      [...cryptoRows].sort((a, b) => a.score - b.score).slice(0, 5)
+        .map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+    const data: Snapshot = {
+      newsCrypto,
+      newsEq,
+      academy,
+      congress,
+      topBuy,
+      topSell,
+      coinTopBuy,
+      coinTopSell,
     }
-    const coinTopBuy  = [...cryptoRows].sort((a,b)=> b.score - a.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
-    const coinTopSell = [...cryptoRows].sort((a,b)=> a.score - b.score).slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
 
-    const data: Snapshot = { newsCrypto, newsEq, topBuy, topSell, coinTopBuy, coinTopSell, academy, congress }
-
+    // 4) Set KV + korte edge-mem cache
+    await kvSetJSON(kvKey, data, TTL_SEC)
     CACHE = { ts: Date.now(), data }
+
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=120')
     return res.status(200).json(data)
-  } catch (e:any) {
-    return res.status(500).json({ error: 'snapshot error', detail: String(e?.message || e) })
+  } catch (err: any) {
+    return res.status(500).json({ error: String(err?.message || err) })
   }
 }
