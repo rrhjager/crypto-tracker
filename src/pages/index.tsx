@@ -1,3 +1,4 @@
+// src/pages/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
@@ -7,19 +8,18 @@ import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
 
-/* ===== Volledige constituents per beurs (bestaande libs) ===== */
-import { SP500 }    from '@/lib/sp500'
-import { NASDAQ }   from '@/lib/nasdaq'
+import { SP500 } from '@/lib/sp500'
+import { NASDAQ } from '@/lib/nasdaq'
 import { DOWJONES } from '@/lib/dowjones'
 import { DAX as DAX_FULL } from '@/lib/dax'
-import { FTSE100 }  from '@/lib/ftse100'
+import { FTSE100 } from '@/lib/ftse100'
 import { NIKKEI225 } from '@/lib/nikkei225'
-import { HANGSENG }  from '@/lib/hangseng'
-import { SENSEX }    from '@/lib/sensex'
+import { HANGSENG } from '@/lib/hangseng'
+import { SENSEX } from '@/lib/sensex'
 
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
-const CARD_CONTENT_H = 'h-[280px]' // compact 9 tiles
+const CARD_CONTENT_H = 'h-[280px]'
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 
 /* ---------------- types ---------------- */
@@ -338,7 +338,7 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
   )
 }
 
-/* ======== ⬇️ NIEUW: mini relative-date helpers (client-side fallback) ⬇️ ======== */
+/* ======== relative-date helpers ======== */
 function isoDaysAgo(days: number): string {
   const d = new Date()
   d.setHours(0, 0, 0, 0)
@@ -362,19 +362,17 @@ function coerceISO(raw?: string | null): string | null {
   if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10)
   return null
 }
-/* ======== ⬆️ EINDE helpers ⬆️ ======== */
 
 /* ---------------- page ---------------- */
 export default function Homepage(props: HomeProps) {
   const router = useRouter()
 
-  // minute tag voor cache-busting + periodieke refresh
+  // minute tag
   const [minuteTag, setMinuteTag] = useState(Math.floor(Date.now() / 60_000))
   useEffect(() => {
     const id = setInterval(() => setMinuteTag(Math.floor(Date.now() / 60_000)), 60_000)
     return () => clearInterval(id)
   }, [])
-  // luister naar localStorage updates van detailpagina
   useEffect(() => {
     function onStorage(e: StorageEvent) {
       if (!e.key || !e.key.startsWith('ta:')) return
@@ -384,7 +382,7 @@ export default function Homepage(props: HomeProps) {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // loading flags
+  // loading flags init vanuit snapshot
   const [loadingEq, setLoadingEq] = useState(!(props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length))
   const [loadingCoin, setLoadingCoin] = useState(!(props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length))
   const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(!(props.snapshot?.newsCrypto?.length))
@@ -402,7 +400,7 @@ export default function Homepage(props: HomeProps) {
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
-  /* ---------- Eerste paint versnellen: hydrateer UI met snapshot/cache ---------- */
+  /* ---------- hydrateer met snapshot/cache ---------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(
     props.snapshot?.newsCrypto ?? getCache<NewsItem[]>('home:news:crypto') ?? []
   )
@@ -431,7 +429,7 @@ export default function Homepage(props: HomeProps) {
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
 
-  // als snapshot leeg was, zet loading op basis van cache
+  // flags bijwerken obv cache/snapshot
   useEffect(() => {
     setLoadingNewsCrypto(newsCrypto.length === 0)
     setLoadingNewsEq(newsEq.length === 0)
@@ -440,6 +438,28 @@ export default function Homepage(props: HomeProps) {
     setLoadingAcademy(academy.length === 0)
     setLoadingCongress(trades.length === 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /* ---------- ZACHTE REFRESH: één call naar snapshot ---------- */
+  useEffect(() => {
+    let stop = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/home/snapshot', { cache: 'no-store' })
+        if (!r.ok) return
+        const s = await r.json() as HomeSnapshot
+        if (stop) return
+        setNewsCrypto(s.newsCrypto); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
+        setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
+        setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
+        setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
+        setTopBuy(s.topBuy);         setCache('home:eq:topBuy',   s.topBuy)
+        setTopSell(s.topSell);       setCache('home:eq:topSell',  s.topSell);    setLoadingEq(false)
+        setCoinTopBuy(s.coinTopBuy); setCache('home:coin:topBuy', s.coinTopBuy)
+        setCoinTopSell(s.coinTopSell); setCache('home:coin:topSell', s.coinTopSell); setLoadingCoin(false)
+      } catch {}
+    })()
+    return () => { stop = true }
   }, [])
 
   /* ---------- NEWS warm-up (SWR) ---------- */
@@ -461,8 +481,9 @@ export default function Homepage(props: HomeProps) {
     return () => { aborted = true }
   }, [])
 
-  /* ========= NEWS ========= */
+  /* ========= NEWS fallback (alleen als nog leeg) ========= */
   useEffect(()=>{
+    if (newsCrypto.length && newsEq.length) return
     let aborted=false
     async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void, setLoading:(f:boolean)=>void){
       try{
@@ -492,13 +513,13 @@ export default function Homepage(props: HomeProps) {
         if (!aborted) setLoading(false)
       }
     }
-    load('crypto', setNewsCrypto, setLoadingNewsCrypto)
-    load('equities', setNewsEq, setLoadingNewsEq)
+    if (!newsCrypto.length) load('crypto', setNewsCrypto, setLoadingNewsCrypto)
+    if (!newsEq.length)     load('equities', setNewsEq,   setLoadingNewsEq)
     return ()=>{aborted=true}
-  },[minuteTag])
+  },[minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     EQUITIES — Top BUY/SELL
+     EQUITIES — fallback
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
@@ -513,7 +534,6 @@ export default function Homepage(props: HomeProps) {
   }
 
   useEffect(() => {
-    // Als we al server-snapshot hebben, alleen “zacht” verversen (geen lang wachten).
     if (topBuy.length && topSell.length) return
     let aborted = false
     ;(async () => {
@@ -551,7 +571,7 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     CRYPTO — Top 5 BUY/SELL
+     CRYPTO — fallback
      ======================= */
   const pairs = useMemo(() => {
     return COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
@@ -606,7 +626,7 @@ export default function Homepage(props: HomeProps) {
     return () => { aborted = true }
   }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ========= Academy ========= */
+  /* ========= Academy (fallback) ========= */
   type AcademyItem = { title: string; href: string }
   useEffect(() => {
     if (academy.length) { setLoadingAcademy(false); return }
@@ -640,7 +660,7 @@ export default function Homepage(props: HomeProps) {
     return () => { aborted = true }
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ========= Congress Trading ========= */
+  /* ========= Congress Trading (fallback) ========= */
   useEffect(() => {
     if (trades.length) { setLoadingCongress(false); return }
     let aborted = false
@@ -668,7 +688,7 @@ export default function Homepage(props: HomeProps) {
     return () => { aborted = true }
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- helpers for news (favicon + decode + source→domain fallback) ---- */
+  /* ---- helpers for news ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -781,9 +801,8 @@ export default function Homepage(props: HomeProps) {
       </Head>
 
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
-        {/* ======= 3×3 GRID ======= */}
         <div className="grid gap-5 lg:grid-cols-3">
-          {/* -------- Row 1 -------- */}
+          {/* 1) Hero */}
           <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
@@ -865,7 +884,6 @@ export default function Homepage(props: HomeProps) {
             </ul>
           </Card>
 
-          {/* -------- Row 2 -------- */}
           {/* 4) Equities — Top BUY */}
           <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
@@ -922,14 +940,12 @@ export default function Homepage(props: HomeProps) {
           <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
-
               <div className="grid grid-cols-12 text-[10px] text-white/60 px-2 pb-1">
                 <div className="col-span-4">Person</div>
                 <div className="col-span-3">Ticker</div>
                 <div className="col-span-2">Side</div>
                 <div className="col-span-3 text-right">Amount / Price</div>
               </div>
-
               <ul className="divide-y divide-white/8">
                 {loadingCongress ? (
                   <li className="py-3 text-white/60 text-[12px]">Loading…</li>
@@ -970,15 +986,17 @@ export default function Homepage(props: HomeProps) {
             </div>
           </Card>
 
-          {/* -------- Row 3 -------- */}
+          {/* 7) Crypto News */}
           <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
             {renderNews(newsCrypto, 'nC', loadingNewsCrypto)}
           </Card>
 
+          {/* 8) Equities News */}
           <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
             {renderNews(newsEq, 'nE', loadingNewsEq)}
           </Card>
 
+          {/* 9) Academy */}
           <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
             <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingAcademy ? (
@@ -1002,13 +1020,17 @@ export default function Homepage(props: HomeProps) {
 
 export async function getStaticProps() {
   try {
-    const base = BASE_URL || '' // absoluut aangeraden: zet NEXT_PUBLIC_BASE_URL
+    // Robuuste base bepaling voor build/ISR:
+    const base =
+      BASE_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+
     const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     if (!res.ok) throw new Error('snapshot failed')
     const snapshot = await res.json() as HomeSnapshot
-    return { props: { snapshot }, revalidate: 300 }
+    return { props: { snapshot }, revalidate: 120 } // html elke 2 min opnieuw genereren
   } catch {
-    // Fail-closed: render alsnog, client vult bij
+    // Fail-closed: client hydrateert alsnog vanuit cache/snapshot-call
     return { props: { snapshot: null }, revalidate: 120 }
   }
 }
