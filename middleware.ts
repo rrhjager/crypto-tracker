@@ -1,4 +1,4 @@
-// middleware.ts  (kopieer 1-op-1 ook naar /src/middleware.ts)
+// middleware.ts  (zet dezelfde file óók in /src/middleware.ts)
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
@@ -10,12 +10,12 @@ const PUBLIC_ALLOW = [
   '/api/indicators/snapshot-list',
   '/api/crypto-light/indicators', // crypto indicators
   '/api/crypto-light/prices',     // crypto prijzen
-  '/api/market/',                 // Market-Intel subroutes
+  '/api/market/',                 // alle Market-Intel subroutes
 
-  // ✅ news + scores voor homepage
-  '/api/stocks/news',             // equities news (AEX)
-  '/api/v1/news',                 // 🔥 crypto news endpoint (/api/v1/news/[slug])
+  // ✅ homepage + news + scores
+  '/api/news/',                   // Google/Equities/Crypto news
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
+  '/api/home/snapshot',           // 🔥 Edge snapshot aggregator voor homepage
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -113,11 +113,11 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // === Kleine limiter voor news endpoints (voorkomt misbruik) ===
-  if (pathname.startsWith('/api/v1/news') || pathname.startsWith('/api/stocks/news')) {
+  // === Kleine limiter voor news & home snapshot endpoints ===
+  if (pathname.startsWith('/api/news/') || pathname.startsWith('/api/home/snapshot')) {
     const limitParam = Number(searchParams.get('limit') || searchParams.get('n') || '0')
-    if (Number.isFinite(limitParam) && limitParam > 30) {
-      return new NextResponse('News limit too high (max 30)', { status: 400 })
+    if (Number.isFinite(limitParam) && limitParam > 50) {
+      return new NextResponse('Too many results requested', { status: 400 })
     }
   }
 

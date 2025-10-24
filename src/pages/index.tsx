@@ -1,4 +1,3 @@
-// src/pages/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
@@ -21,6 +20,7 @@ import { SENSEX }    from '@/lib/sensex'
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
 const CARD_CONTENT_H = 'h-[280px]' // compact 9 tiles
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -32,6 +32,23 @@ type MarketLabel =
 
 type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
 type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
+
+type CongressTrade = {
+  person?: string; ticker?: string; side?: 'BUY'|'SELL'|string;
+  amount?: string|number; price?: string|number|null; date?: string; url?: string;
+}
+
+type HomeSnapshot = {
+  newsCrypto: NewsItem[];
+  newsEq: NewsItem[];
+  topBuy: ScoredEq[];
+  topSell: ScoredEq[];
+  coinTopBuy: ScoredCoin[];
+  coinTopSell: ScoredCoin[];
+  academy: { title: string; href: string }[];
+  congress: CongressTrade[];
+}
+type HomeProps = { snapshot: HomeSnapshot | null }
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -218,31 +235,22 @@ const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
 /* ===== gebruik volledige lijsten per markt (fallback naar STATIC_CONS) ===== */
 function constituentsForMarket(label: MarketLabel) {
   if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
     return SP500.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'NASDAQ' && Array.isArray(NASDAQ) && NASDAQ.length)
     return NASDAQ.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'Dow Jones' && Array.isArray(DOWJONES) && DOWJONES.length)
     return DOWJONES.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'DAX' && Array.isArray(DAX_FULL) && DAX_FULL.length)
     return DAX_FULL.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'FTSE 100' && Array.isArray(FTSE100) && FTSE100.length)
     return FTSE100.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'Nikkei 225' && Array.isArray(NIKKEI225) && NIKKEI225.length)
     return NIKKEI225.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'Hang Seng' && Array.isArray(HANGSENG) && HANGSENG.length)
     return HANGSENG.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
     return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-
   return STATIC_CONS[label] || []
 }
 
@@ -333,7 +341,6 @@ const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: str
 /* ======== ⬇️ NIEUW: mini relative-date helpers (client-side fallback) ⬇️ ======== */
 function isoDaysAgo(days: number): string {
   const d = new Date()
-  // normaliseer naar lokale dag voor UI-consistentie
   d.setHours(0, 0, 0, 0)
   d.setDate(d.getDate() - days)
   return d.toISOString().slice(0, 10)
@@ -350,9 +357,7 @@ function toISORelative(raw?: string | null): string | null {
 }
 function coerceISO(raw?: string | null): string | null {
   if (!raw) return null
-  // yyyy-mm-dd
   if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0, 10)
-  // probeer Date parse
   const ts = Date.parse(raw)
   if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10)
   return null
@@ -360,7 +365,7 @@ function coerceISO(raw?: string | null): string | null {
 /* ======== ⬆️ EINDE helpers ⬆️ ======== */
 
 /* ---------------- page ---------------- */
-export default function Homepage() {
+export default function Homepage(props: HomeProps) {
   const router = useRouter()
 
   // minute tag voor cache-busting + periodieke refresh
@@ -380,12 +385,12 @@ export default function Homepage() {
   }, [])
 
   // loading flags
-  const [loadingEq, setLoadingEq] = useState(true)
-  const [loadingCoin, setLoadingCoin] = useState(true)
-  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(true)
-  const [loadingNewsEq, setLoadingNewsEq] = useState(true)
-  const [loadingCongress, setLoadingCongress] = useState(true)
-  const [loadingAcademy, setLoadingAcademy] = useState(true)
+  const [loadingEq, setLoadingEq] = useState(!(props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length))
+  const [loadingCoin, setLoadingCoin] = useState(!(props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length))
+  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(!(props.snapshot?.newsCrypto?.length))
+  const [loadingNewsEq, setLoadingNewsEq] = useState(!(props.snapshot?.newsEq?.length))
+  const [loadingCongress, setLoadingCongress] = useState(!(props.snapshot?.congress?.length))
+  const [loadingAcademy, setLoadingAcademy] = useState(!(props.snapshot?.academy?.length))
 
   /* ---------- Prefetch routes ---------- */
   useEffect(() => {
@@ -397,20 +402,36 @@ export default function Homepage() {
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
-  /* ---------- Eerste paint versnellen: hydrateer UI met cache ---------- */
-  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(getCache<NewsItem[]>('home:news:crypto') || [])
-  const [newsEq, setNewsEq] = useState<NewsItem[]>(getCache<NewsItem[]>('home:news:eq') || [])
-  const [topBuy, setTopBuy]   = useState<ScoredEq[]>(getCache<ScoredEq[]>('home:eq:topBuy') || [])
-  const [topSell, setTopSell] = useState<ScoredEq[]>(getCache<ScoredEq[]>('home:eq:topSell') || [])
-  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>(getCache<ScoredCoin[]>('home:coin:topBuy') || [])
-  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>(getCache<ScoredCoin[]>('home:coin:topSell') || [])
-  const [academy, setAcademy] = useState<{ title: string; href: string }[]>(getCache<{title:string;href:string}[]>('home:academy') || [])
-  const [trades, setTrades] = useState<{ person?: string; ticker?: string; side?: 'BUY'|'SELL'|string; amount?: string|number; price?: string|number|null; date?: string; url?: string; }[]>(getCache<any[]>('home:congress') || [])
+  /* ---------- Eerste paint versnellen: hydrateer UI met snapshot/cache ---------- */
+  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(
+    props.snapshot?.newsCrypto ?? getCache<NewsItem[]>('home:news:crypto') ?? []
+  )
+  const [newsEq, setNewsEq] = useState<NewsItem[]>(
+    props.snapshot?.newsEq ?? getCache<NewsItem[]>('home:news:eq') ?? []
+  )
+  const [topBuy, setTopBuy]   = useState<ScoredEq[]>(
+    props.snapshot?.topBuy ?? getCache<ScoredEq[]>('home:eq:topBuy') ?? []
+  )
+  const [topSell, setTopSell] = useState<ScoredEq[]>(
+    props.snapshot?.topSell ?? getCache<ScoredEq[]>('home:eq:topSell') ?? []
+  )
+  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>(
+    props.snapshot?.coinTopBuy ?? getCache<ScoredCoin[]>('home:coin:topBuy') ?? []
+  )
+  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>(
+    props.snapshot?.coinTopSell ?? getCache<ScoredCoin[]>('home:coin:topSell') ?? []
+  )
+  const [academy, setAcademy] = useState<{ title: string; href: string }[]>(
+    props.snapshot?.academy ?? getCache<{title:string;href:string}[]>('home:academy') ?? []
+  )
+  const [trades, setTrades] = useState<CongressTrade[]>(
+    props.snapshot?.congress ?? getCache<CongressTrade[]>('home:congress') ?? []
+  )
   const [scoreErr, setScoreErr] = useState<string | null>(null)
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
 
-  // zet loading flags op basis van of we cache hadden
+  // als snapshot leeg was, zet loading op basis van cache
   useEffect(() => {
     setLoadingNewsCrypto(newsCrypto.length === 0)
     setLoadingNewsEq(newsEq.length === 0)
@@ -418,7 +439,7 @@ export default function Homepage() {
     setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
     setLoadingAcademy(academy.length === 0)
     setLoadingCongress(trades.length === 0)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   /* ---------- NEWS warm-up (SWR) ---------- */
@@ -481,7 +502,6 @@ export default function Homepage() {
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  // >>> Sneller: 1 API-call per symbool (gecachete server-score) i.p.v. 4 losse indicator-calls
   async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
     try {
       const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
@@ -489,32 +509,24 @@ export default function Homepage() {
       const j = await r.json() as { score?: number|null }
       if (Number.isFinite(j?.score as number)) return Math.round(Number(j.score))
       return null
-    } catch {
-      return null
-    }
+    } catch { return null }
   }
 
   useEffect(() => {
+    // Als we al server-snapshot hebben, alleen “zacht” verversen (geen lang wachten).
+    if (topBuy.length && topSell.length) return
     let aborted = false
     ;(async () => {
       try {
-        setLoadingEq(true)
-        setScoreErr(null)
-
-        const outBuy: ScoredEq[] = []
-        const outSell: ScoredEq[] = []
-
+        setLoadingEq(true); setScoreErr(null)
+        const outBuy: ScoredEq[] = []; const outSell: ScoredEq[] = []
         for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
           const symbols = cons.map(c => c.symbol)
-
-          // Concurrency bewust gematigd i.v.m. API-limits + snellere server-cache
           const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
-          const rows = cons.map((c, i) => ({
-            symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any)
-          })).filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
-
+          const rows = cons.map((c, i) => ({ symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any) }))
+            .filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
           if (rows.length) {
             const top = [...rows].sort((a,b)=> b.score - a.score)[0]
             const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
@@ -522,30 +534,25 @@ export default function Homepage() {
             if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
           }
         }
-
         const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
         const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
         const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
-
         if (!aborted) {
-          setTopBuy(finalBuy)
-          setTopSell(finalSell)
-          setCache('home:eq:topBuy',  finalBuy)
-          setCache('home:eq:topSell', finalSell)
+          setTopBuy(finalBuy); setTopSell(finalSell)
+          setCache('home:eq:topBuy',  finalBuy); setCache('home:eq:topSell', finalSell)
         }
-      } catch (e: any) {
+      } catch (e:any) {
         if (!aborted) setScoreErr(String(e?.message || e))
       } finally {
         if (!aborted) setLoadingEq(false)
       }
     })()
     return () => { aborted = true }
-  }, [minuteTag])
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
      CRYPTO — Top 5 BUY/SELL
      ======================= */
-  // pairs memo
   const pairs = useMemo(() => {
     return COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
       .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
@@ -553,12 +560,11 @@ export default function Homepage() {
   }, [])
 
   useEffect(() => {
+    if (coinTopBuy.length && coinTopSell.length) return
     let aborted = false
     ;(async () => {
       try {
-        setLoadingCoin(true)
-        setCoinErr(null)
-
+        setLoadingCoin(true); setCoinErr(null)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           try {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}&v=${minuteTag}`
@@ -566,9 +572,7 @@ export default function Homepage() {
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
             const ind = (j.results || [])[0]
-            const { score } = computeScoreStatus({
-              ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
-            } as any)
+            const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
             try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
             return { symbol: c.symbol, name: c.name, score }
           } catch {
@@ -584,21 +588,14 @@ export default function Homepage() {
             return { symbol: c.symbol, name: c.name, score: (null as any) }
           }
         })
-
-        const rows = batchScores
-          .filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
-
+        const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
-
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
-
         if (!aborted) {
-          setCoinTopBuy(buys)
-          setCoinTopSell(sells)
-          setCache('home:coin:topBuy',  buys)
-          setCache('home:coin:topSell', sells)
+          setCoinTopBuy(buys); setCoinTopSell(sells)
+          setCache('home:coin:topBuy',  buys); setCache('home:coin:topSell', sells)
         }
       } catch (e:any) {
         if (!aborted) setCoinErr(String(e?.message || e))
@@ -607,11 +604,12 @@ export default function Homepage() {
       }
     })()
     return () => { aborted = true }
-  }, [pairs, minuteTag])
+  }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ========= Academy ========= */
   type AcademyItem = { title: string; href: string }
   useEffect(() => {
+    if (academy.length) { setLoadingAcademy(false); return }
     let aborted = false
     ;(async () => {
       try {
@@ -621,9 +619,7 @@ export default function Homepage() {
           const j = await r.json() as { items?: AcademyItem[] }
           if (!aborted && Array.isArray(j.items) && j.items.length) {
             const items = j.items.slice(0, 8)
-            setAcademy(items)
-            setCache('home:academy', items)
-            return
+            setAcademy(items); setCache('home:academy', items); return
           }
         }
       } catch {}
@@ -638,69 +634,39 @@ export default function Homepage() {
           { title: 'How to read volume properly', href: '/academy' },
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
         ]
-        setAcademy(fallback)
-        setCache('home:academy', fallback)
+        setAcademy(fallback); setCache('home:academy', fallback)
       }
     })().finally(() => { if (!aborted) setLoadingAcademy(false) })
     return () => { aborted = true }
-  }, [minuteTag])
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ========= Congress Trading ========= */
-  type CongressTrade = {
-    person?: string;
-    ticker?: string;
-    side?: 'BUY' | 'SELL' | string;
-    amount?: string | number;
-    price?: string | number | null;
-    date?: string;
-    url?: string;
-  }
-
   useEffect(() => {
+    if (trades.length) { setLoadingCongress(false); return }
     let aborted = false
     ;(async () => {
       try {
-        setLoadingCongress(true)
-        setTradesErr(null)
+        setLoadingCongress(true); setTradesErr(null)
         const r = await fetch('/api/market/congress?limit=30&v='+minuteTag, { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json() as { items?: any[] }
         const arr = Array.isArray(j?.items) ? j.items : []
         const norm: CongressTrade[] = (arr || []).map((x: any) => {
-          // ✅ Neem ISO van server als beschikbaar; anders client-fallback uit eventuele relatieve labels
-          const fallbackISO =
-            toISORelative(x.published || x.traded || x.date) ||
-            coerceISO(x.published || x.traded || x.date)
+          const fallbackISO = toISORelative(x.published || x.traded || x.date) || coerceISO(x.published || x.traded || x.date)
           const iso = x.publishedISO || x.tradedISO || fallbackISO || ''
-          return {
-            person: x.person || '',
-            ticker: x.ticker || '',
-            side: String(x.side || '').toUpperCase(),
-            amount: x.amount || '',
-            price: x.price ?? null,
-            date: iso,
-            url: x.url || '',
-          }
+          return { person: x.person || '', ticker: x.ticker || '', side: String(x.side || '').toUpperCase(),
+            amount: x.amount || '', price: x.price ?? null, date: iso, url: x.url || '' }
         })
-        // ✅ Altijd desc sorteren op datum, zodat laatste trades bovenaan staan
-        norm.sort((a, b) => {
-          const ta = a.date ? Date.parse(a.date) : 0
-          const tb = b.date ? Date.parse(b.date) : 0
-          return tb - ta
-        })
-
-        if (!aborted) {
-          setTrades(norm)
-          setCache('home:congress', norm)
-        }
-      } catch (e: any) {
+        norm.sort((a,b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
+        if (!aborted) { setTrades(norm); setCache('home:congress', norm) }
+      } catch (e:any) {
         if (!aborted) setTradesErr(String(e?.message || e))
       } finally {
         if (!aborted) setLoadingCongress(false)
       }
     })()
     return () => { aborted = true }
-  }, [minuteTag])
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- helpers for news (favicon + decode + source→domain fallback) ---- */
   function decodeHtml(s: string) {
@@ -910,7 +876,7 @@ export default function Homepage() {
               ) : topBuy.map((r)=>(
                 <li key={`bb-${r.market}-${r.symbol}`}>
                   <Row
-                    href={equityHref(r.symbol)}
+                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -936,7 +902,7 @@ export default function Homepage() {
               ) : topSell.map((r)=>(
                 <li key={`bs-${r.market}-${r.symbol}`}>
                   <Row
-                    href={equityHref(r.symbol)}
+                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -1034,10 +1000,15 @@ export default function Homepage() {
   )
 }
 
-// ISR (blijft zoals je had; page zelf gebruikt client fetch + cache)
 export async function getStaticProps() {
-  return {
-    props: {},
-    revalidate: 300,
-  };
+  try {
+    const base = BASE_URL || '' // absoluut aangeraden: zet NEXT_PUBLIC_BASE_URL
+    const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
+    if (!res.ok) throw new Error('snapshot failed')
+    const snapshot = await res.json() as HomeSnapshot
+    return { props: { snapshot }, revalidate: 300 }
+  } catch {
+    // Fail-closed: render alsnog, client vult bij
+    return { props: { snapshot: null }, revalidate: 120 }
+  }
 }

@@ -12,9 +12,10 @@ const PUBLIC_ALLOW = [
   '/api/crypto-light/prices',     // crypto prijzen
   '/api/market/',                 // alle Market-Intel subroutes
 
-  // ✅ toegevoegd voor homepage
+  // ✅ homepage + news + scores
   '/api/news/',                   // Google/Equities/Crypto news
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
+  '/api/home/snapshot',           // 🔥 Edge snapshot aggregator voor homepage
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -112,15 +113,14 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // === Kleine limiter voor news endpoints (voorkomt misbruik) ===
-  if (pathname.startsWith('/api/news/')) {
+  // === Kleine limiter voor news & home snapshot endpoints ===
+  if (pathname.startsWith('/api/news/') || pathname.startsWith('/api/home/snapshot')) {
     const limitParam = Number(searchParams.get('limit') || searchParams.get('n') || '0')
-    if (Number.isFinite(limitParam) && limitParam > 30) {
-      return new NextResponse('News limit too high (max 30)', { status: 400 })
+    if (Number.isFinite(limitParam) && limitParam > 50) {
+      return new NextResponse('Too many results requested', { status: 400 })
     }
   }
 
-  // Per-symbool score endpoint is cheap; geen limiter nodig.
   return NextResponse.next()
 }
 
