@@ -7,10 +7,6 @@
     {
       "path": "/api/internal/warm-home",
       "schedule": "*/3 * * * *"
-    },
-    {
-      "path": "/api/home/snapshot",
-      "schedule": "*/5 * * * *"
     }
   ]
 }
