@@ -2,137 +2,168 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
-import { maCross, rsi14, macd, vol20 } from '@/lib/ta'
-
-type Advice = 'BUY' | 'HOLD' | 'SELL'
-type Resp = { symbol: string; score: number | null; details?: any; error?: string }
-type Snap = { updatedAt: number; value: Resp }
-
-const TTL_SEC = 300       // 5 min cache
-
-/* ---------- helpers (exacte weging/points als homepage) ---------- */
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-const scoreToPts = (s: number) => clamp((s / 100) * 4 - 2, -2, 2)
-const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
-const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
-const toPtsSmart = (
-  status?: Advice | string,
-  pts?: number | string | null,
-  fallback: () => number | null = () => null
-) => {
-  if (isFiniteNum(pts)) return clamp(toNum(pts), -2, 2)
-  const s = String(status || '').toUpperCase()
-  if (s === 'BUY')  return  2
-  if (s === 'SELL') return -2
-  const f = fallback()
-  return f == null ? 0 : clamp(f, -2, 2)
-}
-
-function deriveMaPoints(ma?: { ma50: number | null; ma200: number | null }): number | null {
-  const ma50 = ma?.ma50, ma200 = ma?.ma200
-  if (ma50 == null || ma200 == null) return null
-  let maScore = 50
-  if (ma50 > ma200) {
-    const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, 0.2)
-    maScore = 60 + (spread / 0.2) * 40
-  } else if (ma50 < ma200) {
-    const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, 0.2)
-    maScore = 40 - (spread / 0.2) * 40
-  }
-  return scoreToPts(maScore)
-}
-function deriveRsiPoints(r: number | null | undefined): number | null {
-  if (typeof r !== 'number') return null
-  const rsiScore = clamp(((r - 30) / 40) * 100, 0, 100)
-  return scoreToPts(rsiScore)
-}
-function deriveMacdPoints(hist: number | null | undefined, ma50?: number | null): number | null {
-  if (typeof hist !== 'number') return null
-  if (ma50 && ma50 > 0) {
-    const t = 0.01
-    const relClamped = clamp((hist / ma50) / t, -1, 1)
-    const macdScore = 50 + relClamped * 20
-    return scoreToPts(macdScore)
-  }
-  const macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
-  return scoreToPts(macdScore)
-}
-function deriveVolPoints(ratio: number | null | undefined): number | null {
-  if (typeof ratio !== 'number') return null
-  const delta = clamp((ratio - 1) / 1, -1, 1)
-  const volScore = clamp(50 + delta * 30, 0, 100)
-  return scoreToPts(volScore)
-}
 
 export const config = { runtime: 'nodejs' }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const symbol = String(req.query.symbol || '').trim()
-  if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
+// Zorg dat deze exact matcht met /api/indicators/snapshot.ts
+const TTL_SEC = 300
+const RANGE: '1y' | '2y' = '1y'
 
-  const key = `ind:score:v1:${symbol}`
-  const now = Date.now()
+type Advice = 'BUY'|'SELL'|'HOLD'
+type Bar = { close?: number; volume?: number }
 
+type ScoreResp = {
+  symbol: string
+  score: number | null
+  // optioneel, handig voor debug
+  components?: {
+    ma: Advice
+    macd: Advice
+    rsi: Advice
+    vol: Advice
+  }
+}
+
+// ==== helpers (exacte kopie van je snapshot.ts) ====
+function normCloses(ohlc: any): number[] {
+  if (Array.isArray(ohlc)) {
+    return (ohlc as Bar[])
+      .map(b => (typeof b?.close === 'number' ? b.close : null))
+      .filter((n): n is number => typeof n === 'number')
+  }
+  if (ohlc && Array.isArray(ohlc.closes)) {
+    return (ohlc.closes as any[]).filter((n): n is number => typeof n === 'number')
+  }
+  return []
+}
+function normVolumes(ohlc: any): number[] {
+  if (Array.isArray(ohlc)) {
+    return (ohlc as Bar[])
+      .map(b => (typeof b?.volume === 'number' ? b.volume : null))
+      .filter((n): n is number => typeof n === 'number')
+  }
+  if (ohlc && Array.isArray(ohlc.volumes)) {
+    return (ohlc.volumes as any[]).filter((n): n is number => typeof n === 'number')
+  }
+  return []
+}
+const sma = (arr: number[], p: number): number | null => {
+  if (!Array.isArray(arr) || arr.length < p) return null
+  const s = arr.slice(-p)
+  return s.reduce((a, b) => a + b, 0) / p
+}
+function rsiWilder(closes: number[], period = 14): number | null {
+  if (closes.length < period + 1) return null
+  let gains = 0, losses = 0
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1]
+    if (d >= 0) gains += d
+    else losses -= d
+  }
+  let avgGain = gains / period
+  let avgLoss = losses / period
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1]
+    const g = d > 0 ? d : 0
+    const l = d < 0 ? -d : 0
+    avgGain = (avgGain * (period - 1) + g) / period
+    avgLoss = (avgLoss * (period - 1) + l) / period
+  }
+  if (avgLoss === 0) return 100
+  const rs = avgGain / avgLoss
+  const v = 100 - 100 / (1 + rs)
+  return Number.isFinite(v) ? v : null
+}
+function emaLast(arr: number[], period: number): number | null {
+  if (arr.length < period) return null
+  const k = 2 / (period + 1)
+  let ema = arr.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = period; i < arr.length; i++) ema = arr[i] * k + ema * (1 - k)
+  return ema
+}
+function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
+  if (arr.length < slow + signal) return { macd: null, signal: null, hist: null }
+  const series: number[] = []
+  for (let i = slow; i <= arr.length; i++) {
+    const slice = arr.slice(0, i)
+    const f = emaLast(slice, fast)
+    const s = emaLast(slice, slow)
+    if (f != null && s != null) series.push(f - s)
+  }
+  if (series.length < signal) return { macd: null, signal: null, hist: null }
+  const m = series[series.length - 1]
+  const sig = emaLast(series, signal)
+  const h = sig != null ? m - sig : null
+  return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
+}
+
+// zelfde weging als snapshot.ts
+const adv = (v:number|null, lo:number, hi:number): Advice =>
+  v==null?'HOLD':(v<lo?'SELL':v>hi?'BUY':'HOLD')
+const scoreFrom = (ma:Advice, macd:Advice, rsi:Advice, vol:Advice) => {
+  const pts = (s:Advice)=> s==='BUY'?2:s==='SELL'?-2:0
+  const n = (p:number)=> (p+2)/4
+  const W_MA=.40, W_MACD=.30, W_RSI=.20, W_VOL=.10
+  const agg = W_MA*n(pts(ma)) + W_MACD*n(pts(macd)) + W_RSI*n(pts(rsi)) + W_VOL*n(pts(vol))
+  return Math.round(Math.max(0, Math.min(1, agg)) * 100)
+}
+
+async function computeScore(symbol: string): Promise<ScoreResp> {
+  const ohlc = await getYahooDailyOHLC(symbol, RANGE)
+  const closes = normCloses(ohlc)
+  const vols = normVolumes(ohlc)
+
+  const ma50 = sma(closes, 50)
+  const ma200 = sma(closes, 200)
+  const maStatus: Advice =
+    (ma50 != null && ma200 != null)
+      ? (ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD')
+      : 'HOLD'
+
+  const rsi = rsiWilder(closes, 14)
+  const { macd, signal } = macdLast(closes, 12, 26, 9)
+  const macdStatus: Advice = (macd!=null && signal!=null)
+    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
+    : 'HOLD'
+
+  const volume = vols.length ? vols[vols.length - 1] : null
+  const last20 = vols.slice(-20)
+  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
+  const ratio =
+    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
+      ? volume / avg20d
+      : null
+  const volStatus: Advice = adv(ratio, 0.8, 1.2)
+
+  const score = scoreFrom(maStatus, macdStatus, rsi==null?'HOLD':(rsi<30?'BUY':rsi>70?'SELL':'HOLD'), volStatus)
+  return { symbol, score, components: { ma: maStatus, macd: macdStatus, rsi: rsi==null?'HOLD':(rsi<30?'BUY':rsi>70?'SELL':'HOLD'), vol: volStatus } }
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<ScoreResp | { error: string }>) {
   try {
-    // 1) Serve warm cache als die vers genoeg is
-    const cached = await kvGetJSON<Snap>(key)
-    if (cached?.value && cached.updatedAt && (now - cached.updatedAt < TTL_SEC * 1000)) {
-      return res.status(200).json(cached.value)
-    }
+    const symbol = (req.query.symbol as string || '').toUpperCase().trim()
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
 
-    // 2) (Her)berekenen in één pass
-    const ohlc = await getYahooDailyOHLC(symbol, '1y') // kan array of object zijn
-    const closes: number[] = Array.isArray(ohlc)
-      ? (ohlc as any[]).map(c => (typeof c?.close === 'number' ? c.close : null)).filter((n): n is number => Number.isFinite(n))
-      : (Array.isArray((ohlc as any)?.closes) ? (ohlc as any).closes : [])
+    const kvKey = `ind:snap:all:${symbol}` // dezelfde key die je bij snapshot wegschrijft
+    // 1) Probeer KV (score staat daar al, mits eerder berekend)
+    try {
+      const snap = await kvGetJSON<any>(kvKey)
+      const fresh = snap && typeof snap.updatedAt==='number' && (Date.now() - snap.updatedAt) < TTL_SEC*1000
+      const score = snap?.value?.score
+      if (fresh && Number.isFinite(score)) {
+        res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=60')
+        return res.status(200).json({ symbol, score: Math.round(Number(score)) })
+      }
+    } catch {}
 
-    const volumes: number[] = Array.isArray(ohlc)
-      ? (ohlc as any[]).map(c => (typeof c?.volume === 'number' ? c.volume : null)).filter((n): n is number => Number.isFinite(n))
-      : (Array.isArray((ohlc as any)?.volumes) ? (ohlc as any).volumes : [])
-
-    if (closes.length < 60) {
-      const resp: Resp = { symbol, score: null }
-      await kvSetJSON(key, { updatedAt: now, value: resp }, TTL_SEC)
-      return res.status(200).json(resp)
-    }
-
-    // indicatoren
-    const ma = maCross(closes)                 // { ma50, ma200, status?, points? }
-    const rsi = rsi14(closes)                  // { rsi, status?, points? } of number
-    const mac = macd(closes, 12, 26, 9)        // { macd, signal, hist, status?, points? }
-    const vol = vol20(volumes)                 // { ratio, status?, points? }
-
-    // normalize shapes
-    const ma50 = (ma as any)?.ma50 ?? null
-    const ma200 = (ma as any)?.ma200 ?? null
-    const rsiValue =
-      typeof (rsi as any)?.rsi === 'number' ? (rsi as any).rsi :
-      (typeof rsi === 'number' ? rsi : null)
-    const hist  = (mac as any)?.hist  ?? null
-    const ratio = (vol as any)?.ratio ?? null
-
-    // zelfde weging als homepage
-    const pMA   = toPtsSmart((ma as any)?.status,   (ma as any)?.points,   () => deriveMaPoints({ ma50, ma200 }))
-    const pMACD = toPtsSmart((mac as any)?.status,  (mac as any)?.points,  () => deriveMacdPoints(hist, ma50))
-    const pRSI  = toPtsSmart((rsi as any)?.status,  (rsi as any)?.points,  () => deriveRsiPoints(rsiValue))
-    const pVOL  = toPtsSmart((vol as any)?.status,  (vol as any)?.points,  () => deriveVolPoints(ratio))
-
-    const nMA   = (pMA   + 2) / 4
-    const nMACD = (pMACD + 2) / 4
-    const nRSI  = (pRSI  + 2) / 4
-    const nVOL  = (pVOL  + 2) / 4
-
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const agg = W_MA*nMA + W_MACD*nMACD + W_RSI*nRSI + W_VOL*nVOL
-    const score = clamp(Math.round(agg * 100), 0, 100)
-
-    const resp: Resp = { symbol, score }
-    await kvSetJSON(key, { updatedAt: now, value: resp }, TTL_SEC)
-    return res.status(200).json(resp)
-  } catch (e: any) {
-    const resp: Resp = { symbol, score: null, error: String(e?.message || e) }
-    // Schrijf ook errors in cache zodat we geen thundering herd krijgen
-    try { await kvSetJSON(key, { updatedAt: now, value: resp }, TTL_SEC) } catch {}
-    return res.status(200).json(resp)
+    // 2) Compute en schrijf terug naar KV, zodat iedereen dezelfde score ziet
+    const computed = await computeScore(symbol)
+    try {
+      await kvSetJSON(kvKey, { updatedAt: Date.now(), value: { score: computed.score } }, TTL_SEC)
+    } catch {}
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=60')
+    return res.status(200).json(computed)
+  } catch (e:any) {
+    return res.status(500).json({ error: String(e?.message || e) })
   }
 }
