@@ -6,7 +6,8 @@ import useSWR from 'swr'
 import { useMemo, useEffect, useState } from 'react'
 import { COINS } from '@/lib/coins'
 import TradingViewChart from '@/components/TradingViewChart'
-import { computeScoreStatus, statusFromScore } from '@/lib/taScore'
+import { computeScoreStatus } from '@/lib/taScore'
+import ScoreBadge from '@/components/ScoreBadge'
 
 type IndResp = {
   symbol: string
@@ -126,7 +127,7 @@ function PageInner() {
 
   useEffect(() => {
     if (!binance) return
-    saveLocalTA(binance, overall.score, overall.status)
+    saveLocalTA(binance, overall.score, overall.status as Status)
   }, [binance, overall.score, overall.status])
 
   if (!coin) {
@@ -166,21 +167,27 @@ function PageInner() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <h1 className="text-4xl font-extrabold tracking-tight text-white">{coin.name}</h1>
-      <div className="text-white/70 text-lg">{coin.symbol}</div>
-
-      <div className="mt-1 text-white/80">
-        <span className="text-sm">Prijs:</span>{' '}
-        <span className="font-semibold">{formatFiat(price)} </span>
-        <span className="text-white/60 text-sm">(USD)</span>
-      </div>
-
-      <section className="mt-6 mb-6">
-        <div className="table-card p-4 flex items-center justify-between">
-          <div className="font-semibold">Totaal advies</div>
-          <span className={`${pill(overall.status)} text-sm`}>{overall.status} · {overall.score}</span>
+      {/* === Header + totaal-advies rechts (zelfde stijl als stocks) === */}
+      <section className="pt-2 pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-4xl font-extrabold tracking-tight text-white">{coin.name}</h1>
+            <div className="text-white/70 text-lg">{coin.symbol}</div>
+            <div className="mt-1 text-white/80">
+              <span className="text-sm">Prijs:</span>{' '}
+              <span className="font-semibold">{formatFiat(price)} </span>
+              <span className="text-white/60 text-sm">(USD)</span>
+            </div>
+          </div>
+          <div className="origin-left scale-95">
+            {Number.isFinite(overall.score as number)
+              ? <ScoreBadge score={overall.score as number} />
+              : <span className="badge badge-hold">HOLD · 50</span>}
+          </div>
         </div>
       </section>
+
+      {/* (oude “Totaal advies” card is verwijderd) */}
 
       <section className="grid md:grid-cols-2 gap-4">
         <div className="table-card p-4">
