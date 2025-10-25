@@ -571,12 +571,26 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     CRYPTO — fallback
+     CRYPTO — fallback (met MKR/VET overrides + defensieve retry)
      ======================= */
+
+  // Harde overrides voor bekende mapping-issues
+  const PAIR_OVERRIDES: Record<string, string> = {
+    'MKR-USD': 'MKRUSDT',
+    'VET-USD': 'VETUSDT',
+  }
+
   const pairs = useMemo(() => {
-    return COINS.map(c => ({ c, pair: toBinancePair(c.symbol.replace('-USD','')) }))
-      .map(x => ({ ...x, pair: x.pair || toBinancePair(x.c.symbol) }))
-      .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
+    return COINS.map(c => {
+      const ov = PAIR_OVERRIDES[c.symbol]
+      if (ov) return { c, pair: ov }
+      const base = c.symbol.replace('-USD', '')
+      const p1 = toBinancePair(base)
+      if (p1) return { c, pair: p1 }
+      const p2 = toBinancePair(c.symbol)
+      return { c, pair: p2 || '' }
+    })
+    .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
   }, [])
 
   useEffect(() => {
@@ -586,12 +600,26 @@ export default function Homepage(props: HomeProps) {
       try {
         setLoadingCoin(true); setCoinErr(null)
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-          try {
-            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}&v=${minuteTag}`
+          async function tryFetch(sym: string) {
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${minuteTag}`
             const r = await fetch(url, { cache: 'no-store' })
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
-            const ind = (j.results || [])[0]
+            return j
+          }
+
+          try {
+            // 1) normaal
+            let j = await tryFetch(pair)
+            // 2) indien leeg: exact 1x lowercase retry (alleen bij failure/leeg -> geen structureel extra verbruik)
+            if (!j?.results?.length) {
+              const alt = pair.toLowerCase()
+              if (alt !== pair) {
+                try { j = await tryFetch(alt) } catch {}
+              }
+            }
+
+            const ind = (j?.results || [])[0]
             const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
             try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
             return { symbol: c.symbol, name: c.name, score }
