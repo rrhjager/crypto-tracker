@@ -1,4 +1,3 @@
-// src/pages/api/indicators/snapshot-list.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getYahooDailyOHLC, type YahooRange } from '@/lib/providers/quote'
 import { kvGetJSON, kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
@@ -27,10 +26,11 @@ type Resp = { items: SnapItem[]; updatedAt: number }
 export const config = { runtime: 'nodejs' }
 
 // Edge cache (CDN)
-const EDGE_MAX_AGE = 30               // seconden
-// KV policy: serve cached, revalidate in bg als bijna op
-const KV_TTL_SEC = 600                // 10 minuten houdbaar per symbool
+const EDGE_MAX_AGE = 60               // seconden (kort, met SWR)
+const KV_TTL_SEC = 600                // 10 minuten houdbaar per symbool (samenvatting)
 const KV_REVALIDATE_SEC = 120         // binnen 2 min voor TTL-einde: bg refresh
+const SNAP_TTL_SEC = 300              // zelfde als snapshot.ts
+const SNAP_REVAL_SEC = 20             // zelfde als snapshot.ts
 const RANGE: YahooRange = '1y'
 
 /* ---------- helpers ---------- */
@@ -165,18 +165,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(400).json({ error: 'Provide ?symbols=A,B or ?market=AEX|DAX|...' })
     }
 
-    // Beetje defensief limiteren (zoals voorheen)
     if (symbols.length > 60) symbols = symbols.slice(0, 60)
 
     const items: SnapItem[] = []
     let newestUpdatedAt = 0
 
-    // 1) KV-first via keys die snapshot.ts al wegschrijft: ind:snap:all:${SYM}
+    // 1) KV-first via keys die snapshot.ts wegschrijft: ind:snap:all:${SYM}
     //    Vorm: { updatedAt: number, value: KVShape }
     const misses: string[] = []
     for (const sym of symbols) {
       const key = `ind:snap:all:${sym}`
-      const cached = await kvGetJSON<{ updatedAt?: number; value?: KVShape }>(key).catch(()=>null)
+      const cached = await kvGetJSON<{ updatedAt?: number; value?: any }>(key).catch(()=>null)
       const mapped = toSnapFromKV(sym, cached?.value)
       if (mapped) {
         items.push(mapped)
@@ -186,27 +185,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
-    // 2) Voor misses: bestaande (zuinige) compute pad met kvRefreshIfStale op eigen key
+    // 2) Voor misses: reken zuinig, parallel (kleine pool) en schrijf beide keys:
     if (misses.length) {
-      // beperkte concurrency (zuinig), maar snel genoeg
-      const CONC = Math.min(6, Math.max(1, 24 / Math.max(1, misses.length)))
+      const CONC = Math.min(8, misses.length) // kleine maar effectieve parallelisatie
       let i = 0
-      const workers = new Array(Math.min(CONC, misses.length)).fill(0).map(async () => {
+      const workers = new Array(CONC).fill(0).map(async () => {
         while (true) {
           const idx = i++
           if (idx >= misses.length) break
           const sym = misses[idx]
-          const key = `snap:${sym}`
-          const cached = await kvRefreshIfStale<SnapItem>(key, KV_TTL_SEC, KV_REVALIDATE_SEC, () => computeOne(sym))
-          const value = cached ?? await computeOne(sym)
+
+          // hergebruik zelfde snapshot key als snapshot.ts
+          const snapKey = `ind:snapshot:${sym}:${RANGE}`
+          const v = await kvRefreshIfStale<SnapItem>(
+            snapKey,
+            SNAP_TTL_SEC,
+            SNAP_REVAL_SEC,
+            async () => {
+              const computed = await computeOne(sym)
+              // schrijf ook de "samenvatting"-key die snel te lezen is
+              try { await kvSetJSON(`ind:snap:all:${sym}`, { updatedAt: Date.now(), value: computed }, SNAP_TTL_SEC) } catch {}
+              return computed
+            }
+          )
+
+          const value = v ?? await computeOne(sym)
           items.push(value)
-          try { await kvSetJSON(key, value, KV_TTL_SEC) } catch {}
+          // voor de zekerheid ook nog even de summary-key zetten als hij ontbrak
+          try { await kvSetJSON(`ind:snap:all:${sym}`, { updatedAt: Date.now(), value }, SNAP_TTL_SEC) } catch {}
         }
       })
       await Promise.all(workers)
     }
 
-    // 3) Sorteer items in dezelfde volgorde als aangevraagd
+    // 3) Sorteer items in aangevraagde volgorde
     const order = new Map(symbols.map((s, i) => [s, i]))
     items.sort((a, b) => (order.get(a.symbol) ?? 0) - (order.get(b.symbol) ?? 0))
 

@@ -4,13 +4,25 @@ import type { NextRequest } from 'next/server'
 
 // 1) Publieke API-routes die je frontend mag gebruiken
 const PUBLIC_ALLOW = [
+  // Quotes & bulk indicators
   '/api/quotes',
   '/api/indicators/ret-batch',
   '/api/indicators/snapshot',
   '/api/indicators/snapshot-list',
-  '/api/crypto-light/indicators', // crypto indicators
-  '/api/crypto-light/prices',     // crypto prijzen
-  '/api/market/',                 // alle Market-Intel subroutes
+
+  // Individuele indicator endpoints (voor detailpagina's/score-batch)
+  '/api/indicators/macd',
+  '/api/indicators/ma-cross',
+  '/api/indicators/rsi',
+  '/api/indicators/vol20',
+  '/api/indicators/score-batch',
+
+  // Crypto (lichtgewicht)
+  '/api/crypto-light/indicators',
+  '/api/crypto-light/prices',
+
+  // Market Intel (server-side geaggregeerd)
+  '/api/market/',
 
   // ✅ homepage + news + scores
   '/api/news/',                   // Google/Equities/Crypto news
@@ -40,7 +52,7 @@ function isSameOrigin(req: NextRequest) {
   const host = req.headers.get('host') || ''
   const origin = req.headers.get('origin') || ''
   const referer = req.headers.get('referer') || ''
-  const allowed = ['signalhub.tech','www.signalhub.tech']
+  const allowed = ['signalhub.tech','www.signalhub.tech','localhost:3000']
   const okHost    = allowed.some(h => host.endsWith(h))
   const okOrigin  = !origin  || allowed.some(h => origin.includes(h))
   const okReferer = !referer || allowed.some(h => referer.includes(h))
