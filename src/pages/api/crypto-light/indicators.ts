@@ -57,7 +57,8 @@ const CG_ALIASES: Record<string, string[]> = {
   RUNEUSDT: ['thorchain'],
   RNDRUSDT: ['render-token'],
   AAVEUSDT: ['aave'],
-  MKRUSDT:  ['maker'],
+  // ⬇ MKR extra alias om naming-variaties op te vangen
+  MKRUSDT:  ['maker', 'makerdao'],
   UNIUSDT:  ['uniswap'],
   FLOWUSDT: ['flow'],
   CHZUSDT:  ['chiliz'],
@@ -296,16 +297,22 @@ function symbolToBitfinex(symUSDT: string) {
   return [`t${base}USD`, `t${base}UST`]
 }
 
-// ⬇️ NIEUW: per-coin bronoverride (alleen VET geforceerd naar CG)
+// ⬇️ NIEUW: per-coin bronoverride (klein allowlistje om platte feeds te omzeilen)
+// Let op: dit gebruikt NIET meer data; je slaat enkel mislukte probes over
 const SOURCE_OVERRIDE: Record<string, 'okx' | 'bitfinex' | 'coingecko'> = {
-  VETUSDT: 'coingecko',
+  VETUSDT:  'coingecko',
+  MKRUSDT:  'coingecko',
+  KASUSDT:  'coingecko',
+  JASMYUSDT:'coingecko',
+  BONKUSDT: 'coingecko',
+  SEIUSDT:  'coingecko',
 }
 
 // ---------- fetch chain for one symbol ----------
 async function fetchMarketDataFor(symUSDT: string): Promise<
   { ok: true; data: MarketData; source: string } | { ok: false; error: string }
 > {
-  // 1) Optional override (nu alleen VET → CG)
+  // 1) Optional override (klein allowlistje → direct CG)
   const override = SOURCE_OVERRIDE[symUSDT]
   if (override === 'coingecko') {
     const aliases = CG_ALIASES[symUSDT] || [symUSDT.replace(/USDT$/, '').toLowerCase()]
