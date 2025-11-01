@@ -120,7 +120,7 @@ export default function StockDetail() {
             }
           />
           <StockIndicatorCard
-            title="Volume vs 20d gemiddelde"
+            title="Volume vs 20d Average"
             status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
             note={
               loading
@@ -128,7 +128,7 @@ export default function StockDetail() {
                 : err
                   ? `Fout: ${err}`
                   : vol20 && vol20.volume != null && vol20.avg20d != null
-                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Gem.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
+                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
                     : 'Onvoldoende data voor volume'
             }
           />

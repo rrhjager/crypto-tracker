@@ -137,11 +137,11 @@ export default function StockDetail() {
             {/* Volume */}
             <div className="table-card p-4">
               <div className="flex items-center justify-between mb-1">
-                <div className="font-semibold">Volume vs 20d gemiddelde</div>
+                <div className="font-semibold">Volume vs 20d Average</div>
                 <span className="badge badge-hold">{vol?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">
-                Vol: {fmt(vol?.volume, 0)} · Gem(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
+                Vol: {fmt(vol?.volume, 0)} · Ave(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
               </div>
             </div>
           </div>

@@ -126,7 +126,7 @@ export default function StockDetail() {
           />
 
           <StockIndicatorCard
-            title="Volume vs 20d average"
+            title="Volume vs 20d Average"
             status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
             note={
               loading
