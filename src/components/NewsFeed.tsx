@@ -78,7 +78,7 @@ export default function NewsFeed({ symbol, name, className, limit = 8 }: Props) 
       })
       .catch((e) => {
         if (!mounted) return;
-        setError("News loading failed.");
+        setError("Nieuws laden mislukt.");
         setLoading(false);
         console.error(e);
       });
@@ -104,7 +104,7 @@ export default function NewsFeed({ symbol, name, className, limit = 8 }: Props) 
           )}
         </div>
 
-        {loading && <div className="news-info">loading...</div>}
+        {loading && <div className="news-info">Loading...</div>}
         {error && <div className="news-err">{error}</div>}
 
         {!loading && !error && (
