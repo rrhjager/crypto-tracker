@@ -130,7 +130,7 @@ export default function StockDetail() {
                 <span className="badge badge-hold">{macd?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">
-                MACD: {fmt(macd?.macd)} · Signaal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
+                MACD: {fmt(macd?.macd)} · Signal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
               </div>
             </div>
 

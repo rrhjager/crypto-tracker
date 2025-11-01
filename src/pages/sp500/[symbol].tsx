@@ -106,7 +106,7 @@ export default function Sp500StockDetail() {
                 <span className="badge badge-hold">{macd?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-gray-700">
-                MACD: {fmt(macd?.macd)} · Signaal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
+                MACD: {fmt(macd?.macd)} · Signal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
               </div>
             </div>
 
