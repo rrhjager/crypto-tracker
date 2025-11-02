@@ -6,20 +6,31 @@ import type {
   LineData,
   UTCTimestamp,
 } from 'lightweight-charts'
-import { createChart } from 'lightweight-charts'
+import { createChart, ColorType } from 'lightweight-charts'
 
 type Props = {
   symbol: string
-  range?: '1d'|'5d'|'1mo'|'3mo'|'6mo'|'1y'|'2y'|'5y'|'10y'|'ytd'|'max'
-  interval?: '1m'|'2m'|'5m'|'15m'|'30m'|'60m'|'90m'|'1h'|'1d'|'1wk'|'1mo'|'3mo'
+  range?: '1d' | '5d' | '1mo' | '3mo' | '6mo' | '1y' | '2y' | '5y' | '10y' | 'ytd' | 'max'
+  interval?:
+    | '1m'
+    | '2m'
+    | '5m'
+    | '15m'
+    | '30m'
+    | '60m'
+    | '90m'
+    | '1h'
+    | '1d'
+    | '1wk'
+    | '1mo'
+    | '3mo'
   height?: number
   className?: string
 }
 
 /**
- * Lichtgewicht koersgrafiek op Yahoo chart API (geen key).
- * - Probeert candles; valt terug op line als OHLC incompleet is.
- * - Resizable via ResizeObserver.
+ * Lichtgewicht koersgrafiek op basis van Yahoo Finance.
+ * Geen API-key nodig. Probeert candles, valt terug op line chart.
  */
 export default function StockChart({
   symbol,
@@ -34,7 +45,6 @@ export default function StockChart({
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // Yahoo accepteert suffixen zoals .AS
   const url = useMemo(() => {
     const base = 'https://query1.finance.yahoo.com/v8/finance/chart'
     const params = new URLSearchParams({
@@ -47,7 +57,7 @@ export default function StockChart({
     return `${base}/${encodeURIComponent(symbol)}?${params.toString()}`
   }, [symbol, range, interval])
 
-  // Chart init + resize
+  // Chart initialiseren + resize
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -57,7 +67,7 @@ export default function StockChart({
         width: el.clientWidth || 600,
         height,
         layout: {
-          background: { type: 'solid', color: 'transparent' }, // <-- string literal
+          background: { type: ColorType.Solid, color: 'transparent' },
           textColor: 'rgba(255,255,255,0.85)',
         },
         grid: {
@@ -67,7 +77,7 @@ export default function StockChart({
         rightPriceScale: { borderColor: 'rgba(255,255,255,0.12)' },
         timeScale: {
           borderColor: 'rgba(255,255,255,0.12)',
-          timeVisible: ['1m','2m','5m','15m','30m','60m','90m','1h'].includes(interval),
+          timeVisible: ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'].includes(interval),
           secondsVisible: false,
         },
         crosshair: { mode: 1 },
@@ -90,7 +100,7 @@ export default function StockChart({
     return () => ro.disconnect()
   }, [height, interval])
 
-  // Data laden + serie tekenen
+  // Data ophalen + tekenen
   useEffect(() => {
     let aborted = false
     const controller = new AbortController()
@@ -103,22 +113,19 @@ export default function StockChart({
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const result = j?.chart?.result?.[0]
-        const error = j?.chart?.error
-        if (error) throw new Error(String(error?.description || 'Yahoo error'))
         if (!result) throw new Error('Geen result uit Yahoo')
 
         const ts: number[] = result.timestamp || []
         const q = result.indicators?.quote?.[0] || {}
-        const open = (q.open || []) as Array<number | null>
-        const high = (q.high || []) as Array<number | null>
-        const low  = (q.low  || []) as Array<number | null>
-        const close= (q.close|| []) as Array<number | null>
-        const haveOHLC = open.length && high.length && low.length && close.length
+        const open = q.open || []
+        const high = q.high || []
+        const low = q.low || []
+        const close = q.close || []
 
+        const haveOHLC = open.length && high.length && low.length && close.length
         const chart = chartRef.current
         if (!chart) return
 
-        // reset serie bij elke fetch
         if (seriesRef.current) {
           chart.removeSeries(seriesRef.current)
           seriesRef.current = null
@@ -127,20 +134,23 @@ export default function StockChart({
         if (haveOHLC) {
           const data: CandlestickData[] = []
           for (let i = 0; i < ts.length; i++) {
-            const o = open[i], h = high[i], l = low[i], c = close[i]
-            if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
+            const o = open[i],
+              h = high[i],
+              l = low[i],
+              c = close[i]
+            if ([o, h, l, c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
               data.push({
-                time: ts[i] as UTCTimestamp, // UNIX seconds OK
+                time: ts[i] as UTCTimestamp,
                 open: o as number,
                 high: h as number,
-                low:  l as number,
+                low: l as number,
                 close: c as number,
               })
             }
           }
 
           if (data.length >= 2) {
-            const s = chart.addSeries<'Candlestick'>('Candlestick', {
+            const s = chart.addCandlestickSeries({
               upColor: '#16a34a',
               downColor: '#dc2626',
               wickUpColor: '#16a34a',
@@ -151,10 +161,12 @@ export default function StockChart({
             seriesRef.current = s
             chart.timeScale().fitContent()
           } else {
-            const s = chart.addSeries<'Line'>('Line', { lineWidth: 2 })
+            const s = chart.addLineSeries({ lineWidth: 2 })
             const lineData: LineData[] = ts
               .map((t, i) =>
-                typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null
+                typeof close[i] === 'number'
+                  ? { time: t as UTCTimestamp, value: close[i] as number }
+                  : null
               )
               .filter(Boolean) as LineData[]
             s.setData(lineData)
@@ -162,11 +174,12 @@ export default function StockChart({
             chart.timeScale().fitContent()
           }
         } else {
-          // Alleen close → line
-          const s = chart.addSeries<'Line'>('Line', { lineWidth: 2 })
+          const s = chart.addLineSeries({ lineWidth: 2 })
           const lineData: LineData[] = ts
             .map((t, i) =>
-              typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null
+              typeof close[i] === 'number'
+                ? { time: t as UTCTimestamp, value: close[i] as number }
+                : null
             )
             .filter(Boolean) as LineData[]
           if (lineData.length < 2) throw new Error('Onvoldoende datapoints voor grafiek')
@@ -182,7 +195,10 @@ export default function StockChart({
     }
 
     run()
-    return () => { aborted = true; controller.abort() }
+    return () => {
+      aborted = true
+      controller.abort()
+    }
   }, [url, symbol, range, interval])
 
   return (
