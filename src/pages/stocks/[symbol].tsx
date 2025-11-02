@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import useSWR from 'swr'
 import ScoreBadge from '@/components/ScoreBadge'
+import StockChart from '@/components/StockChart' // ★ ADDED
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
@@ -149,6 +150,12 @@ export default function StockDetail() {
               <span className="ml-2 opacity-70">(preview via local calc)</span>
             )}
           </div>
+
+          {/* ★ ADDED: compacte koersgrafiek (geen wijzigingen elders) */}
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+            <StockChart symbol={sym} range="6mo" interval="1d" height={200} />
+          </div>
+          {/* ★ END ADDED */}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
