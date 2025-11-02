@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
-import useSWR from 'swr' // SWR hook
+import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
@@ -51,36 +51,6 @@ type HomeSnapshot = {
 }
 type HomeProps = { snapshot: HomeSnapshot | null }
 
-/* ---------- BULK HOME SNAPSHOT (KV-first) TYPES ---------- */
-type HomeSnap = {
-  symbol: string
-  status: 'BUY'|'SELL'|'HOLD'|string|null
-  score: number | null        // -2..+2 uit API
-  rsi: number | null
-  macdHist: number | null
-  maTrend: 'BUY'|'SELL'|'HOLD'|null
-  updatedAt: number | null
-}
-type HomeSnapshotResponse = {
-  markets: string[]
-  updatedAt: number
-  items: Record<string, HomeSnap[]>
-}
-const LABEL_TO_KEY: Record<string,string> = {
-  'AEX':'AEX', 'S&P 500':'SP500', 'NASDAQ':'NASDAQ', 'Dow Jones':'DOWJONES',
-  'DAX':'DAX', 'FTSE 100':'FTSE100', 'Nikkei 225':'NIKKEI225',
-  'Hang Seng':'HANGSENG', 'Sensex':'SENSEX'
-}
-const bulkFetcher = async (url: string): Promise<HomeSnapshotResponse|null> => {
-  const r = await fetch(url, { headers: { 'Cache-Control': 'no-cache' }})
-  if (r.status === 304) return null
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return r.json()
-}
-// ✔ alle markten meegeven
-const MARKETS_HOME =
-  'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100,NIKKEI225,HANGSENG,SENSEX' as const
-
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 function statusFromScore(score: number): Advice {
@@ -88,8 +58,6 @@ function statusFromScore(score: number): Advice {
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
-const toNum = (x: unknown) => (typeof x === 'string' ? Number(x) : (x as number))
-const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x))
 
 /* ---------- localStorage cache helpers ---------- */
 function getCache<T>(key: string): T | null {
@@ -399,7 +367,6 @@ export default function Homepage(props: HomeProps) {
   const [trades, setTrades] = useState<CongressTrade[]>(
     props.snapshot?.congress ?? getCache<CongressTrade[]>('home:congress') ?? []
   )
-  const [scoreErr, setScoreErr] = useState<string | null>(null)
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
 
@@ -413,9 +380,8 @@ export default function Homepage(props: HomeProps) {
     setLoadingCongress(trades.length === 0)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---------- ZACHTE REFRESH: één call naar snapshot ---------- */
+  /* ---------- ZACHTE REFRESH: één call naar snapshot (alleen als cache leeg) ---------- */
   useEffect(() => {
-    // skip als er binnen TTL al verse cache is
     const hasFresh =
       (getCache<ScoredEq[]>('home:eq:topBuy')?.length || 0) > 0 &&
       (getCache<ScoredEq[]>('home:eq:topSell')?.length || 0) > 0
@@ -432,168 +398,70 @@ export default function Homepage(props: HomeProps) {
         setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
         setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
-        setTopBuy(s.topBuy);         setCache('home:eq:topBuy',   s.topBuy)
-        setTopSell(s.topSell);       setCache('home:eq:topSell',  s.topSell);    setLoadingEq(false)
-        setCoinTopBuy(s.coinTopBuy); setCache('home:coin:topBuy', s.coinTopBuy)
-        setCoinTopSell(s.coinTopSell); setCache('home:coin:topSell', s.coinTopSell); setLoadingCoin(false)
+        // equity/crypto laten we hieronder opnieuw exact berekenen, zodat scores 1:1 matchen
       } catch {}
     })()
     return () => { stop = true }
   }, [])
 
-  /* ---------- NEWS warm-up (SWR) ---------- */
-  useEffect(() => {
-    let aborted = false
-    async function prime(key: string) {
-      try {
-        const r = await fetch(key, { cache: 'no-store' })
-        if (!r.ok) return
-        const data = await r.json()
-        if (!aborted) mutate(key, data, { revalidate: false })
-      } catch {}
-    }
-    const locale = 'hl=en-US&gl=US&ceid=US:en'
-    ;[
-      `/api/news/google?q=crypto&${locale}`,
-      `/api/news/google?q=equities&${locale}`,
-    ].forEach(prime)
-    return () => { aborted = true }
-  }, [])
-
-  /* ========= NEWS fallback (alleen als nog leeg) ========= */
-  useEffect(()=>{
-    if (newsCrypto.length && newsEq.length) return
-    let aborted=false
-    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void, setLoading:(f:boolean)=>void){
-      try{
-        setLoading(true)
-        const query =
-          topic === 'crypto'
-            ? 'crypto OR bitcoin OR ethereum OR blockchain'
-            : 'equities OR stocks OR stock market OR aandelen OR beurs'
-        const locale = 'hl=en-US&gl=US&ceid=US:en'
-        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`, { cache:'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
-          title: x.title || '',
-          url: x.link,
-          source: x.source || '',
-          published: x.pubDate || '',
-          image: null,
-        }))
-        if (!aborted) {
-          setter(arr)
-          setCache(topic==='crypto' ? 'home:news:crypto' : 'home:news:eq', arr)
-        }
-      }catch{
-        if (!aborted) setter([])
-      } finally {
-        if (!aborted) setLoading(false)
-      }
-    }
-    if (!newsCrypto.length) load('crypto', setNewsCrypto, setLoadingNewsCrypto)
-    if (!newsEq.length)     load('equities', setNewsEq,   setLoadingNewsEq)
-    return ()=>{aborted=true}
-  },[minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
-
   /* =======================
-     EQUITIES — Top BUY/SELL (KV eerst, per-markt fallback)
+     EQUITIES — Exacte scores (zelfde endpoint als aandeel-pagina)
      ======================= */
-
-  // KV-bulk binnenhalen (geen revalidate bij mount; behoud vorige data)
-  const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
-    `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
-    bulkFetcher,
-    {
-      revalidateOnFocus: false,
-      revalidateOnMount: false,
-      keepPreviousData: true,
-      dedupingInterval: 30_000,
-    }
-  )
-
-  // helpers obv KV data
-  function snapsForLabelKV(label: MarketLabel): HomeSnap[] {
-    const key = LABEL_TO_KEY[label] || (label as string).toUpperCase()
-    return homeSnapKV?.items?.[key] ?? []
-  }
-  function toUiScoreFromSnap(s: HomeSnap): number {
-    if (typeof s.score === 'number' && Number.isFinite(s.score)) {
-      const pct = ((s.score + 2) / 4) * 100 // -2..+2 → 0..100
-      return Math.round(clamp(pct, 0, 100))
-    }
-    const st = String(s.status || '').toUpperCase()
-    if (st === 'BUY')  return 75
-    if (st === 'SELL') return 25
-    return 50
-  }
 
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  // Oud per-symbool endpoint (fallback, alleen voor missende markten)
-  async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
+  // cache helpers voor individuele scores
+  const getScoreCache = (sym: string): number | null => {
+    const j = getCache<{ score: number }>(`score:${sym}`)
+    return (j && Number.isFinite(j.score)) ? j.score : null
+  }
+  const setScoreCache = (sym: string, score: number) => setCache(`score:${sym}`, { score })
+
+  async function fetchStrictScore(sym: string, v: number): Promise<number | null> {
     try {
-      const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
+      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`, { cache: 'no-store' })
       if (!r.ok) return null
       const j = await r.json() as { score?: number|null }
-      if (Number.isFinite(j?.score as number)) return Math.round(Number(j.score))
+      if (Number.isFinite(j?.score as number)) {
+        const s = Math.round(Number(j.score))
+        setScoreCache(sym, s)
+        return s
+      }
       return null
     } catch { return null }
   }
 
+  // Bereken tops/bottoms per markt op basis van exacte scores
   useEffect(() => {
-    if (!homeSnapKV) return
-    if (!topBuy.length || !topSell.length) setLoadingEq(true) // laat bestaande data staan
-    setScoreErr(null)
+    let aborted = false
+    // alleen spinner tonen als we nog niets hebben om te renderen
+    if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
     ;(async () => {
       try {
         const outBuy: ScoredEq[] = []
         const outSell: ScoredEq[] = []
-        const missing: MarketLabel[] = []
 
-        // 1) KV eerst
         for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
+          // eerst cache, dan netwerk alleen waar nodig
+          const scores = await pool(cons, 6, async (c) => {
+            const cached = getScoreCache(c.symbol)
+            if (Number.isFinite(cached)) return { ...c, score: cached as number }
+            const s = await fetchStrictScore(c.symbol, minuteTag)
+            return { ...c, score: s as any }
+          })
 
-          const snaps = snapsForLabelKV(market)
-          if (!snaps.length) { missing.push(market); continue }
-
-          const scoreMap = new Map<string, number>()
-          for (const s of snaps) scoreMap.set(s.symbol, toUiScoreFromSnap(s))
-
-          const rows = cons
-            .map(c => ({ symbol: c.symbol, name: c.name, market, score: scoreMap.get(c.symbol) ?? 50 }))
-            .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
+          const rows = scores
+            .filter(r => Number.isFinite(r.score as number))
+            .map(r => ({ symbol: r.symbol, name: r.name, market, score: r.score as number })) as ScoredEq[]
 
           if (rows.length) {
             const top = [...rows].sort((a,b)=> b.score - a.score)[0]
             const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
             if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
             if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-          } else {
-            missing.push(market)
-          }
-        }
-
-        // 2) Per-markt fallback voor missende markten
-        if (missing.length) {
-          for (const market of missing) {
-            const cons = constituentsForMarket(market)
-            if (!cons.length) continue
-            const symbols = cons.map(c => c.symbol)
-            const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
-            const rows = cons
-              .map((c, i) => ({ symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any) }))
-              .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
-            if (rows.length) {
-              const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-              const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-              if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-              if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-            }
           }
         }
 
@@ -601,27 +469,24 @@ export default function Homepage(props: HomeProps) {
         const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
         const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
 
-        setTopBuy(finalBuy); setTopSell(finalSell)
-        setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
-      } catch (e:any) {
-        setScoreErr(String(e?.message || e))
+        if (!aborted) {
+          setTopBuy(finalBuy); setTopSell(finalSell)
+          setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
+        }
       } finally {
-        setLoadingEq(false)
+        if (!aborted) setLoadingEq(false)
       }
     })()
+
+    return () => { aborted = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [homeSnapKV, minuteTag])
+  }, [minuteTag])
 
   /* =======================
-     CRYPTO — fallback (met MKR/VET overrides + defensieve retry)
+     CRYPTO — defensief zoals eerder
      ======================= */
 
-  // Harde overrides voor bekende mapping-issues
-  const PAIR_OVERRIDES: Record<string, string> = {
-    'MKR-USD': 'MKRUSDT',
-    'VET-USD': 'VETUSDT',
-  }
-
+  const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
   const pairs = useMemo(() => {
     return COINS.map(c => {
       const ov = PAIR_OVERRIDES[c.symbol]
@@ -631,8 +496,7 @@ export default function Homepage(props: HomeProps) {
       if (p1) return { c, pair: p1 }
       const p2 = toBinancePair(c.symbol)
       return { c, pair: p2 || '' }
-    })
-    .filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
+    }).filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
   }, [])
 
   useEffect(() => {
@@ -649,18 +513,14 @@ export default function Homepage(props: HomeProps) {
             const j = await r.json() as { results?: IndResp[] }
             return j
           }
-
           try {
-            // 1) normaal
             let j = await tryFetch(pair)
-            // 2) exact 1x lowercase retry
             if (!j?.results?.length) {
               const alt = pair.toLowerCase()
               if (alt !== pair) {
                 try { j = await tryFetch(alt) } catch {}
               }
             }
-
             const ind = (j?.results || [])[0]
             const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
             try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
@@ -748,11 +608,11 @@ export default function Homepage(props: HomeProps) {
             amount: x.amount || '', price: x.price ?? null, date: iso, url: x.url || '' }
         })
         norm.sort((a,b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
-        if (!aborted) { setTrades(norm); setCache('home:congress', norm) }
+        setTrades(norm); setCache('home:congress', norm)
       } catch (e:any) {
-        if (!aborted) setTradesErr(String(e?.message || e))
+        setTradesErr(String(e?.message || e))
       } finally {
-        if (!aborted) setLoadingCongress(false)
+        setLoadingCongress(false)
       }
     })()
     return () => { aborted = true }
