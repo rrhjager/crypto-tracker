@@ -13,9 +13,9 @@ type Props = {
 
 /**
  * Lichtgewicht koersgrafiek (Yahoo, zonder API key).
- * - Werkt met verschillende versies van lightweight-charts (v3/v4/v5)
- * - Valt terug op line chart als OHLC incompleet is
- * - Typings-conflicten omzeild met gerichte casts naar `any`
+ * - Compatibel met meerdere lightweight-charts versies (v3/v4/v5)
+ * - Fallback naar line chart als OHLC onvolledig is
+ * - Voorkomt :SYMBOL/undefined requests tot router.symbol er is
  */
 export default function StockChart({
   symbol,
@@ -25,12 +25,15 @@ export default function StockChart({
   className = '',
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const chartRef = useRef<any>(null)          // ← any: versie-agnostisch
-  const seriesRef = useRef<any>(null)         // ← any: versie-agnostisch
+  const chartRef = useRef<any>(null)   // versie-agnostisch
+  const seriesRef = useRef<any>(null)  // versie-agnostisch
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // URL alleen bouwen als er een geldige symbol is
   const url = useMemo(() => {
+    const s = String(symbol || '').trim()
+    if (!s || s === ':SYMBOL' || s === 'undefined') return null
     const base = 'https://query1.finance.yahoo.com/v8/finance/chart'
     const params = new URLSearchParams({
       range,
@@ -39,7 +42,7 @@ export default function StockChart({
       useYfid: 'true',
       corsDomain: 'finance.yahoo.com',
     })
-    return `${base}/${encodeURIComponent(symbol)}?${params.toString()}`
+    return `${base}/${encodeURIComponent(s)}?${params.toString()}`
   }, [symbol, range, interval])
 
   // Init chart + resize
@@ -51,10 +54,8 @@ export default function StockChart({
       chartRef.current = createChart(el, {
         width: el.clientWidth || 600,
         height,
-        // geen ColorType-ellende; laat background met CSS/parent doen
-        layout: {
-          textColor: 'rgba(255,255,255,0.85)',
-        },
+        // géén ColorType literal → geen TS/ColorType issues
+        layout: { textColor: 'rgba(255,255,255,0.85)' },
         grid: {
           vertLines: { color: 'rgba(255,255,255,0.06)' },
           horzLines: { color: 'rgba(255,255,255,0.06)' },
@@ -76,7 +77,6 @@ export default function StockChart({
     }
 
     const chart: any = chartRef.current
-
     const ro = new ResizeObserver(entries => {
       for (const e of entries) {
         if (e.contentRect?.width) {
@@ -87,13 +87,13 @@ export default function StockChart({
     })
     ro.observe(el)
 
-    return () => {
-      ro.disconnect()
-    }
+    return () => { ro.disconnect() }
   }, [height, interval])
 
   // Data laden + tekenen
   useEffect(() => {
+    if (!url) return  // wacht tot symbol/router klaar is
+
     let aborted = false
     const controller = new AbortController()
 
@@ -133,14 +133,13 @@ export default function StockChart({
             const o = open[i], h = high[i], l = low[i], c = close[i]
             if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
               data.push({
-                time: ts[i] as unknown as UTCTimestamp, // expliciet als UTC timestamp
+                time: ts[i] as unknown as UTCTimestamp,
                 open: o as number, high: h as number, low: l as number, close: c as number,
               })
             }
           }
 
           if (data.length >= 2) {
-            // Versie-check: prefereer specifieke methode; anders generieke addSeries
             let s: any
             if (typeof chart.addCandlestickSeries === 'function') {
               s = chart.addCandlestickSeries({
@@ -171,8 +170,8 @@ export default function StockChart({
             seriesRef.current = s
             chart.timeScale().fitContent()
           } else {
-            // Te weinig candles → line
-            let s: any = chart.addLineSeries ? chart.addLineSeries({ lineWidth: 2 }) : chart.addSeries({ type: 'Line' }, { lineWidth: 2 })
+            // te weinig candles → line
+            const s: any = chart.addLineSeries ? chart.addLineSeries({ lineWidth: 2 }) : chart.addSeries({ type: 'Line' }, { lineWidth: 2 })
             const lineData: LineData[] = ts
               .map((t, i) => (typeof close[i] === 'number'
                 ? { time: t as unknown as UTCTimestamp, value: close[i] as number }
@@ -183,8 +182,8 @@ export default function StockChart({
             chart.timeScale().fitContent()
           }
         } else {
-          // Alleen closes → line
-          let s: any = chart.addLineSeries ? chart.addLineSeries({ lineWidth: 2 }) : chart.addSeries({ type: 'Line' }, { lineWidth: 2 })
+          // alleen closes → line
+          const s: any = chart.addLineSeries ? chart.addLineSeries({ lineWidth: 2 }) : chart.addSeries({ type: 'Line' }, { lineWidth: 2 })
           const lineData: LineData[] = ts
             .map((t, i) => (typeof close[i] === 'number'
               ? { time: t as unknown as UTCTimestamp, value: close[i] as number }
