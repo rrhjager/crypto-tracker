@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { IChartApi, ISeriesApi, CandlestickData, LineData } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, CandlestickData, LineData, UTCTimestamp } from 'lightweight-charts'
 import { createChart, ColorType } from 'lightweight-charts'
 
 type Props = {
@@ -10,12 +10,6 @@ type Props = {
   className?: string
 }
 
-/**
- * Lichtgewicht koersgrafiek:
- * - Data-bron: Yahoo chart API (zonder API key).
- * - Probeert candles te tonen; valt terug op line chart als OHLC niet volledig is.
- * - Resizable via ResizeObserver.
- */
 export default function StockChart({
   symbol,
   range = '6mo',
@@ -29,7 +23,6 @@ export default function StockChart({
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // Yahoo accepteert Europese suffixen zoals .AS; niets strippen hier.
   const url = useMemo(() => {
     const base = 'https://query1.finance.yahoo.com/v8/finance/chart'
     const params = new URLSearchParams({
@@ -42,12 +35,11 @@ export default function StockChart({
     return `${base}/${encodeURIComponent(symbol)}?${params.toString()}`
   }, [symbol, range, interval])
 
-  // Chart init + resize handling
+  // Chart aanmaken
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
-    // chart aanmaken (eenmalig)
     if (!chartRef.current) {
       chartRef.current = createChart(el, {
         width: el.clientWidth || 600,
@@ -60,27 +52,20 @@ export default function StockChart({
           vertLines: { color: 'rgba(255,255,255,0.06)' },
           horzLines: { color: 'rgba(255,255,255,0.06)' },
         },
-        rightPriceScale: {
-          borderColor: 'rgba(255,255,255,0.12)',
-        },
+        rightPriceScale: { borderColor: 'rgba(255,255,255,0.12)' },
         timeScale: {
           borderColor: 'rgba(255,255,255,0.12)',
           timeVisible: ['1m','2m','5m','15m','30m','60m','90m','1h'].includes(interval),
           secondsVisible: false,
         },
         crosshair: { mode: 1 },
-        handleScale: {
-          axisPressedMouseMove: { time: true, price: true },
-          pinch: true,
-        },
+        handleScale: { axisPressedMouseMove: { time: true, price: true }, pinch: true },
       })
     } else {
       chartRef.current.applyOptions({ height })
     }
 
-    const chart = chartRef.current!
-
-    // responsive breedte
+    const chart = chartRef.current
     const ro = new ResizeObserver(entries => {
       for (const e of entries) {
         if (e.contentRect?.width) {
@@ -90,13 +75,10 @@ export default function StockChart({
       }
     })
     ro.observe(el)
-
-    return () => {
-      ro.disconnect()
-    }
+    return () => ro.disconnect()
   }, [height, interval])
 
-  // Data laden + serie tekenen
+  // Data laden
   useEffect(() => {
     let aborted = false
     const controller = new AbortController()
@@ -108,21 +90,17 @@ export default function StockChart({
         const r = await fetch(url, { signal: controller.signal, cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
-
         const result = j?.chart?.result?.[0]
-        const error = j?.chart?.error
-        if (error) throw new Error(String(error?.description || 'Yahoo error'))
         if (!result) throw new Error('Geen result uit Yahoo')
 
         const ts: number[] = result.timestamp || []
         const q = result.indicators?.quote?.[0] || {}
-        const open = (q.open || []) as Array<number | null>
-        const high = (q.high || []) as Array<number | null>
-        const low  = (q.low  || []) as Array<number | null>
-        const close= (q.close|| []) as Array<number | null>
+        const open = q.open || []
+        const high = q.high || []
+        const low  = q.low  || []
+        const close= q.close|| []
 
         const haveOHLC = open.length && high.length && low.length && close.length
-
         const chart = chartRef.current
         if (!chart) return
 
@@ -136,12 +114,18 @@ export default function StockChart({
           for (let i = 0; i < ts.length; i++) {
             const o = open[i], h = high[i], l = low[i], c = close[i]
             if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
-              data.push({ time: ts[i] as number, open: o as number, high: h as number, low: l as number, close: c as number })
+              data.push({
+                time: ts[i] as UTCTimestamp, // ✅ type fix
+                open: o as number,
+                high: h as number,
+                low:  l as number,
+                close: c as number,
+              })
             }
           }
 
           if (data.length >= 2) {
-            // @ts-expect-error type inference for union
+            // @ts-expect-error union type
             const s = chart.addCandlestickSeries({
               upColor: '#16a34a',
               downColor: '#dc2626',
@@ -155,21 +139,21 @@ export default function StockChart({
           } else {
             const line = chart.addLineSeries({ lineWidth: 2 })
             const lineData: LineData[] = ts
-              .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
+              .map((t, i) => (typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null))
               .filter(Boolean) as LineData[]
             line.setData(lineData)
             seriesRef.current = line
             chart.timeScale().fitContent()
           }
         } else {
-          const line = chartRef.current.addLineSeries({ lineWidth: 2 })
+          const line = chart.addLineSeries({ lineWidth: 2 })
           const lineData: LineData[] = ts
-            .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
+            .map((t, i) => (typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null))
             .filter(Boolean) as LineData[]
-          if (lineData.length < 2) throw new Error('Onvoldoende datapoints voor grafiek')
+          if (lineData.length < 2) throw new Error('Onvoldoende datapoints')
           line.setData(lineData)
           seriesRef.current = line
-          chartRef.current.timeScale().fitContent()
+          chart.timeScale().fitContent()
         }
       } catch (e: any) {
         if (!aborted) setErr(String(e?.message || e))
@@ -184,11 +168,7 @@ export default function StockChart({
 
   return (
     <div className={className}>
-      <div
-        ref={containerRef}
-        className="w-full"
-        style={{ height, minHeight: height }}
-      />
+      <div ref={containerRef} className="w-full" style={{ height, minHeight: height }} />
       <div className="mt-1 text-[11px] text-white/50 select-none">
         {loading ? 'Laden…' : err ? `Grafiek fout: ${err}` : 'Data: Yahoo Finance'}
       </div>
