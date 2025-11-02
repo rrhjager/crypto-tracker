@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { IChartApi, ISeriesApi, CandlestickData, LineData } from 'lightweight-charts'
-import { createChart } from 'lightweight-charts'
+import { createChart, ColorType } from 'lightweight-charts'
 
 type Props = {
   symbol: string
@@ -53,7 +53,7 @@ export default function StockChart({
         width: el.clientWidth || 600,
         height,
         layout: {
-          background: { type: 'Solid', color: 'transparent' },
+          background: { type: ColorType.Solid, color: 'transparent' },
           textColor: 'rgba(255,255,255,0.85)',
         },
         grid: {
@@ -93,8 +93,6 @@ export default function StockChart({
 
     return () => {
       ro.disconnect()
-      // chart NIET verwijderen bij unmount van data-effect; enkel wanneer component echt wordt verwijderd
-      // (Next.js routings wisselen, maar detailpagina blijft meestal gemount)
     }
   }, [height, interval])
 
@@ -123,31 +121,27 @@ export default function StockChart({
         const low  = (q.low  || []) as Array<number | null>
         const close= (q.close|| []) as Array<number | null>
 
-        // Bepalen of we candles kunnen tekenen (voldoende geldige OHLC’s)
         const haveOHLC = open.length && high.length && low.length && close.length
 
         const chart = chartRef.current
         if (!chart) return
 
-        // Re-create series bij sym/interval/range wissel
         if (seriesRef.current) {
           chart.removeSeries(seriesRef.current)
           seriesRef.current = null
         }
 
-        // Probeer candles
         if (haveOHLC) {
           const data: CandlestickData[] = []
           for (let i = 0; i < ts.length; i++) {
             const o = open[i], h = high[i], l = low[i], c = close[i]
             if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
-              // Lightweight-charts accepteert UNIX seconds direct
               data.push({ time: ts[i] as number, open: o as number, high: h as number, low: l as number, close: c as number })
             }
           }
 
           if (data.length >= 2) {
-            // @ts-expect-error type inference voor union
+            // @ts-expect-error type inference for union
             const s = chart.addCandlestickSeries({
               upColor: '#16a34a',
               downColor: '#dc2626',
@@ -159,7 +153,6 @@ export default function StockChart({
             seriesRef.current = s
             chart.timeScale().fitContent()
           } else {
-            // Fallback naar line
             const line = chart.addLineSeries({ lineWidth: 2 })
             const lineData: LineData[] = ts
               .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
@@ -169,7 +162,6 @@ export default function StockChart({
             chart.timeScale().fitContent()
           }
         } else {
-          // Alleen close beschikbaar → line chart
           const line = chartRef.current.addLineSeries({ lineWidth: 2 })
           const lineData: LineData[] = ts
             .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
