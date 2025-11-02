@@ -538,7 +538,7 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag])
 
   /* =======================
-     CRYPTO — defensief zoals eerder (sneller laden)
+     CRYPTO — defensief zoals eerder
      ======================= */
 
   const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
@@ -554,120 +554,48 @@ export default function Homepage(props: HomeProps) {
     }).filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
   }, [])
 
-  // ---- SNELLER: cache helpers + batching
-  function getCachedPairScore(pair: string): number | null {
-    try {
-      const raw = localStorage.getItem(`ta:${pair}`)
-      if (!raw) return null
-      const jj = JSON.parse(raw) as { score?: number; ts?: number }
-      if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
-        return Math.round(Number(jj.score))
-      }
-    } catch {}
-    return null
-  }
-  function setCachedPairScore(pair: string, score: number) {
-    try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
-  }
-  function chunk<T>(arr: T[], size: number) {
-    const out: T[][] = []
-    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
-    return out
-  }
-  async function fetchBatchScores(batchPairs: string[], v: number): Promise<Record<string, number>> {
-    // Probeer batched endpoint
-    const joined = batchPairs.join(',')
-    const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(joined)}&v=${v}`
-    try {
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = await r.json() as { results?: IndResp[] }
-      const out: Record<string, number> = {}
-      for (const ind of (j?.results || [])) {
-        if (!ind?.symbol) continue
-        const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
-        if (Number.isFinite(score as number)) out[ind.symbol] = Math.round(Number(score))
-      }
-      return out
-    } catch {
-      // Fallback: exact jouw oude gedrag (losse calls binnen de batch)
-      const out: Record<string, number> = {}
-      await pool(batchPairs, 8, async (sym) => {
-        try {
-          const r = await fetch(`/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${v}`, { cache: 'no-store' })
-          if (!r.ok) return
-          const j = await r.json() as { results?: IndResp[] }
-          const ind = (j?.results || [])[0]
-          if (!ind) return
-          const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
-          if (Number.isFinite(score as number)) out[sym] = Math.round(Number(score))
-        } catch {}
-      })
-      return out
-    }
-  }
-
   useEffect(() => {
     if (coinTopBuy.length && coinTopSell.length) return
     let aborted = false
     ;(async () => {
       try {
         setLoadingCoin(true); setCoinErr(null)
-
-        // 1) Instant seed vanuit cache (onveranderd UI, maar meteen iets tonen)
-        const cachedRows = pairs.map(({ c, pair }) => {
-          const s = getCachedPairScore(pair)
-          return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
-        }).filter(Boolean) as { symbol:string; name:string; score:number }[]
-        if (cachedRows.length) {
-          const desc = [...cachedRows].sort((a,b)=> b.score - a.score)
-          const asc  = [...cachedRows].sort((a,b)=> a.score - b.score)
-          setCoinTopBuy(desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
-          setCoinTopSell(asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
-          setLoadingCoin(false)
-        }
-
-        // 2) Haal missende/expired pairs op — batched + progressieve updates
-        const missing = pairs.map(p => p.pair).filter(p => getCachedPairScore(p) == null)
-        if (missing.length) {
-          const chunks = chunk(missing, 20)   // ±3 calls voor 50 coins
-          const CONCURRENCY = 2
-          let idx = 0
-          async function worker() {
-            while (idx < chunks.length && !aborted) {
-              const my = idx++
-              const res = await fetchBatchScores(chunks[my], minuteTag)
-              // schrijf cache
-              for (const [pair, sc] of Object.entries(res)) setCachedPairScore(pair, sc)
-
-              // progressief herberekenen
-              const rowsNow = pairs.map(({ c, pair }) => {
-                const s = getCachedPairScore(pair)
-                return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
-              }).filter(Boolean) as { symbol:string; name:string; score:number }[]
-
-              if (!aborted && rowsNow.length) {
-                const desc = [...rowsNow].sort((a,b)=> b.score - a.score)
-                const asc  = [...rowsNow].sort((a,b)=> a.score - b.score)
-                setCoinTopBuy(desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
-                setCoinTopSell(asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
-                setLoadingCoin(false)
-                // ook opslaan in page-cache (zoals voorheen)
-                setCache('home:coin:topBuy',  desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
-                setCache('home:coin:topSell', asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+        const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
+          async function tryFetch(sym: string) {
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${minuteTag}`
+            const r = await fetch(url, { cache: 'no-store' })
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const j = await r.json() as { results?: IndResp[] }
+            return j
+          }
+          try {
+            let j = await tryFetch(pair)
+            if (!j?.results?.length) {
+              const alt = pair.toLowerCase()
+              if (alt !== pair) {
+                try { j = await tryFetch(alt) } catch {}
               }
             }
+            const ind = (j?.results || [])[0]
+            const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
+            try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
+            return { symbol: c.symbol, name: c.name, score }
+          } catch {
+            try {
+              const raw = localStorage.getItem(`ta:${pair}`)
+              if (raw) {
+                const jj = JSON.parse(raw) as { score?: number; ts?: number }
+                if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
+                  return { symbol: c.symbol, name: c.name, score: Math.round(Number(jj.score)) }
+                }
+              }
+            } catch {}
+            return { symbol: c.symbol, name: c.name, score: (null as any) }
           }
-          await Promise.all(new Array(Math.min(CONCURRENCY, chunks.length)).fill(0).map(()=>worker()))
-        }
-
-        // 3) Final pass (garantie dat state is gezet)
-        const finalRows = pairs.map(({ c, pair }) => {
-          const s = getCachedPairScore(pair)
-          return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
-        }).filter(Boolean) as { symbol:string; name:string; score:number }[]
-        const sortedDesc = [...finalRows].sort((a,b)=> b.score - a.score)
-        const sortedAsc  = [...finalRows].sort((a,b)=> a.score - b.score)
+        })
+        const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
+        const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
+        const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         if (!aborted) {
