@@ -1,417 +1,1131 @@
-// src/pages/stocks/index.tsx
+// src/pages/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/router'
+import { mutate } from 'swr'
 import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
+import { computeScoreStatus } from '@/lib/taScore'
 
+import { SP500 } from '@/lib/sp500'
+import { NASDAQ } from '@/lib/nasdaq'
+import { DOWJONES } from '@/lib/dowjones'
+import { DAX as DAX_FULL } from '@/lib/dax'
+import { FTSE100 } from '@/lib/ftse100'
+import { NIKKEI225 } from '@/lib/nikkei225'
+import { HANGSENG } from '@/lib/hangseng'
+import { SENSEX } from '@/lib/sensex'
+
+/* ---------------- config ---------------- */
+const TTL_MS = 5 * 60 * 1000 // 5 min cache
+const CARD_CONTENT_H = 'h-[280px]'
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
+
+/* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-type Quote = {
-  symbol: string
-  regularMarketPrice: number | null
-  regularMarketChange: number | null
-  regularMarketChangePercent: number | null
-  currency?: string
+type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
+
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
+
+type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number; signal: Advice }
+type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
+
+type CongressTrade = {
+  person?: string; ticker?: string; side?: 'BUY'|'SELL'|string;
+  amount?: string|number; price?: string|number|null; date?: string; url?: string;
 }
 
-function num(v: number | null | undefined, d = 2) {
-  return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
+type HomeSnapshot = {
+  newsCrypto: NewsItem[];
+  newsEq: NewsItem[];
+  topBuy: ScoredEq[];
+  topSell: ScoredEq[];
+  coinTopBuy: ScoredCoin[];
+  coinTopSell: ScoredCoin[];
+  academy: { title: string; href: string }[];
+  congress: CongressTrade[];
 }
-function fmtPrice(v: number | null | undefined, ccy?: string) {
-  if (v == null || !Number.isFinite(v)) return '—'
-  try {
-    if (ccy) return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: ccy }).format(v as number)
-  } catch {}
-  return (v as number).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-const pctCls = (p?: number | null) =>
-  Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
+type HomeProps = { snapshot: HomeSnapshot | null }
+
+/* ---------------- utils ---------------- */
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 function statusFromScore(score: number): Advice {
   if (score >= 66) return 'BUY'
   if (score <= 33) return 'SELL'
   return 'HOLD'
 }
-const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
 
-// ---- ruimer type & normalisatie (zelfde als detail) ----
-type SnapItemRaw = {
+/* ---------- localStorage cache helpers ---------- */
+function getCache<T>(key: string): T | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const j = JSON.parse(raw) as { ts: number; data: T }
+    if (!j?.ts) return null
+    if (Date.now() - j.ts > TTL_MS) return null
+    return j.data
+  } catch { return null }
+}
+function setCache<T>(key: string, data: T) {
+  try {
+    if (typeof window === 'undefined') return
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+  } catch {}
+}
+
+/* ---------- pool helper (concurrency) ---------- */
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/* =======================
+   CRYPTO — API response
+   ======================= */
+type IndResp = {
   symbol: string
-  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?:   { period?: number; rsi: number | null; status?: Advice } | number | null
-  macd?:  { macd: number | null; signal: number | null; hist?: number | null; status?: Advice }
-  macdHist?: number | null
-  volume?:{ volume: number | null; avg20d: number | null; ratio?: number | null; status?: Advice }
-}
-type SnapResp = { items: SnapItemRaw[]; updatedAt: number }
-
-function normalizeAndDecorate(raw?: SnapItemRaw) {
-  if (!raw) return null as any
-  const ma50 = raw.ma?.ma50 ?? null
-  const ma200 = raw.ma?.ma200 ?? null
-  const rsiNum = typeof raw.rsi === 'number' ? raw.rsi : (raw.rsi?.rsi ?? null)
-  const rsiPeriod = (typeof raw.rsi === 'object' && raw.rsi && 'period' in raw.rsi) ? (raw.rsi as any).period : 14
-  const macdVal = raw.macd?.macd ?? null
-  const macdSig = raw.macd?.signal ?? null
-  const macdHist = (raw.macd?.hist ?? raw.macdHist) ?? null
-  const volNow = raw.volume?.volume ?? null
-  const volAvg = raw.volume?.avg20d ?? null
-  const volRatio = raw.volume?.ratio ?? (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
-    ? Number(volNow)/Number(volAvg) : null)
-
-  const maStatus: Advice =
-    raw.ma?.status ??
-    ((Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number))
-      ? (Number(ma50) > Number(ma200) ? 'BUY' : Number(ma50) < Number(ma200) ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  const rsiStatus: Advice =
-    (typeof raw.rsi === 'object' ? raw.rsi?.status as Advice|undefined : undefined) ??
-    (Number.isFinite(rsiNum as number)
-      ? (Number(rsiNum) >= 60 ? 'BUY' : Number(rsiNum) <= 40 ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  const macdStatus: Advice =
-    raw.macd?.status ??
-    (Number.isFinite(macdHist as number)
-      ? (Number(macdHist) > 0 ? 'BUY' : Number(macdHist) < 0 ? 'SELL' : 'HOLD')
-      : (Number.isFinite(macdVal as number) && Number.isFinite(macdSig as number)
-          ? (Number(macdVal) > Number(macdSig) ? 'BUY' : Number(macdVal) < Number(macdSig) ? 'SELL' : 'HOLD')
-          : 'HOLD'))
-
-  const volStatus: Advice =
-    raw.volume?.status ??
-    (Number.isFinite(volRatio as number)
-      ? (Number(volRatio) >= 1.2 ? 'BUY' : Number(volRatio) <= 0.8 ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  return {
-    symbol: raw.symbol,
-    ma: { ma50, ma200, status: maStatus as Advice },
-    rsi: { period: rsiPeriod, rsi: rsiNum, status: rsiStatus as Advice },
-    macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus as Advice },
-    volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus as Advice },
-  }
+  ma?: { ma50: number|null; ma200: number|null; cross?: string }
+  rsi?: number|null
+  macd?: { macd: number|null; signal: number|null; hist: number|null }
+  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  error?: string
 }
 
-export default function Stocks() {
-  const symbols = useMemo(() => AEX.map(x => x.symbol), [])
+// SYM → SYMUSDT (stablecoins overslaan)
+const toBinancePair = (symbol: string) => {
+  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  if (!s || skip.has(s)) return null
+  return `${s}USDT`
+}
 
-  // 1) Quotes (batch, 20s poll)
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
-  const [qErr, setQErr] = useState<string | null>(null)
+/* ---------------- constituents per markt ---------------- */
+const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
+  'AEX': [],
+  'S&P 500': [
+    { symbol: 'AAPL',  name: 'Apple' },
+    { symbol: 'MSFT',  name: 'Microsoft' },
+    { symbol: 'NVDA',  name: 'NVIDIA' },
+    { symbol: 'AMZN',  name: 'Amazon' },
+    { symbol: 'META',  name: 'Meta Platforms' },
+  ],
+  'NASDAQ': [
+    { symbol: 'TSLA',  name: 'Tesla' },
+    { symbol: 'GOOGL', name: 'Alphabet' },
+    { symbol: 'ADBE',  name: 'Adobe' },
+    { symbol: 'AVGO',  name: 'Broadcom' },
+    { symbol: 'AMD',   name: 'Advanced Micro Devices' },
+  ],
+  'Dow Jones': [
+    { symbol: 'MRK', name: 'Merck' },
+    { symbol: 'PG',  name: 'Procter & Gamble' },
+    { symbol: 'V',   name: 'Visa' },
+    { symbol: 'JPM', name: 'JPMorgan Chase' },
+    { symbol: 'UNH', name: 'UnitedHealth' },
+  ],
+  'DAX': [
+    { symbol: 'SAP.DE',  name: 'SAP' },
+    { symbol: 'SIE.DE',  name: 'Siemens' },
+    { symbol: 'BMW.DE',  name: 'BMW' },
+    { symbol: 'BAS.DE',  name: 'BASF' },
+    { symbol: 'MBG.DE',  name: 'Mercedes-Benz Group' },
+  ],
+  'FTSE 100': [
+    { symbol: 'AZN.L',   name: 'AstraZeneca' },
+    { symbol: 'SHEL.L',  name: 'Shell' },
+    { symbol: 'HSBA.L',  name: 'HSBC' },
+    { symbol: 'ULVR.L',  name: 'Unilever' },
+    { symbol: 'BATS.L',  name: 'BAT' },
+  ],
+  'Nikkei 225': [
+    { symbol: '7203.T',  name: 'Toyota' },
+    { symbol: '6758.T',  name: 'Sony' },
+    { symbol: '9984.T',  name: 'SoftBank Group' },
+    { symbol: '8035.T',  name: 'Tokyo Electron' },
+    { symbol: '4063.T',  name: 'Shin-Etsu Chemical' },
+  ],
+  'Hang Seng': [
+    { symbol: '0700.HK', name: 'Tencent' },
+    { symbol: '0939.HK', name: 'China Construction Bank' },
+    { symbol: '2318.HK', name: 'Ping An' },
+    { symbol: '1299.HK', name: 'AIA Group' },
+    { symbol: '0005.HK', name: 'HSBC Holdings' },
+  ],
+  'Sensex': [
+    { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
+    { symbol: 'TCS.NS',      name: 'TCS' },
+    { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
+    { symbol: 'INFY.NS',     name: 'Infosys' },
+    { symbol: 'ICICIBANK.NS',name: 'ICICI Bank' },
+  ],
+}
+
+/* ===== gebruik volledige lijsten per markt (fallback naar STATIC_CONS) ===== */
+function constituentsForMarket(label: MarketLabel) {
+  if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
+    return SP500.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'NASDAQ' && Array.isArray(NASDAQ) && NASDAQ.length)
+    return NASDAQ.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'Dow Jones' && Array.isArray(DOWJONES) && DOWJONES.length)
+    return DOWJONES.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'DAX' && Array.isArray(DAX_FULL) && DAX_FULL.length)
+    return DAX_FULL.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'FTSE 100' && Array.isArray(FTSE100) && FTSE100.length)
+    return FTSE100.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'Nikkei 225' && Array.isArray(NIKKEI225) && NIKKEI225.length)
+    return NIKKEI225.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'Hang Seng' && Array.isArray(HANGSENG) && HANGSENG.length)
+    return HANGSENG.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
+    return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
+  return STATIC_CONS[label] || []
+}
+
+/* ------- crypto universum (Yahoo tickers) — TOP 50 ------- */
+const COINS: { symbol: string; name: string }[] = [
+  { symbol: 'BTC-USD',  name: 'Bitcoin' },
+  { symbol: 'ETH-USD',  name: 'Ethereum' },
+  { symbol: 'BNB-USD',  name: 'BNB' },
+  { symbol: 'SOL-USD',  name: 'Solana' },
+  { symbol: 'XRP-USD',  name: 'XRP' },
+  { symbol: 'ADA-USD',  name: 'Cardano' },
+  { symbol: 'DOGE-USD', name: 'Dogecoin' },
+  { symbol: 'TON-USD',  name: 'Toncoin' },
+  { symbol: 'TRX-USD',  name: 'TRON' },
+  { symbol: 'AVAX-USD', name: 'Avalanche' },
+  { symbol: 'DOT-USD',  name: 'Polkadot' },
+  { symbol: 'LINK-USD', name: 'Chainlink' },
+  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
+  { symbol: 'LTC-USD',  name: 'Litecoin' },
+  { symbol: 'MATIC-USD', name: 'Polygon' },
+  { symbol: 'XLM-USD',  name: 'Stellar' },
+  { symbol: 'NEAR-USD', name: 'NEAR' },
+  { symbol: 'ICP-USD',  name: 'Internet Computer' },
+  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
+  { symbol: 'FIL-USD',  name: 'Filecoin' },
+  { symbol: 'XMR-USD',  name: 'Monero' },
+  { symbol: 'APT-USD',  name: 'Aptos' },
+  { symbol: 'ARB-USD',  name: 'Arbitrum' },
+  { symbol: 'OP-USD',   name: 'Optimism' },
+  { symbol: 'SUI-USD',  name: 'Sui' },
+  { symbol: 'HBAR-USD', name: 'Hedera' },
+  { symbol: 'ALGO-USD', name: 'Algorand' },
+  { symbol: 'VET-USD',  name: 'VeChain' },
+  { symbol: 'EGLD-USD', name: 'MultiversX' },
+  { symbol: 'AAVE-USD', name: 'Aave' },
+  { symbol: 'INJ-USD',  name: 'Injective' },
+  { symbol: 'MKR-USD',  name: 'Maker' },
+  { symbol: 'RUNE-USD', name: 'THORChain' },
+  { symbol: 'IMX-USD',  name: 'Immutable' },
+  { symbol: 'FLOW-USD', name: 'Flow' },
+  { symbol: 'SAND-USD', name: 'The Sandbox' },
+  { symbol: 'MANA-USD', name: 'Decentraland' },
+  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+  { symbol: 'QNT-USD',  name: 'Quant' },
+  { symbol: 'GRT-USD',  name: 'The Graph' },
+  { symbol: 'CHZ-USD',  name: 'Chiliz' },
+  { symbol: 'CRV-USD',  name: 'Curve DAO' },
+  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
+  { symbol: 'FTM-USD',  name: 'Fantom' },
+  { symbol: 'XTZ-USD',  name: 'Tezos' },
+  { symbol: 'LDO-USD',  name: 'Lido DAO' },
+  { symbol: 'SNX-USD',  name: 'Synthetix' },
+  { symbol: 'STX-USD',  name: 'Stacks' },
+  { symbol: 'AR-USD',   name: 'Arweave' },
+  { symbol: 'GMX-USD',  name: 'GMX' },
+]
+
+/* ---------------- small UI primitives ---------------- */
+const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
+  title, actionHref, actionLabel, children
+}) => (
+  <section className="rounded-2xl border border-white/10 bg-white/[0.03] shadow-[0_6px_30px_-10px_rgba(0,0,0,0.25)] transition-all hover:-translate-y-[1px] hover:shadow-[0_10px_40px_-12px_rgba(0,0,0,0.35)]">
+    <header className="flex items-center justify-between px-5 pt-4 pb-2">
+      <h2 className="text-[15px] font-semibold">{title}</h2>
+      {actionHref && (
+        <Link href={actionHref} className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
+          {actionLabel || 'View all'} <span aria-hidden>→</span>
+        </Link>
+      )}
+    </header>
+    <div className="px-4 pb-4">{children}</div>
+  </section>
+)
+
+const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: string; title?: string }> = ({
+  left, right, href, title
+}) => {
+  const Cmp: any = href ? Link : 'div'
+  const props: any = href ? { href } : {}
+  return (
+    <Cmp {...props} title={title} className="flex items-center justify-between gap-3 px-3 py-[10px] rounded-xl hover:bg-white/6 transition-colors">
+      <div className="min-w-0">{left}</div>
+      {right && <div className="shrink-0">{right}</div>}
+    </Cmp>
+  )
+}
+
+/* ======== relative-date helpers ======== */
+function isoDaysAgo(days: number): string {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+function toISORelative(raw?: string | null): string | null {
+  if (!raw) return null
+  const t = raw.trim().toLowerCase()
+  let m = t.match(/(\d+)\s*day(?:s)?\s*ago/)
+  if (m) return isoDaysAgo(parseInt(m[1], 10))
+  m = t.match(/(\d+)\s*hour(?:s)?\s*ago/)
+  if (m) return isoDaysAgo(0)
+  if (/\bjust\s*now\b/.test(t) || /\bminute(?:s)?\s*ago\b/.test(t)) return isoDaysAgo(0)
+  return null
+}
+function coerceISO(raw?: string | null): string | null {
+  if (!raw) return null
+  if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0, 10)
+  const ts = Date.parse(raw)
+  if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10)
+  return null
+}
+
+/* ---------------- page ---------------- */
+export default function Homepage(props: HomeProps) {
+  const router = useRouter()
+
+  // minute tag
+  const [minuteTag, setMinuteTag] = useState(Math.floor(Date.now() / 60_000))
   useEffect(() => {
-    let timer: any, aborted = false
-    async function load() {
+    const id = setInterval(() => setMinuteTag(Math.floor(Date.now() / 60_000)), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (!e.key || !e.key.startsWith('ta:')) return
+      setMinuteTag(Math.floor(Date.now() / 60_000))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // loading flags init vanuit snapshot
+  const [loadingEq, setLoadingEq] = useState(!(props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length))
+  const [loadingCoin, setLoadingCoin] = useState(!(props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length))
+  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(!(props.snapshot?.newsCrypto?.length))
+  const [loadingNewsEq, setLoadingNewsEq] = useState(!(props.snapshot?.newsEq?.length))
+  const [loadingCongress, setLoadingCongress] = useState(!(props.snapshot?.congress?.length))
+  const [loadingAcademy, setLoadingAcademy] = useState(!(props.snapshot?.academy?.length))
+
+  /* ---------- Prefetch routes ---------- */
+  useEffect(() => {
+    const routes = [
+      '/crypto',
+      '/aex','/sp500','/nasdaq','/dowjones','/dax','/ftse100','/nikkei225','/hangseng','/sensex','/etfs',
+      '/intel','/intel/hedgefunds','/intel/macro','/intel/sectors','/academy','/about'
+    ]
+    routes.forEach(r => router.prefetch(r).catch(()=>{}))
+  }, [router])
+
+  /* ---------- hydrateer met snapshot/cache ---------- */
+  const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(
+    props.snapshot?.newsCrypto ?? getCache<NewsItem[]>('home:news:crypto') ?? []
+  )
+  const [newsEq, setNewsEq] = useState<NewsItem[]>(
+    props.snapshot?.newsEq ?? getCache<NewsItem[]>('home:news:eq') ?? []
+  )
+  const [topBuy, setTopBuy]   = useState<ScoredEq[]>(
+    props.snapshot?.topBuy ?? getCache<ScoredEq[]>('home:eq:topBuy') ?? []
+  )
+  const [topSell, setTopSell] = useState<ScoredEq[]>(
+    props.snapshot?.topSell ?? getCache<ScoredEq[]>('home:eq:topSell') ?? []
+  )
+  const [coinTopBuy, setCoinTopBuy]   = useState<ScoredCoin[]>(
+    props.snapshot?.coinTopBuy ?? getCache<ScoredCoin[]>('home:coin:topBuy') ?? []
+  )
+  const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>(
+    props.snapshot?.coinTopSell ?? getCache<ScoredCoin[]>('home:coin:topSell') ?? []
+  )
+  const [academy, setAcademy] = useState<{ title: string; href: string }[]>(
+    props.snapshot?.academy ?? getCache<{title:string;href:string}[]>('home:academy') ?? []
+  )
+  const [trades, setTrades] = useState<CongressTrade[]>(
+    props.snapshot?.congress ?? getCache<CongressTrade[]>('home:congress') ?? []
+  )
+  const [coinErr, setCoinErr] = useState<string | null>(null)
+  const [tradesErr, setTradesErr] = useState<string | null>(null)
+
+  // flags bijwerken obv cache/snapshot
+  useEffect(() => {
+    setLoadingNewsCrypto(newsCrypto.length === 0)
+    setLoadingNewsEq(newsEq.length === 0)
+    setLoadingEq(topBuy.length === 0 || topSell.length === 0)
+    setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
+    setLoadingAcademy(academy.length === 0)
+    setLoadingCongress(trades.length === 0)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- ZACHTE REFRESH: één call naar snapshot (alleen als cache leeg) ---------- */
+  useEffect(() => {
+    const hasFresh =
+      (getCache<ScoredEq[]>('home:eq:topBuy')?.length || 0) > 0 &&
+      (getCache<ScoredEq[]>('home:eq:topSell')?.length || 0) > 0
+    if (hasFresh) return
+
+    let stop = false
+    ;(async () => {
       try {
-        setQErr(null)
-        const url = `/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j: { quotes: Record<string, Quote> } = await r.json()
-        if (!aborted) setQuotes(j.quotes || {})
-      } catch (e: any) {
-        if (!aborted) setQErr(String(e?.message || e))
-      } finally {
-        if (!aborted) timer = setTimeout(load, 20000)
-      }
-    }
-    load()
-    return () => { aborted = true; if (timer) clearTimeout(timer) }
-  }, [symbols])
+        const r = await fetch('/api/home/snapshot', { cache: 'no-store' })
+        if (!r.ok) return
+        const s = await r.json() as HomeSnapshot
+        if (stop) return
+        setNewsCrypto(s.newsCrypto); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
+        setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
+        setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
+        setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
+        // equity/crypto berekenen we elders exact
+      } catch {}
+    })()
+    return () => { stop = true }
+  }, [])
 
-  // 2) Snapshot-list (1 call/30s)
-  const snapUrl = useMemo(
-    () => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
-    [symbols]
-  )
-  const { data: snap, error: snapErr } = useSWR<SnapResp>(
-    snapUrl,
-    (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
-    { refreshInterval: 30_000, revalidateOnFocus: false }
-  )
-
-  const snapBySym = useMemo(() => {
-    const m: Record<string, ReturnType<typeof normalizeAndDecorate>> = {}
-    snap?.items?.forEach(it => {
-      if (it?.symbol) m[it.symbol] = normalizeAndDecorate(it)
-    })
-    return m
-  }, [snap])
-
-  // 3) Score 0..100 (zelfde weging, nu zeker op basis van status — altijd beschikbaar)
-  const scoreMap = useMemo(() => {
-    const toNorm = (pts: number) => (pts + 2) / 4
-    const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-    const map: Record<string, number> = {}
-    for (const sym of symbols) {
-      const it = snapBySym[sym]
-      if (!it) continue
-      const pMA   = toPtsFromStatus(it.ma?.status)
-      const pMACD = toPtsFromStatus(it.macd?.status)
-      const pRSI  = toPtsFromStatus(it.rsi?.status)
-      const pVOL  = toPtsFromStatus(it.volume?.status)
-      const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
-      map[sym] = Math.round(Math.max(0, Math.min(1, agg)) * 100)
-    }
-    return map
-  }, [symbols, snapBySym])
-
-  // ➕ NIEUW: schrijf scores weg voor de homepage (zelfde cacheformaat)
-  useEffect(() => {
-    try {
-      const now = Date.now()
-      Object.entries(scoreMap).forEach(([sym, s]) => {
-        if (Number.isFinite(s as number)) {
-          localStorage.setItem(
-            `score:${sym}`,
-            JSON.stringify({ ts: now, data: { score: Math.round(Number(s)) } })
-          )
-        }
-      })
-    } catch {}
-  }, [scoreMap])
-
-  // 4) 7d/30d batch – ongewijzigd
-  const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
-  const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
+  /* ---------- NEWS warm-up (SWR prime) ---------- */
   useEffect(() => {
     let aborted = false
-    const list = AEX.map(x => x.symbol)
-    async function loadDays(days: 7 | 30) {
-      const url = `/api/indicators/ret-batch?days=${days}&symbols=${encodeURIComponent(list.join(','))}`
-      const r = await fetch(url, { cache: 'no-store' })
-      if (!r.ok) return {}
-      const j = await r.json() as { items: { symbol: string; days: number; pct: number | null }[] }
-      const map: Record<string, number> = {}
-      j.items.forEach(it => { if (Number.isFinite(it.pct as number)) map[it.symbol] = it.pct as number })
-      return map
+    async function prime(key: string) {
+      try {
+        const r = await fetch(key, { cache: 'no-store' })
+        if (!r.ok) return
+        const data = await r.json()
+        if (!aborted) mutate(key, data, { revalidate: false })
+      } catch {}
     }
-    ;(async () => {
-      const [m7, m30] = await Promise.all([loadDays(7), loadDays(30)])
-      if (!aborted) { setRet7Map(m7); setRet30Map(m30) }
-    })()
+    const locale = 'hl=en-US&gl=US&ceid=US:en'
+    prime(`/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${locale}`)
+    prime(`/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${locale}`)
     return () => { aborted = true }
   }, [])
 
-  // Hydration-safe klokje
-  const [timeStr, setTimeStr] = useState('')
+  /* ---------- NEWS fallback (instant) ---------- */
   useEffect(() => {
-    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
-    upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
+    if (newsCrypto.length && newsEq.length) { setLoadingNewsCrypto(false); setLoadingNewsEq(false); return }
+    let aborted = false
+
+    async function load(topic: 'crypto' | 'equities') {
+      const query =
+        topic === 'crypto'
+          ? 'crypto OR bitcoin OR ethereum OR blockchain'
+          : 'equities OR stocks OR stock market OR aandelen OR beurs'
+      const locale = 'hl=en-US&gl=US&ceid=US:en'
+      const url = `/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`
+      try {
+        topic === 'crypto' ? setLoadingNewsCrypto(true) : setLoadingNewsEq(true)
+        const r = await fetch(url, { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr: NewsItem[] = (j.items || []).slice(0, 6).map((x: any) => ({
+          title: x.title || '',
+          url: x.link,
+          source: x.source || '',
+          published: x.pubDate || '',
+          image: null,
+        }))
+        if (aborted) return
+        if (topic === 'crypto') { setNewsCrypto(arr); setCache('home:news:crypto', arr); setLoadingNewsCrypto(false) }
+        else { setNewsEq(arr); setCache('home:news:eq', arr); setLoadingNewsEq(false) }
+      } catch {
+        if (aborted) return
+        if (topic === 'crypto') { setNewsCrypto([]); setLoadingNewsCrypto(false) }
+        else { setNewsEq([]); setLoadingNewsEq(false) }
+      }
+    }
+
+    if (!newsCrypto.length) load('crypto')
+    if (!newsEq.length) load('equities')
+
+    return () => { aborted = true }
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* =======================
+     EQUITIES — Exacte scores + Fallback voor AEX
+     ======================= */
+
+  const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+
+  // cache helpers voor individuele scores
+  const getScoreCache = (sym: string): number | null => {
+    const j = getCache<{ score: number }>(`score:${sym}`)
+    return (j && Number.isFinite(j.score)) ? j.score : null
+  }
+  const setScoreCache = (sym: string, score: number) => setCache(`score:${sym}`, { score })
+
+  async function fetchStrictScore(sym: string, v: number): Promise<number | null> {
+    try {
+      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`, { cache: 'no-store' })
+      if (!r.ok) return null
+      const j = await r.json() as { score?: number|null }
+      if (Number.isFinite(j?.score as number)) {
+        const s = Math.round(Number(j.score))
+        setScoreCache(sym, s)
+        return s
+      }
+      return null
+    } catch { return null }
+  }
+
+  // ★ Fallback: haal indicator-snapshots in batches op en reken score lokaal uit
+  async function fetchSnapshotScores(cons: {symbol:string; name:string}[]): Promise<{symbol:string; name:string; score:number}[]> {
+    const out: {symbol:string; name:string; score:number}[] = []
+    const chunk = <T,>(arr: T[], size: number) => {
+      const o: T[][] = []; for (let i=0;i<arr.length;i+=size) o.push(arr.slice(i,i+size)); return o
+    }
+    for (const batch of chunk(cons, 20)) {
+      const joined = batch.map(b => b.symbol).join(',')
+      try {
+        const r = await fetch(`/api/indicators/snapshot-list?symbols=${encodeURIComponent(joined)}`, { cache: 'no-store' })
+        if (!r.ok) continue
+        const j = await r.json() as { items?: any[] }
+        const items = Array.isArray(j?.items) ? j!.items : []
+        for (const it of items) {
+          const sym = it?.symbol
+          if (!sym) continue
+          const { score } = computeScoreStatus({
+            ma: it?.ma, rsi: (typeof it?.rsi==='number'? it.rsi : it?.rsi?.rsi), macd: it?.macd, volume: it?.volume
+          } as any)
+          if (Number.isFinite(score as number)) {
+            const s = Math.round(Number(score))
+            setScoreCache(sym, s)
+            const name = cons.find(c => c.symbol === sym)?.name || sym
+            out.push({ symbol: sym, name, score: s })
+          }
+        }
+      } catch {}
+    }
+    return out
+  }
+
+  // Bereken tops/bottoms per markt
+  useEffect(() => {
+    let aborted = false
+    if (!topBuy.length || !topSell.length) setLoadingEq(true)
+
+    ;(async () => {
+      try {
+        const outBuy: ScoredEq[] = []
+        const outSell: ScoredEq[] = []
+
+        for (const market of MARKET_ORDER) {
+          const cons = constituentsForMarket(market)
+          if (!cons.length) continue
+
+          // 1) probeer strikte endpoint (en gebruik cache waar mogelijk)
+          const scores = await pool(cons, 6, async (c) => {
+            const cached = getScoreCache(c.symbol)
+            if (Number.isFinite(cached)) return { ...c, score: cached as number }
+            const s = await fetchStrictScore(c.symbol, minuteTag)
+            return { ...c, score: s as any }
+          })
+
+          let rows = scores
+            .filter(r => Number.isFinite(r.score as number))
+            .map(r => ({ symbol: r.symbol, name: r.name, market, score: r.score as number })) as ScoredEq[]
+
+          // 2) Fallback speciaal voor markten waar niets terugkomt (zoals AEX)
+          if (rows.length === 0) {
+            const snapRows = await fetchSnapshotScores(cons)
+            rows = snapRows.map(r => ({ ...r, market })) as ScoredEq[]
+          }
+
+          if (rows.length >= 1) {
+            // hoogste
+            const top = [...rows].sort((a,b)=> b.score - a.score)[0]
+            if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
+
+            // laagste (alleen als we minstens 2 verschillende items hebben)
+            if (rows.length >= 2) {
+              const bot = [...rows].sort((a,b)=> a.score - b.score)
+                .find(r => r.symbol !== top.symbol) || [...rows].sort((a,b)=> a.score - b.score)[0]
+              if (bot && bot.symbol !== top.symbol) {
+                outSell.push({ ...bot, signal: statusFromScore(bot.score) })
+              }
+            }
+          }
+        }
+
+        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+        const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
+        const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
+
+        if (!aborted) {
+          setTopBuy(finalBuy); setTopSell(finalSell)
+          setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
+        }
+      } finally {
+        if (!aborted) setLoadingEq(false)
+      }
+    })()
+
+    return () => { aborted = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minuteTag])
+
+  /* =======================
+     CRYPTO — defensief zoals eerder (sneller laden)
+     ======================= */
+
+  const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
+  const pairs = useMemo(() => {
+    return COINS.map(c => {
+      const ov = PAIR_OVERRIDES[c.symbol]
+      if (ov) return { c, pair: ov }
+      const base = c.symbol.replace('-USD', '')
+      const p1 = toBinancePair(base)
+      if (p1) return { c, pair: p1 }
+      const p2 = toBinancePair(c.symbol)
+      return { c, pair: p2 || '' }
+    }).filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
   }, [])
 
-  // Samenvatting + heatmap
-  const summary = useMemo(() => {
-    const withScore = AEX.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
-    const totalWithScore = withScore.length || 0
-    const buy  = withScore.filter(x => statusFromScore(x.s as number) === 'BUY').length
-    const hold = withScore.filter(x => statusFromScore(x.s as number) === 'HOLD').length
-    const sell = withScore.filter(x => statusFromScore(x.s as number) === 'SELL').length
-    const avgScore = totalWithScore ? Math.round(withScore.reduce((acc, x) => acc + (x.s as number), 0) / totalWithScore) : 50
+  // ---- SNELLER: cache helpers + batching
+  function getCachedPairScore(pair: string): number | null {
+    try {
+      const raw = localStorage.getItem(`ta:${pair}`)
+      if (!raw) return null
+      const jj = JSON.parse(raw) as { score?: number; ts?: number }
+      if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
+        return Math.round(Number(jj.score))
+      }
+    } catch {}
+    return null
+  }
+  function setCachedPairScore(pair: string, score: number) {
+    try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
+  }
+  function chunk<T>(arr: T[], size: number) {
+    const out: T[][] = []
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+    return out
+  }
+  async function fetchBatchScores(batchPairs: string[], v: number): Promise<Record<string, number>> {
+    const joined = batchPairs.join(',')
+    const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(joined)}&v=${v}`
+    try {
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const j = await r.json() as { results?: IndResp[] }
+      const out: Record<string, number> = {}
+      for (const ind of (j?.results || [])) {
+        if (!ind?.symbol) continue
+        const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
+        if (Number.isFinite(score as number)) out[ind.symbol] = Math.round(Number(score))
+      }
+      return out
+    } catch {
+      const out: Record<string, number> = {}
+      await pool(batchPairs, 8, async (sym) => {
+        try {
+          const r = await fetch(`/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${v}`, { cache: 'no-store' })
+          if (!r.ok) return
+          const j = await r.json() as { results?: IndResp[] }
+          const ind = (j?.results || [])[0]
+          if (!ind) return
+          const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
+          if (Number.isFinite(score as number)) out[sym] = Math.round(Number(score))
+        } catch {}
+      })
+      return out
+    }
+  }
 
-    const pctArr = AEX.map(a => Number(quotes[a.symbol]?.regularMarketChangePercent)).filter(v => Number.isFinite(v)) as number[]
-    const greenCount = pctArr.filter(v => v > 0).length
-    const breadthPct = pctArr.length ? Math.round((greenCount / pctArr.length) * 100) : 0
+  useEffect(() => {
+    if (coinTopBuy.length && coinTopSell.length) return
+    let aborted = false
+    ;(async () => {
+      try {
+        setLoadingCoin(true); setCoinErr(null)
 
-    const rows = AEX.map(a => ({ symbol: a.symbol, pct: Number(quotes[a.symbol]?.regularMarketChangePercent) }))
-      .filter(r => Number.isFinite(r.pct)) as {symbol:string; pct:number}[]
-    const topGainers = [...rows].sort((a,b) => b.pct - a.pct).slice(0, 3)
-    const topLosers  = [...rows].sort((a,b) => a.pct - b.pct).slice(0, 3)
+        const cachedRows = pairs.map(({ c, pair }) => {
+          const s = getCachedPairScore(pair)
+          return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
+        }).filter(Boolean) as { symbol:string; name:string; score:number }[]
+        if (cachedRows.length) {
+          const desc = [...cachedRows].sort((a,b)=> b.score - a.score)
+          const asc  = [...cachedRows].sort((a,b)=> a.score - b.score)
+          setCoinTopBuy(desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+          setCoinTopSell(asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+          setLoadingCoin(false)
+        }
 
-    return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
-  }, [quotes, scoreMap])
+        const missing = pairs.map(p => p.pair).filter(p => getCachedPairScore(p) == null)
+        if (missing.length) {
+          const chunks = chunk(missing, 20)
+          const CONCURRENCY = 2
+          let idx = 0
+          async function worker() {
+            while (idx < chunks.length && !aborted) {
+              const my = idx++
+              const res = await fetchBatchScores(chunks[my], minuteTag)
+              for (const [pair, sc] of Object.entries(res)) setCachedPairScore(pair, sc)
 
-  const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
-  const heatmapData = useMemo(() => {
-    const rows = AEX.map(a => {
-      const score = scoreMap[a.symbol]
-      const status = Number.isFinite(score as number) ? statusFromScore(score as number) : 'HOLD'
-      return { symbol: a.symbol, score: (score as number) ?? 50, status }
-    })
-    return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
-  }, [scoreMap, filter])
+              const rowsNow = pairs.map(({ c, pair }) => {
+                const s = getCachedPairScore(pair)
+                return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
+              }).filter(Boolean) as { symbol:string; name:string; score:number }[]
 
+              if (!aborted && rowsNow.length) {
+                const desc = [...rowsNow].sort((a,b)=> b.score - a.score)
+                const asc  = [...rowsNow].sort((a,b)=> a.score - b.score)
+                setCoinTopBuy(desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+                setCoinTopSell(asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+                setLoadingCoin(false)
+                setCache('home:coin:topBuy',  desc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+                setCache('home:coin:topSell', asc.slice(0,5).map(r => ({ ...r, signal: statusFromScore(r.score) })))
+              }
+            }
+          }
+          await Promise.all(new Array(Math.min(CONCURRENCY, chunks.length)).fill(0).map(()=>worker()))
+        }
+
+        const finalRows = pairs.map(({ c, pair }) => {
+          const s = getCachedPairScore(pair)
+          return Number.isFinite(s as number) ? { symbol: c.symbol, name: c.name, score: s as number } : null
+        }).filter(Boolean) as { symbol:string; name:string; score:number }[]
+        const sortedDesc = [...finalRows].sort((a,b)=> b.score - a.score)
+        const sortedAsc  = [...finalRows].sort((a,b)=> a.score - b.score)
+        const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+        const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+        if (!aborted) {
+          setCoinTopBuy(buys); setCoinTopSell(sells)
+          setCache('home:coin:topBuy',  buys); setCache('home:coin:topSell', sells)
+        }
+      } catch (e:any) {
+        if (!aborted) setCoinErr(String(e?.message || e))
+      } finally {
+        if (!aborted) setLoadingCoin(false)
+      }
+    })()
+    return () => { aborted = true }
+  }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ========= Academy (fallback) ========= */
+  type AcademyItem = { title: string; href: string }
+  useEffect(() => {
+    if (academy.length) { setLoadingAcademy(false); return }
+    let aborted = false
+    ;(async () => {
+      try {
+        setLoadingAcademy(true)
+        const r = await fetch('/api/academy/list?v='+minuteTag, { cache: 'no-store' })
+        if (r.ok) {
+          const j = await r.json() as { items?: AcademyItem[] }
+          if (!aborted && Array.isArray(j.items) && j.items.length) {
+            const items = j.items.slice(0, 8)
+            setAcademy(items); setCache('home:academy', items); return
+          }
+        }
+      } catch {}
+      if (!aborted) {
+        const fallback = [
+          { title: 'What is RSI? A practical guide', href: '/academy' },
+          { title: 'MACD signals explained simply', href: '/academy' },
+          { title: 'Position sizing 101', href: '/academy' },
+          { title: 'Support & resistance basics', href: '/academy' },
+          { title: 'Trend vs. mean reversion', href: '/academy' },
+          { title: 'Risk management checklists', href: '/academy' },
+          { title: 'How to read volume properly', href: '/academy' },
+          { title: 'Backtesting pitfalls to avoid', href: '/academy' },
+        ]
+        setAcademy(fallback); setCache('home:academy', fallback)
+      }
+    })().finally(() => { if (!aborted) setLoadingAcademy(false) })
+    return () => { aborted = true }
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ========= Congress Trading (fallback) ========= */
+  useEffect(() => {
+    if (trades.length) { setLoadingCongress(false); return }
+    let aborted = false
+    ;(async () => {
+      try {
+        setLoadingCongress(true); setTradesErr(null)
+        const r = await fetch('/api/market/congress?limit=30&v='+minuteTag, { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json() as { items?: any[] }
+        const arr = Array.isArray(j?.items) ? j.items : []
+        const norm: CongressTrade[] = (arr || []).map((x: any) => {
+          const fallbackISO = toISORelative(x.published || x.traded || x.date) || coerceISO(x.published || x.traded || x.date)
+          const iso = x.publishedISO || x.tradedISO || fallbackISO || ''
+          return { person: x.person || '', ticker: x.ticker || '', side: String(x.side || '').toUpperCase(),
+            amount: x.amount || '', price: x.price ?? null, date: iso, url: x.url || '' }
+        })
+        norm.sort((a,b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
+        setTrades(norm); setCache('home:congress', norm)
+      } catch (e:any) {
+        setTradesErr(String(e?.message || e))
+      } finally {
+        setLoadingCongress(false)
+      }
+    })()
+    return () => { aborted = true }
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- helpers for news ---- */
+  function decodeHtml(s: string) {
+    return (s || '')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+  }
+  const SOURCE_DOMAIN_MAP: Record<string, string> = {
+    'reuters': 'reuters.com',
+    'yahoo finance': 'finance.yahoo.com',
+    'cnbc': 'cnbc.com',
+    'the wall street journal': 'wsj.com',
+    'wall street journal': 'wsj.com',
+    'investopedia': 'investopedia.com',
+    'marketwatch': 'marketwatch.com',
+    "investor's business daily": 'investors.com',
+    'investors business daily': 'investors.com',
+    'cointelegraph': 'cointelegraph.com',
+    'investing.com': 'investing.com',
+    'bloomberg': 'bloomberg.com',
+    'financial times': 'ft.com',
+    'the verge': 'theverge.com',
+    'forbes': 'forbes.com',
+    'techcrunch': 'techcrunch.com',
+  }
+  function sourceToDomain(src?: string): string | null {
+    if (!src) return null
+    const key = src.trim().toLowerCase()
+    if (SOURCE_DOMAIN_MAP[key]) return SOURCE_DOMAIN_MAP[key]
+    for (const k of Object.keys(SOURCE_DOMAIN_MAP)) {
+      if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
+    }
+    return null
+  }
+  function realDomainFromUrl(raw: string, src?: string): { domain: string; favicon: string } {
+    try {
+      const u = new URL(raw)
+      if (u.hostname.endsWith('news.google.com')) {
+        const orig = u.searchParams.get('url')
+        if (orig) {
+          const ou = new URL(orig)
+          const d = ou.hostname.replace(/^www\./, '')
+          return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
+        }
+        const d2 = sourceToDomain(src || '')
+        if (d2) return { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` }
+      }
+      const d = u.hostname.replace(/^www\./, '')
+      return { domain: d, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d}` }
+    } catch {
+      const d2 = sourceToDomain(src || '')
+      return d2 ? { domain: d2, favicon: `https://www.google.com/s2/favicons?sz=64&domain=${d2}` } : { domain: '', favicon: '' }
+    }
+  }
+
+  const renderNews = (items: NewsItem[], keyPrefix: string, loading = false) => (
+    <ul className={`grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+      {loading ? (
+        <li className="text-white/60">Loading…</li>
+      ) : items.length === 0 ? (
+        <li className="text-white/60">No news…</li>
+      ) : items.map((n, i) => {
+        const { domain, favicon } = realDomainFromUrl(n.url, n.source)
+        const title = decodeHtml(n.title || '')
+        return (
+          <li
+            key={`${keyPrefix}${i}`}
+            className="flex items-start gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+          >
+            {favicon ? (
+              <img src={favicon} alt={domain} className="w-4 h-4 mt-1 rounded-sm" />
+            ) : (
+              <div className="w-4 h-4 mt-1 rounded-sm bg-white/10" />
+            )}
+            <div className="min-w-0 flex-1">
+              <a
+                href={n.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block font-medium text-white hover:underline truncate text-[13px]"
+                title={title}
+              >
+                {title}
+              </a>
+              <div className="text-[11px] text-white/60 mt-0.5 truncate">
+                {(n.source || domain || '').trim()}
+                {n.published ? ` • ${new Date(n.published).toLocaleString('nl-NL')}` : ''}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ul>
+  )
+
+  const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
+  const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
+
+  /* ---------------- render ---------------- */
   return (
     <>
-      <Head><title>AEX Tracker — SignalHub</title></Head>
-      <main className="min-h-screen">
-        <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
-          <h1 className="hero">AEX Tracker</h1>
-        </section>
+      <Head>
+        <title>SignalHub — Clarity in Markets</title>
+        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
+        <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
+        <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://query2.finance.yahoo.com" />
+        <link rel="dns-prefetch" href="https://api.coingecko.com" />
+      </Head>
 
-        <section className="max-w-6xl mx-auto px-4 pb-16">
-          {qErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden quotes: {qErr}</div>}
-          {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {String((snapErr as any)?.message || snapErr)}</div>}
-
-          <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Lijst */}
-            <div className="table-card p-0 overflow-hidden">
-              <table className="w-full text-[13px]">
-                <colgroup>
-                  <col className="w-10" /><col className="w-[40%]" /><col className="w-[14%]" />
-                  <col className="w-[14%]" /><col className="w-[12%]" /><col className="w-[12%]" /><col className="w-[18%]" />
-                </colgroup>
-                <thead className="bg-gray-50">
-                  <tr className="text-left text-gray-500">
-                    <th className="px-3 py-3">#</th><th className="px-2 py-3">Aandeel</th><th className="px-3 py-3">Prijs</th>
-                    <th className="px-3 py-3">24h</th><th className="px-3 py-3">7d</th><th className="px-3 py-3">30d</th><th className="px-3 py-3 text-left">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {AEX.map((row, i) => {
-                    const q = quotes[row.symbol]
-                    const price = fmtPrice(q?.regularMarketPrice, q?.currency || 'EUR')
-                    const chg = q?.regularMarketChange
-                    const pct = q?.regularMarketChangePercent
-                    const r7  = ret7Map[row.symbol]
-                    const r30 = ret30Map[row.symbol]
-                    const score = scoreMap[row.symbol]
-                    return (
-                      <tr key={row.symbol} className="hover:bg-gray-50 align-middle">
-                        <td className="px-3 py-3 text-gray-500">{i+1}</td>
-                        <td className="px-2 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <Link href={`/stocks/${encodeURIComponent(row.symbol)}`} className="font-medium text-gray-900 hover:underline truncate">
-                              {row.name}
-                            </Link>
-                            <span className="text-gray-500 shrink-0">({row.symbol})</span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{price}</td>
-                        <td className={`px-3 py-3 whitespace-nowrap ${pctCls(pct)}`}>
-                          {Number.isFinite(chg as number) && Number.isFinite(pct as number)
-                            ? `${chg! >= 0 ? '+' : ''}${num(chg, 2)} (${pct! >= 0 ? '+' : ''}${num(pct, 2)}%)`
-                            : '—'}
-                        </td>
-                        <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r7)}`}>
-                          {Number.isFinite(r7 as number) ? `${(r7 as number) >= 0 ? '+' : ''}${num(r7, 2)}%` : '—'}
-                        </td>
-                        <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r30)}`}>
-                          {Number.isFinite(r30 as number) ? `${(r30 as number) >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center justify-start">
-                            <div className="origin-left scale-95">
-                              {Number.isFinite(score as number)
-                                ? <ScoreBadge score={score as number} />
-                                : <span className="badge badge-hold">HOLD · 50</span>}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+      <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
+        <div className="grid gap-5 lg:grid-cols-3">
+          {/* 1) Hero */}
+          <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
+            <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              <div className="text-white/80 space-y-3 leading-relaxed">
+                <p className="text-[13px]">
+                  SignalHub provides a clean, actionable view of crypto and equities — built for clarity and speed.
+                  Less noise, more direction: momentum, volume, and trend in one place.
+                </p>
+                <ul className="space-y-1">
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Unified BUY / HOLD / SELL signals across major cryptos and stock markets → spot high-conviction setups in seconds
+                  </li>
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Momentum, volume & trend analytics → understand why assets move and predict future movements
+                  </li>
+                  <li className="flex items-center gap-2 text-[13px]">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
+                    Market Intel feeds → track hedge funds, congress trades, and macro trends as they unfold
+                  </li>
+                </ul>
+                <div className="pt-1 flex gap-2">
+                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition text-[13px]">
+                    Open crypto →
+                  </Link>
+                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition text-[13px]">
+                    Open AEX →
+                  </Link>
+                </div>
+              </div>
             </div>
+          </Card>
 
-            {/* Rechterkolom */}
-            <aside className="space-y-3 lg:sticky lg:top-16 h-max">
-              <div className="table-card p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-semibold text-gray-900">Dagelijkse samenvatting</div>
-                  <div className="text-xs text-gray-500">Stand: <span suppressHydrationWarning>{timeStr}</span></div>
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">BUY</div>
-                    <div className="text-lg font-bold text-green-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
-                  </div>
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">HOLD</div>
-                    <div className="text-lg font-bold text-amber-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
-                  </div>
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">SELL</div>
-                    <div className="text-lg font-bold text-red-700">
-                      {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
-                    </div>
-                    <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
-                  </div>
-                </div>
+          {/* 2) Crypto — Top BUY */}
+          <Card title="Crypto — Top 5 BUY" actionHref="/crypto" actionLabel="All crypto →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {loadingCoin ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : coinTopBuy.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
+              ) : coinTopBuy.map((r)=>(
+                <li key={`cb-${r.symbol}`}>
+                  <Row
+                    href={coinHref(r.symbol)}
+                    left={
+                      <div className="truncate">
+                        <div className="font-medium truncate text-[13px]">{r.name}</div>
+                        <div className="text-white/60 text-[11px]">{r.symbol}</div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Card>
 
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600">Breadth (24h groen)</div>
-                    <div className="text-xl font-bold text-gray-900">{summary.breadthPct}%</div>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600">Gem. score</div>
-                    <div className="text-xl font-bold text-gray-900">{summary.avgScore}</div>
-                  </div>
-                </div>
+          {/* 3) Crypto — Top 5 SELL */}
+          <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {loadingCoin ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : coinTopSell.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
+              ) : coinTopSell.map((r)=>(
+                <li key={`cs-${r.symbol}`}>
+                  <Row
+                    href={coinHref(r.symbol)}
+                    left={
+                      <div className="truncate">
+                        <div className="font-medium truncate text-[13px]">{r.name}</div>
+                        <div className="text-white/60 text-[11px]">{r.symbol}</div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Card>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600 mb-1">Top stijgers (24h)</div>
-                    <ul className="space-y-1 text-sm">
-                      {summary.topGainers.map((g, i) => (
-                        <li key={`g${i}`} className="flex justify-between">
-                          <span className="text-gray-800">{g.symbol.replace('.AS','')}</span>
-                          <span className="text-green-600">+{num(g.pct, 2)}%</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600 mb-1">Top dalers (24h)</div>
-                    <ul className="space-y-1 text-sm">
-                      {summary.topLosers.map((l, i) => (
-                        <li key={`l${i}`} className="flex justify-between">
-                          <span className="text-gray-800">{l.symbol.replace('.AS','')}</span>
-                          <span className="text-red-600">{num(l.pct, 2)}%</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
+          {/* 4) Equities — Top BUY */}
+          <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {loadingEq && topBuy.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : topBuy.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
+              ) : topBuy.map((r)=>(
+                <li key={`bb-${r.market}-${r.symbol}`}>
+                  <Row
+                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    left={
+                      <div className="min-w-0">
+                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
+                        <div className="font-medium truncate text-[13px]">
+                          {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                        </div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:cale-100"><ScoreBadge score={r.score} /></div>}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Card>
+
+          {/* 5) Equities — Top SELL */}
+          <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
+            <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {loadingEq && topSell.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+              ) : topSell.length===0 ? (
+                <li className="py-3 text-white/60 text-[13px]">No data…</li>
+              ) : topSell.map((r)=>(
+                <li key={`bs-${r.market}-${r.symbol}`}>
+                  <Row
+                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    left={
+                      <div className="min-w-0">
+                        <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
+                        <div className="font-medium truncate text-[13px]">
+                          {r.name} <span className="text-white/60 font-normal">({r.symbol})</span>
+                        </div>
+                      </div>
+                    }
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Card>
+
+          {/* 6) Congress Trading — Latest */}
+          <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
+            <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
+              <div className="grid grid-cols-12 text-[10px] text-white/60 px-2 pb-1">
+                <div className="col-span-4">Person</div>
+                <div className="col-span-3">Ticker</div>
+                <div className="col-span-2">Side</div>
+                <div className="col-span-3 text-right">Amount / Price</div>
               </div>
+              <ul className="divide-y divide-white/8">
+                {/* ... unchanged list rendering ... */}
+                {trades.length === 0 && !loadingCongress && (
+                  <li className="py-3 text-white/60 text-[12px]">No trades…</li>
+                )}
+                {loadingCongress && <li className="py-3 text-white/60 text-[12px]">Loading…</li>}
+                {!loadingCongress && trades.slice(0, 14).map((t, i) => (
+                  <li key={`tr-${i}-${t.person}-${t.ticker}`} className="px-2">
+                    <div
+                      className="grid grid-cols-12 items-center gap-2 py-2 px-2 rounded-lg hover:bg-white/6 transition"
+                      title={t.date ? new Date(t.date).toLocaleString('nl-NL') : undefined}
+                    >
+                      <div className="col-span-4 min-w-0 truncate text-[12px]">
+                        {t.url ? (
+                          <a href={t.url} target="_blank" rel="noreferrer" className="hover:underline">{t.person || '-'}</a>
+                        ) : <span>{t.person || '-'}</span>}
+                      </div>
+                      <div className="col-span-3 text-[11px] leading-tight">
+                        <div className="font-semibold tracking-wide">{(t.ticker || '').toUpperCase()}</div>
+                      </div>
+                      <div className={`col-span-2 text-[11px] font-semibold ${
+                        String(t.side).toUpperCase()==='BUY' ? 'text-emerald-400' :
+                        String(t.side).toUpperCase()==='SELL' ? 'text-rose-400' : 'text-white/70'
+                      }`}>
+                        {String(t.side || '-').toUpperCase()}
+                      </div>
+                      <div className="col-span-3 text-right text-[12px]">
+                        <span className="text-white/80">{t.amount || '-'}</span>
+                        {t.price != null && t.price !== '' && (
+                          <span className="text-white/50 ml-1">
+                            • {typeof t.price === 'number' ? `$${t.price.toFixed(2)}` : t.price}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </Card>
 
-              {/* Heatmap */}
-              <div className="table-card p-4">
-                <div className="flex items-center justify-between">
-                  <div className="font-semibold text-gray-900">Heatmap</div>
-                  <div className="flex gap-1">
-                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='ALL' ? 'bg-gray-200 text-gray-900 border-gray-300' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('ALL')}>All</button>
-                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='BUY' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('BUY')}>Buy</button>
-                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='HOLD' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('HOLD')}>Hold</button>
-                    <button className={`px-2.5 py-1 rounded-full text-xs border ${filter==='SELL' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`} onClick={() => setFilter('SELL')}>Sell</button>
-                  </div>
-                </div>
+          {/* 7) Crypto News */}
+          <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
+            {renderNews(newsCrypto, 'nC', loadingNewsCrypto)}
+          </Card>
 
-                <div className="mt-3 grid grid-cols-4 sm:grid-cols-5 gap-2">
-                  {heatmapData.map(({ symbol, score, status }) => {
-                    const cls =
-                      status === 'BUY'
-                        ? 'bg-green-500/15 text-green-700 border-green-500/30'
-                        : status === 'SELL'
-                          ? 'bg-red-500/15 text-red-700 border-red-500/30'
-                          : 'bg-amber-500/15 text-amber-700 border-amber-500/30'
-                    return (
-                      <Link
-                        key={symbol}
-                        href={`/stocks/${encodeURIComponent(symbol)}`}
-                        className={`rounded-xl px-2.5 py-2 text-xs font-semibold border text-center hover:opacity-90 ${cls}`}
-                        title={`${symbol} · ${status} · ${score}`}
-                      >
-                        <div className="leading-none">{symbol.replace('.AS','')}</div>
-                        <div className="mt-1 text-[10px] opacity-80">{score}</div>
-                      </Link>
-                    )
-                  })}
-                </div>
-              </div>
-            </aside>
-          </div>
-        </section>
+          {/* 8) Equities News */}
+          <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
+            {renderNews(newsEq, 'nE', loadingNewsEq)}
+          </Card>
+
+          {/* 9) Academy */}
+          <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
+            <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
+              {loadingAcademy ? (
+                <li className="text-white/60">Loading…</li>
+              ) : academy.length===0 ? (
+                <li className="text-white/60">No articles found…</li>
+              ) : academy.map((a, i) => (
+                <li key={`ac-${i}`}>
+                  <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10 transition">
+                    {a.title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </div>
       </main>
     </>
   )
+}
+
+export async function getStaticProps() {
+  try {
+    const base =
+      BASE_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+
+    const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
+    if (!res.ok) throw new Error('snapshot failed')
+    const snapshot = await res.json() as HomeSnapshot
+    return { props: { snapshot }, revalidate: 120 }
+  } catch {
+    return { props: { snapshot: null }, revalidate: 120 }
+  }
 }
