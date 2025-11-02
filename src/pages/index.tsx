@@ -77,7 +77,9 @@ const bulkFetcher = async (url: string): Promise<HomeSnapshotResponse|null> => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
-const MARKETS_HOME = 'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100' as const
+// ✔ alle markten meegeven
+const MARKETS_HOME =
+  'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100,NIKKEI225,HANGSENG,SENSEX' as const
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -409,7 +411,8 @@ export default function Homepage(props: HomeProps) {
     setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
     setLoadingAcademy(academy.length === 0)
     setLoadingCongress(trades.length === 0)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /* ---------- ZACHTE REFRESH: één call naar snapshot ---------- */
   useEffect(() => {
@@ -490,17 +493,17 @@ export default function Homepage(props: HomeProps) {
   },[minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     EQUITIES — Top BUY/SELL (SNEL via KV-first bulk)
+     EQUITIES — Top BUY/SELL (KV eerst, per-markt fallback)
      ======================= */
 
-  // 1) Haal bulk KV-first data BINNEN de component op:
+  // KV-bulk binnenhalen
   const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
     `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
     bulkFetcher,
     { revalidateOnFocus: false, dedupingInterval: 30_000 }
   )
 
-  // 2) Helpers die van de SWR-data afhangen ook binnen de component:
+  // helpers obv KV data
   function snapsForLabelKV(label: MarketLabel): HomeSnap[] {
     const key = LABEL_TO_KEY[label] || (label as string).toUpperCase()
     return homeSnapKV?.items?.[key] ?? []
@@ -518,59 +521,7 @@ export default function Homepage(props: HomeProps) {
 
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  useEffect(() => {
-    if (!homeSnapKV) return
-    try {
-      setLoadingEq(true); setScoreErr(null)
-      const outBuy: ScoredEq[] = []
-      const outSell: ScoredEq[] = []
-
-      for (const market of MARKET_ORDER) {
-        const cons = constituentsForMarket(market)
-        if (!cons.length) continue
-
-        const snaps = snapsForLabelKV(market)
-        if (!snaps.length) continue
-
-        const scoreMap = new Map<string, number>()
-        for (const s of snaps) {
-          scoreMap.set(s.symbol, toUiScoreFromSnap(s))
-        }
-
-        const rows = cons
-          .map(c => ({ symbol: c.symbol, name: c.name, market, score: scoreMap.get(c.symbol) ?? 50 }))
-          .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
-
-        if (rows.length) {
-          const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-          const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-          if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-          if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-        }
-      }
-
-      const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-      const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
-      const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
-
-      setTopBuy(finalBuy); setTopSell(finalSell)
-      setCache('home:eq:topBuy',  finalBuy); setCache('home:eq:topSell', finalSell)
-    } catch (e:any) {
-      setScoreErr(String(e?.message || e))
-    } finally {
-      setLoadingEq(false)
-    }
-  }, [homeSnapKV]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ========= KV cold-start helpers ========= */
-
-  // Tel hoeveel snapshots KV daadwerkelijk terug gaf
-  const totalSnaps = useMemo(() => {
-    if (!homeSnapKV || !homeSnapKV.items) return 0
-    return Object.values(homeSnapKV.items).reduce((acc, arr) => acc + (Array.isArray(arr) ? arr.length : 0), 0)
-  }, [homeSnapKV])
-
-  // Oude per-symbool score (voor fallback bij koude KV)
+  // Oud per-symbool endpoint (fallback, alleen voor missende markten)
   async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
     try {
       const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
@@ -581,58 +532,74 @@ export default function Homepage(props: HomeProps) {
     } catch { return null }
   }
 
-  // === KV is (nog) leeg → gracieus terug op oud pad (eenmalig) ===
   useEffect(() => {
-    // Als we al data hebben (props snapshot of KV-effect), niets doen
-    if (topBuy.length && topSell.length) return
-    // Als KV wel items heeft, laat het KV-effect het doen
-    if (totalSnaps > 0) return
-
-    let aborted = false
-    const MARKET_ORDER_FALLBACK: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
+    if (!homeSnapKV) return
+    setLoadingEq(true); setScoreErr(null)
 
     ;(async () => {
       try {
-        setLoadingEq(true); setScoreErr(null)
-        const outBuy: ScoredEq[] = []; const outSell: ScoredEq[] = []
+        const outBuy: ScoredEq[] = []
+        const outSell: ScoredEq[] = []
+        const missing: MarketLabel[] = []
 
-        for (const market of MARKET_ORDER_FALLBACK) {
+        // 1) KV eerst
+        for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
-          const symbols = cons.map(c => c.symbol)
 
-          // Bescheiden concurrency (zoals eerder)
-          const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
+          const snaps = snapsForLabelKV(market)
+          if (!snaps.length) { missing.push(market); continue }
+
+          const scoreMap = new Map<string, number>()
+          for (const s of snaps) scoreMap.set(s.symbol, toUiScoreFromSnap(s))
 
           const rows = cons
-            .map((c, i) => ({ symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any) }))
-            .filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
+            .map(c => ({ symbol: c.symbol, name: c.name, market, score: scoreMap.get(c.symbol) ?? 50 }))
+            .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
 
           if (rows.length) {
             const top = [...rows].sort((a,b)=> b.score - a.score)[0]
             const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
             if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
             if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
+          } else {
+            missing.push(market)
           }
         }
 
-        const order = (m: MarketLabel) => MARKET_ORDER_FALLBACK.indexOf(m)
+        // 2) Per-markt fallback voor missende markten
+        if (missing.length) {
+          for (const market of missing) {
+            const cons = constituentsForMarket(market)
+            if (!cons.length) continue
+            const symbols = cons.map(c => c.symbol)
+            const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
+            const rows = cons
+              .map((c, i) => ({ symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any) }))
+              .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
+            if (rows.length) {
+              const top = [...rows].sort((a,b)=> b.score - a.score)[0]
+              const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
+              if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
+              if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
+            }
+          }
+        }
+
+        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
         const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
         const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
 
-        if (!aborted) {
-          setTopBuy(finalBuy); setTopSell(finalSell)
-          setCache('home:eq:topBuy',  finalBuy); setCache('home:eq:topSell', finalSell)
-        }
+        setTopBuy(finalBuy); setTopSell(finalSell)
+        setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
       } catch (e:any) {
-        if (!aborted) setScoreErr(String(e?.message || e))
+        setScoreErr(String(e?.message || e))
       } finally {
-        if (!aborted) setLoadingEq(false)
+        setLoadingEq(false)
       }
     })()
-
-    return () => { aborted = true }
-  }, [homeSnapKV, totalSnaps, topBuy.length, topSell.length, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeSnapKV, minuteTag])
 
   /* =======================
      CRYPTO — fallback (met MKR/VET overrides + defensieve retry)
@@ -675,7 +642,7 @@ export default function Homepage(props: HomeProps) {
           try {
             // 1) normaal
             let j = await tryFetch(pair)
-            // 2) indien leeg: exact 1x lowercase retry (alleen bij failure/leeg -> geen structureel extra verbruik)
+            // 2) exact 1x lowercase retry
             if (!j?.results?.length) {
               const alt = pair.toLowerCase()
               if (alt !== pair) {
