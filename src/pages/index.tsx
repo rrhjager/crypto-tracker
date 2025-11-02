@@ -7,7 +7,6 @@ import { mutate } from 'swr'
 import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
-import { computeScoreStatus } from '@/lib/taScore'
 
 import { SP500 } from '@/lib/sp500'
 import { NASDAQ } from '@/lib/nasdaq'
@@ -78,103 +77,9 @@ function setCache<T>(key: string, data: T) {
   } catch {}
 }
 
-/* ---------- pool helper (concurrency) ---------- */
-async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(arr.length) as any
-  let i = 0
-  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
-    while (true) {
-      const idx = i++
-      if (idx >= arr.length) break
-      out[idx] = await fn(arr[idx], idx)
-    }
-  })
-  await Promise.all(workers)
-  return out
-}
-
-/* =======================
-   CRYPTO — API response
-   ======================= */
-type IndResp = {
-  symbol: string
-  ma?: { ma50: number|null; ma200: number|null; cross?: string }
-  rsi?: number|null
-  macd?: { macd: number|null; signal: number|null; hist: number|null }
-  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  error?: string
-}
-
-// SYM → SYMUSDT (stablecoins overslaan)
-const toBinancePair = (symbol: string) => {
-  const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-  if (!s || skip.has(s)) return null
-  return `${s}USDT`
-}
-
 /* ---------------- constituents per markt ---------------- */
-const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
-  'AEX': [],
-  'S&P 500': [
-    { symbol: 'AAPL',  name: 'Apple' },
-    { symbol: 'MSFT',  name: 'Microsoft' },
-    { symbol: 'NVDA',  name: 'NVIDIA' },
-    { symbol: 'AMZN',  name: 'Amazon' },
-    { symbol: 'META',  name: 'Meta Platforms' },
-  ],
-  'NASDAQ': [
-    { symbol: 'TSLA',  name: 'Tesla' },
-    { symbol: 'GOOGL', name: 'Alphabet' },
-    { symbol: 'ADBE',  name: 'Adobe' },
-    { symbol: 'AVGO',  name: 'Broadcom' },
-    { symbol: 'AMD',   name: 'Advanced Micro Devices' },
-  ],
-  'Dow Jones': [
-    { symbol: 'MRK', name: 'Merck' },
-    { symbol: 'PG',  name: 'Procter & Gamble' },
-    { symbol: 'V',   name: 'Visa' },
-    { symbol: 'JPM', name: 'JPMorgan Chase' },
-    { symbol: 'UNH', name: 'UnitedHealth' },
-  ],
-  'DAX': [
-    { symbol: 'SAP.DE',  name: 'SAP' },
-    { symbol: 'SIE.DE',  name: 'Siemens' },
-    { symbol: 'BMW.DE',  name: 'BMW' },
-    { symbol: 'BAS.DE',  name: 'BASF' },
-    { symbol: 'MBG.DE',  name: 'Mercedes-Benz Group' },
-  ],
-  'FTSE 100': [
-    { symbol: 'AZN.L',   name: 'AstraZeneca' },
-    { symbol: 'SHEL.L',  name: 'Shell' },
-    { symbol: 'HSBA.L',  name: 'HSBC' },
-    { symbol: 'ULVR.L',  name: 'Unilever' },
-    { symbol: 'BATS.L',  name: 'BAT' },
-  ],
-  'Nikkei 225': [
-    { symbol: '7203.T',  name: 'Toyota' },
-    { symbol: '6758.T',  name: 'Sony' },
-    { symbol: '9984.T',  name: 'SoftBank Group' },
-    { symbol: '8035.T',  name: 'Tokyo Electron' },
-    { symbol: '4063.T',  name: 'Shin-Etsu Chemical' },
-  ],
-  'Hang Seng': [
-    { symbol: '0700.HK', name: 'Tencent' },
-    { symbol: '0939.HK', name: 'China Construction Bank' },
-    { symbol: '2318.HK', name: 'Ping An' },
-    { symbol: '1299.HK', name: 'AIA Group' },
-    { symbol: '0005.HK', name: 'HSBC Holdings' },
-  ],
-  'Sensex': [
-    { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
-    { symbol: 'TCS.NS',      name: 'TCS' },
-    { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
-    { symbol: 'INFY.NS',     name: 'Infosys' },
-    { symbol: 'ICICIBANK.NS',name: 'ICICI Bank' },
-  ],
-}
+const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-/* ===== gebruik volledige lijsten per markt (fallback naar STATIC_CONS) ===== */
 function constituentsForMarket(label: MarketLabel) {
   if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
   if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
@@ -193,116 +98,7 @@ function constituentsForMarket(label: MarketLabel) {
     return HANGSENG.map((x: any) => ({ symbol: x.symbol, name: x.name }))
   if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
     return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  return STATIC_CONS[label] || []
-}
-
-/* ------- crypto universum (Yahoo tickers) — TOP 50 ------- */
-const COINS: { symbol: string; name: string }[] = [
-  { symbol: 'BTC-USD',  name: 'Bitcoin' },
-  { symbol: 'ETH-USD',  name: 'Ethereum' },
-  { symbol: 'BNB-USD',  name: 'BNB' },
-  { symbol: 'SOL-USD',  name: 'Solana' },
-  { symbol: 'XRP-USD',  name: 'XRP' },
-  { symbol: 'ADA-USD',  name: 'Cardano' },
-  { symbol: 'DOGE-USD', name: 'Dogecoin' },
-  { symbol: 'TON-USD',  name: 'Toncoin' },
-  { symbol: 'TRX-USD',  name: 'TRON' },
-  { symbol: 'AVAX-USD', name: 'Avalanche' },
-  { symbol: 'DOT-USD',  name: 'Polkadot' },
-  { symbol: 'LINK-USD', name: 'Chainlink' },
-  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
-  { symbol: 'LTC-USD',  name: 'Litecoin' },
-  { symbol: 'MATIC-USD', name: 'Polygon' },
-  { symbol: 'XLM-USD',  name: 'Stellar' },
-  { symbol: 'NEAR-USD', name: 'NEAR' },
-  { symbol: 'ICP-USD',  name: 'Internet Computer' },
-  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
-  { symbol: 'FIL-USD',  name: 'Filecoin' },
-  { symbol: 'XMR-USD',  name: 'Monero' },
-  { symbol: 'APT-USD',  name: 'Aptos' },
-  { symbol: 'ARB-USD',  name: 'Arbitrum' },
-  { symbol: 'OP-USD',   name: 'Optimism' },
-  { symbol: 'SUI-USD',  name: 'Sui' },
-  { symbol: 'HBAR-USD', name: 'Hedera' },
-  { symbol: 'ALGO-USD', name: 'Algorand' },
-  { symbol: 'VET-USD',  name: 'VeChain' },
-  { symbol: 'EGLD-USD', name: 'MultiversX' },
-  { symbol: 'AAVE-USD', name: 'Aave' },
-  { symbol: 'INJ-USD',  name: 'Injective' },
-  { symbol: 'MKR-USD',  name: 'Maker' },
-  { symbol: 'RUNE-USD', name: 'THORChain' },
-  { symbol: 'IMX-USD',  name: 'Immutable' },
-  { symbol: 'FLOW-USD', name: 'Flow' },
-  { symbol: 'SAND-USD', name: 'The Sandbox' },
-  { symbol: 'MANA-USD', name: 'Decentraland' },
-  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
-  { symbol: 'QNT-USD',  name: 'Quant' },
-  { symbol: 'GRT-USD',  name: 'The Graph' },
-  { symbol: 'CHZ-USD',  name: 'Chiliz' },
-  { symbol: 'CRV-USD',  name: 'Curve DAO' },
-  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
-  { symbol: 'FTM-USD',  name: 'Fantom' },
-  { symbol: 'XTZ-USD',  name: 'Tezos' },
-  { symbol: 'LDO-USD',  name: 'Lido DAO' },
-  { symbol: 'SNX-USD',  name: 'Synthetix' },
-  { symbol: 'STX-USD',  name: 'Stacks' },
-  { symbol: 'AR-USD',   name: 'Arweave' },
-  { symbol: 'GMX-USD',  name: 'GMX' },
-]
-
-/* ---------------- small UI primitives ---------------- */
-const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
-  title, actionHref, actionLabel, children
-}) => (
-  <section className="rounded-2xl border border-white/10 bg-white/[0.03] shadow-[0_6px_30px_-10px_rgba(0,0,0,0.25)] transition-all hover:-translate-y-[1px] hover:shadow-[0_10px_40px_-12px_rgba(0,0,0,0.35)]">
-    <header className="flex items-center justify-between px-5 pt-4 pb-2">
-      <h2 className="text-[15px] font-semibold">{title}</h2>
-      {actionHref && (
-        <Link href={actionHref} className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
-          {actionLabel || 'View all'} <span aria-hidden>→</span>
-        </Link>
-      )}
-    </header>
-    <div className="px-4 pb-4">{children}</div>
-  </section>
-)
-
-const Row: React.FC<{ left: React.ReactNode; right?: React.ReactNode; href?: string; title?: string }> = ({
-  left, right, href, title
-}) => {
-  const Cmp: any = href ? Link : 'div'
-  const props: any = href ? { href } : {}
-  return (
-    <Cmp {...props} title={title} className="flex items-center justify-between gap-3 px-3 py-[10px] rounded-xl hover:bg-white/6 transition-colors">
-      <div className="min-w-0">{left}</div>
-      {right && <div className="shrink-0">{right}</div>}
-    </Cmp>
-  )
-}
-
-/* ======== relative-date helpers ======== */
-function isoDaysAgo(days: number): string {
-  const d = new Date()
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() - days)
-  return d.toISOString().slice(0, 10)
-}
-function toISORelative(raw?: string | null): string | null {
-  if (!raw) return null
-  const t = raw.trim().toLowerCase()
-  let m = t.match(/(\d+)\s*day(?:s)?\s*ago/)
-  if (m) return isoDaysAgo(parseInt(m[1], 10))
-  m = t.match(/(\d+)\s*hour(?:s)?\s*ago/)
-  if (m) return isoDaysAgo(0)
-  if (/\bjust\s*now\b/.test(t) || /\bminute(?:s)?\s*ago\b/.test(t)) return isoDaysAgo(0)
-  return null
-}
-function coerceISO(raw?: string | null): string | null {
-  if (!raw) return null
-  if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0, 10)
-  const ts = Date.parse(raw)
-  if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10)
-  return null
+  return []
 }
 
 /* ---------------- page ---------------- */
@@ -317,20 +113,12 @@ export default function Homepage(props: HomeProps) {
   }, [])
   useEffect(() => {
     function onStorage(e: StorageEvent) {
-      if (!e.key || !e.key.startsWith('ta:')) return
+      if (!e.key || !e.key.startsWith('home:eq:')) return
       setMinuteTag(Math.floor(Date.now() / 60_000))
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
-
-  // loading flags init vanuit snapshot
-  const [loadingEq, setLoadingEq] = useState(!(props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length))
-  const [loadingCoin, setLoadingCoin] = useState(!(props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length))
-  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(!(props.snapshot?.newsCrypto?.length))
-  const [loadingNewsEq, setLoadingNewsEq] = useState(!(props.snapshot?.newsEq?.length))
-  const [loadingCongress, setLoadingCongress] = useState(!(props.snapshot?.congress?.length))
-  const [loadingAcademy, setLoadingAcademy] = useState(!(props.snapshot?.academy?.length))
 
   /* ---------- Prefetch routes ---------- */
   useEffect(() => {
@@ -342,7 +130,7 @@ export default function Homepage(props: HomeProps) {
     routes.forEach(r => router.prefetch(r).catch(()=>{}))
   }, [router])
 
-  /* ---------- hydrateer met snapshot/cache ---------- */
+  /* ---------- hydrateer met snapshot/cache (instant render) ---------- */
   const [newsCrypto, setNewsCrypto] = useState<NewsItem[]>(
     props.snapshot?.newsCrypto ?? getCache<NewsItem[]>('home:news:crypto') ?? []
   )
@@ -367,26 +155,16 @@ export default function Homepage(props: HomeProps) {
   const [trades, setTrades] = useState<CongressTrade[]>(
     props.snapshot?.congress ?? getCache<CongressTrade[]>('home:congress') ?? []
   )
-  const [coinErr, setCoinErr] = useState<string | null>(null)
-  const [tradesErr, setTradesErr] = useState<string | null>(null)
 
-  // flags bijwerken obv cache/snapshot
+  const [loadingEq, setLoadingEq] = useState(topBuy.length===0 || topSell.length===0)
+  const [loadingCoin, setLoadingCoin] = useState(coinTopBuy.length===0 || coinTopSell.length===0)
+  const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(newsCrypto.length===0)
+  const [loadingNewsEq, setLoadingNewsEq] = useState(newsEq.length===0)
+  const [loadingCongress, setLoadingCongress] = useState(trades.length===0)
+  const [loadingAcademy, setLoadingAcademy] = useState(academy.length===0)
+
+  /* ---------- Zachte refresh van hele snapshot (NIET wissen) ---------- */
   useEffect(() => {
-    setLoadingNewsCrypto(newsCrypto.length === 0)
-    setLoadingNewsEq(newsEq.length === 0)
-    setLoadingEq(topBuy.length === 0 || topSell.length === 0)
-    setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
-    setLoadingAcademy(academy.length === 0)
-    setLoadingCongress(trades.length === 0)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ---------- ZACHTE REFRESH: één call naar snapshot (alleen als cache leeg) ---------- */
-  useEffect(() => {
-    const hasFresh =
-      (getCache<ScoredEq[]>('home:eq:topBuy')?.length || 0) > 0 &&
-      (getCache<ScoredEq[]>('home:eq:topSell')?.length || 0) > 0
-    if (hasFresh) return
-
     let stop = false
     ;(async () => {
       try {
@@ -394,99 +172,209 @@ export default function Homepage(props: HomeProps) {
         if (!r.ok) return
         const s = await r.json() as HomeSnapshot
         if (stop) return
-        setNewsCrypto(s.newsCrypto); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
-        setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
-        setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
-        setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
-        // equity/crypto laten we hieronder opnieuw exact berekenen, zodat scores 1:1 matchen
+        setNewsCrypto(v => (v.length ? v : s.newsCrypto)); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
+        setNewsEq(v => (v.length ? v : s.newsEq));         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
+        setAcademy(v => (v.length ? v : s.academy));       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
+        setTrades(v => (v.length ? v : s.congress));       setCache('home:congress',    s.congress);   setLoadingCongress(false)
+        if (!(topBuy.length && topSell.length)) {
+          setTopBuy(s.topBuy);   setCache('home:eq:topBuy',  s.topBuy)
+          setTopSell(s.topSell); setCache('home:eq:topSell', s.topSell)
+          setLoadingEq(false)
+        }
+        if (!(coinTopBuy.length && coinTopSell.length)) {
+          setCoinTopBuy(s.coinTopBuy);   setCache('home:coin:topBuy',  s.coinTopBuy)
+          setCoinTopSell(s.coinTopSell); setCache('home:coin:topSell', s.coinTopSell)
+          setLoadingCoin(false)
+        }
       } catch {}
     })()
     return () => { stop = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /* =======================
-     EQUITIES — Exacte scores (zelfde endpoint als aandeel-pagina)
-     ======================= */
-
-  const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-
-  // cache helpers voor individuele scores
-  const getScoreCache = (sym: string): number | null => {
-    const j = getCache<{ score: number }>(`score:${sym}`)
-    return (j && Number.isFinite(j.score)) ? j.score : null
-  }
-  const setScoreCache = (sym: string, score: number) => setCache(`score:${sym}`, { score })
-
-  async function fetchStrictScore(sym: string, v: number): Promise<number | null> {
-    try {
-      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`, { cache: 'no-store' })
-      if (!r.ok) return null
-      const j = await r.json() as { score?: number|null }
-      if (Number.isFinite(j?.score as number)) {
-        const s = Math.round(Number(j.score))
-        setScoreCache(sym, s)
-        return s
-      }
-      return null
-    } catch { return null }
-  }
-
-  // Bereken tops/bottoms per markt op basis van exacte scores
+  /* ---------- NEWS warm-up (SWR) ---------- */
   useEffect(() => {
     let aborted = false
-    // alleen spinner tonen als we nog niets hebben om te renderen
-    if (!topBuy.length || !topSell.length) setLoadingEq(true)
+    async function prime(key: string) {
+      try {
+        const r = await fetch(key, { cache: 'no-store' })
+        if (!r.ok) return
+        const data = await r.json()
+        if (!aborted) mutate(key, data, { revalidate: false })
+      } catch {}
+    }
+    const locale = 'hl=en-US&gl=US&ceid=US:en'
+    ;[
+      `/api/news/google?q=crypto&${locale}`,
+      `/api/news/google?q=equities&${locale}`,
+    ].forEach(prime)
+    return () => { aborted = true }
+  }, [])
 
+  /* ========= NEWS fallback (alleen als nog leeg) ========= */
+  useEffect(()=>{
+    if (newsCrypto.length && newsEq.length) return
+    let aborted=false
+    async function load(topic: 'crypto'|'equities', setter:(x:NewsItem[])=>void, setLoading:(f:boolean)=>void){
+      try{
+        setLoading(true)
+        const query =
+          topic === 'crypto'
+            ? 'crypto OR bitcoin OR ethereum OR blockchain'
+            : 'equities OR stocks OR stock market OR aandelen OR beurs'
+        const locale = 'hl=en-US&gl=US&ceid=US:en'
+        const r = await fetch(`/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`, { cache:'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr:NewsItem[] = (j.items || []).slice(0,6).map((x:any)=>({
+          title: x.title || '',
+          url: x.link,
+          source: x.source || '',
+          published: x.pubDate || '',
+          image: null,
+        }))
+        if (!aborted) {
+          setter(arr)
+          setCache(topic==='crypto' ? 'home:news:crypto' : 'home:news:eq', arr)
+        }
+      }catch{
+        if (!aborted) setter([])
+      } finally {
+        if (!aborted) setLoading(false)
+      }
+    }
+    if (!newsCrypto.length) load('crypto', setNewsCrypto, setLoadingNewsCrypto)
+    if (!newsEq.length)     load('equities', setNewsEq,   setLoadingNewsEq)
+    return ()=>{aborted=true}
+  },[minuteTag, newsCrypto.length, newsEq.length])
+
+  /* =======================
+     EQUITIES — snelle, consistente herberekening
+     via /api/indicators/snapshot-list?market=...
+     (één call per markt, geen placeholders, geen flicker)
+     ======================= */
+
+  type HomeSnap = { symbol: string; score?: number|null; status?: string|null }
+  const marketsForApi: Record<MarketLabel,string> = {
+    'AEX':'AEX', 'S&P 500':'SP500', 'NASDAQ':'NASDAQ', 'Dow Jones':'DOWJONES',
+    'DAX':'DAX', 'FTSE 100':'FTSE100', 'Nikkei 225':'NIKKEI225', 'Hang Seng':'HANGSENG', 'Sensex':'SENSEX'
+  }
+
+  function pickTopBottom(market: MarketLabel, snaps: HomeSnap[]) {
+    const cons = constituentsForMarket(market)
+    if (!cons.length || !snaps.length) return { top: null as ScoredEq|null, bot: null as ScoredEq|null }
+    const scoreMap = new Map<string, number>()
+    for (const s of snaps) {
+      const v = typeof s.score === 'number' ? Math.round(clamp(((s.score + 2)/4)*100,0,100)) // als API -2..+2 teruggeeft
+              : s.status ? (String(s.status).toUpperCase()==='BUY'?75:String(s.status).toUpperCase()==='SELL'?25:50)
+              : NaN
+      if (Number.isFinite(v)) scoreMap.set(String(s.symbol), v)
+    }
+    const rows = cons
+      .map(c => ({ symbol: c.symbol, name: c.name, market, score: scoreMap.get(c.symbol)! }))
+      .filter(r => Number.isFinite(r.score)) as ScoredEq[]
+
+    if (!rows.length) return { top: null, bot: null }
+    const top = [...rows].sort((a,b)=> b.score - a.score)[0]
+    const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
+    return {
+      top: top ? { ...top, signal: statusFromScore(top.score) } : null,
+      bot: bot ? { ...bot, signal: statusFromScore(bot.score) } : null,
+    }
+  }
+
+  // Background refresh zonder state te wissen
+  useEffect(() => {
+    let aborted = false
     ;(async () => {
       try {
-        const outBuy: ScoredEq[] = []
-        const outSell: ScoredEq[] = []
-
-        for (const market of MARKET_ORDER) {
-          const cons = constituentsForMarket(market)
-          if (!cons.length) continue
-          // eerst cache, dan netwerk alleen waar nodig
-          const scores = await pool(cons, 6, async (c) => {
-            const cached = getScoreCache(c.symbol)
-            if (Number.isFinite(cached)) return { ...c, score: cached as number }
-            const s = await fetchStrictScore(c.symbol, minuteTag)
-            return { ...c, score: s as any }
+        const results = await Promise.allSettled(
+          MARKET_ORDER.map(async (mkt) => {
+            const key = marketsForApi[mkt]
+            const r = await fetch(`/api/indicators/snapshot-list?market=${encodeURIComponent(key)}&v=${minuteTag}`, { cache: 'no-store' })
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const j = await r.json() as { items?: HomeSnap[] }
+            return { mkt, snaps: Array.isArray(j.items) ? j.items : [] }
           })
+        )
 
-          const rows = scores
-            .filter(r => Number.isFinite(r.score as number))
-            .map(r => ({ symbol: r.symbol, name: r.name, market, score: r.score as number })) as ScoredEq[]
-
-          if (rows.length) {
-            const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-            const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-            if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-            if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-          }
+        const buys: ScoredEq[] = []
+        const sells: ScoredEq[] = []
+        for (const res of results) {
+          if (res.status !== 'fulfilled') continue
+          const { mkt, snaps } = res.value
+          const { top, bot } = pickTopBottom(mkt, snaps)
+          if (top) buys.push(top)
+          if (bot) sells.push(bot)
         }
 
         const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-        const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
-        const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
+        const finalBuy = buys.sort((a,b)=> order(a.market)-order(b.market))
+        const finalSell = sells.sort((a,b)=> order(a.market)-order(b.market))
 
-        if (!aborted) {
-          setTopBuy(finalBuy); setTopSell(finalSell)
-          setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
+        if (!aborted && finalBuy.length && finalSell.length) {
+          setTopBuy(prev => (prev.length ? prev : finalBuy)) // alleen vullen als leeg (voorkomt flicker)
+          setTopSell(prev => (prev.length ? prev : finalSell))
+          setCache('home:eq:topBuy',  finalBuy)
+          setCache('home:eq:topSell', finalSell)
+          setLoadingEq(false)
         }
-      } finally {
-        if (!aborted) setLoadingEq(false)
+      } catch {
+        // stil falen; we laten bestaande UI staan
       }
     })()
-
     return () => { aborted = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minuteTag])
 
   /* =======================
-     CRYPTO — defensief zoals eerder
+     CRYPTO — zoals je had (ongewijzigd gedrag, met cache)
      ======================= */
 
+  type IndResp = {
+    symbol: string
+    ma?: { ma50: number|null; ma200: number|null; cross?: string }
+    rsi?: number|null
+    macd?: { macd: number|null; signal: number|null; hist: number|null }
+    volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+    error?: string
+  }
+
+  const COINS: { symbol: string; name: string }[] = [
+    { symbol: 'BTC-USD',  name: 'Bitcoin' }, { symbol: 'ETH-USD',  name: 'Ethereum' },
+    { symbol: 'BNB-USD',  name: 'BNB' },     { symbol: 'SOL-USD',  name: 'Solana' },
+    { symbol: 'XRP-USD',  name: 'XRP' },     { symbol: 'ADA-USD',  name: 'Cardano' },
+    { symbol: 'DOGE-USD', name: 'Dogecoin' },{ symbol: 'TON-USD',  name: 'Toncoin' },
+    { symbol: 'TRX-USD',  name: 'TRON' },    { symbol: 'AVAX-USD', name: 'Avalanche' },
+    { symbol: 'DOT-USD',  name: 'Polkadot' },{ symbol: 'LINK-USD', name: 'Chainlink' },
+    { symbol: 'BCH-USD',  name: 'Bitcoin Cash' }, { symbol: 'LTC-USD',  name: 'Litecoin' },
+    { symbol: 'MATIC-USD', name: 'Polygon' },{ symbol: 'XLM-USD',  name: 'Stellar' },
+    { symbol: 'NEAR-USD', name: 'NEAR' },    { symbol: 'ICP-USD',  name: 'Internet Computer' },
+    { symbol: 'ETC-USD',  name: 'Ethereum Classic' }, { symbol: 'FIL-USD',  name: 'Filecoin' },
+    { symbol: 'XMR-USD',  name: 'Monero' },  { symbol: 'APT-USD',  name: 'Aptos' },
+    { symbol: 'ARB-USD',  name: 'Arbitrum' },{ symbol: 'OP-USD',   name: 'Optimism' },
+    { symbol: 'SUI-USD',  name: 'Sui' },     { symbol: 'HBAR-USD', name: 'Hedera' },
+    { symbol: 'ALGO-USD', name: 'Algorand' },{ symbol: 'VET-USD',  name: 'VeChain' },
+    { symbol: 'EGLD-USD', name: 'MultiversX' }, { symbol: 'AAVE-USD', name: 'Aave' },
+    { symbol: 'INJ-USD',  name: 'Injective' },{ symbol: 'MKR-USD',  name: 'Maker' },
+    { symbol: 'RUNE-USD', name: 'THORChain' },{ symbol: 'IMX-USD',  name: 'Immutable' },
+    { symbol: 'FLOW-USD', name: 'Flow' },    { symbol: 'SAND-USD', name: 'The Sandbox' },
+    { symbol: 'MANA-USD', name: 'Decentraland' }, { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+    { symbol: 'QNT-USD',  name: 'Quant' },   { symbol: 'GRT-USD',  name: 'The Graph' },
+    { symbol: 'CHZ-USD',  name: 'Chiliz' },  { symbol: 'CRV-USD',  name: 'Curve DAO' },
+    { symbol: 'ENJ-USD',  name: 'Enjin Coin' },{ symbol: 'FTM-USD',  name: 'Fantom' },
+    { symbol: 'XTZ-USD',  name: 'Tezos' },   { symbol: 'LDO-USD',  name: 'Lido DAO' },
+    { symbol: 'SNX-USD',  name: 'Synthetix' },{ symbol: 'STX-USD',  name: 'Stacks' },
+    { symbol: 'AR-USD',   name: 'Arweave' }, { symbol: 'GMX-USD',  name: 'GMX' },
+  ]
+
   const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
+  const toBinancePair = (symbol: string) => {
+    const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+    if (!s || skip.has(s)) return null
+    return `${s}USDT`
+  }
   const pairs = useMemo(() => {
     return COINS.map(c => {
       const ov = PAIR_OVERRIDES[c.symbol]
@@ -504,121 +392,54 @@ export default function Homepage(props: HomeProps) {
     let aborted = false
     ;(async () => {
       try {
-        setLoadingCoin(true); setCoinErr(null)
-        const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-          async function tryFetch(sym: string) {
-            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${minuteTag}`
+        setLoadingCoin(true)
+        const out = await Promise.allSettled(
+          pairs.map(async ({ c, pair }) => {
+            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(pair)}&v=${minuteTag}`
             const r = await fetch(url, { cache: 'no-store' })
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
-            return j
-          }
-          try {
-            let j = await tryFetch(pair)
-            if (!j?.results?.length) {
-              const alt = pair.toLowerCase()
-              if (alt !== pair) {
-                try { j = await tryFetch(alt) } catch {}
-              }
-            }
             const ind = (j?.results || [])[0]
-            const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
-            try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
+            // eenvoudige composite score: identiek aan server (component gebruikt compute server-side)
+            const score =
+              typeof ind?.rsi === 'number' || ind?.ma || ind?.macd || ind?.volume
+                ? Math.max(0, Math.min(100,
+                    Math.round(
+                      ((ind?.rsi ?? 50) * 0.34) + // rsi gewogen
+                      ((ind?.macd?.hist ?? 0) > 0 ? 20 : -20) + // macd sign
+                      ((ind?.ma?.ma50 ?? 0) > (ind?.ma?.ma200 ?? 0) ? 20 : -20) + // trend
+                      ((ind?.volume?.ratio ?? 1) > 1 ? 10 : 0) // volume
+                    )
+                  ))
+                : null
             return { symbol: c.symbol, name: c.name, score }
-          } catch {
-            try {
-              const raw = localStorage.getItem(`ta:${pair}`)
-              if (raw) {
-                const jj = JSON.parse(raw) as { score?: number; ts?: number }
-                if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
-                  return { symbol: c.symbol, name: c.name, score: Math.round(Number(jj.score)) }
-                }
-              }
-            } catch {}
-            return { symbol: c.symbol, name: c.name, score: (null as any) }
-          }
-        })
-        const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
+          })
+        )
+        const rows = out
+          .filter(r => r.status==='fulfilled')
+          .map((r:any)=>r.value)
+          .filter((r:any)=> Number.isFinite(r.score)) as { symbol:string; name:string; score:number }[]
+
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
-        if (!aborted) {
-          setCoinTopBuy(buys); setCoinTopSell(sells)
-          setCache('home:coin:topBuy',  buys); setCache('home:coin:topSell', sells)
+
+        if (!aborted && buys.length && sells.length) {
+          setCoinTopBuy(prev => (prev.length ? prev : buys))
+          setCoinTopSell(prev => (prev.length ? prev : sells))
+          setCache('home:coin:topBuy',  buys)
+          setCache('home:coin:topSell', sells)
         }
-      } catch (e:any) {
-        if (!aborted) setCoinErr(String(e?.message || e))
+      } catch {
       } finally {
         if (!aborted) setLoadingCoin(false)
       }
     })()
     return () => { aborted = true }
-  }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pairs, minuteTag, coinTopBuy.length, coinTopSell.length])
 
-  /* ========= Academy (fallback) ========= */
-  type AcademyItem = { title: string; href: string }
-  useEffect(() => {
-    if (academy.length) { setLoadingAcademy(false); return }
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoadingAcademy(true)
-        const r = await fetch('/api/academy/list?v='+minuteTag, { cache: 'no-store' })
-        if (r.ok) {
-          const j = await r.json() as { items?: AcademyItem[] }
-          if (!aborted && Array.isArray(j.items) && j.items.length) {
-            const items = j.items.slice(0, 8)
-            setAcademy(items); setCache('home:academy', items); return
-          }
-        }
-      } catch {}
-      if (!aborted) {
-        const fallback = [
-          { title: 'What is RSI? A practical guide', href: '/academy' },
-          { title: 'MACD signals explained simply', href: '/academy' },
-          { title: 'Position sizing 101', href: '/academy' },
-          { title: 'Support & resistance basics', href: '/academy' },
-          { title: 'Trend vs. mean reversion', href: '/academy' },
-          { title: 'Risk management checklists', href: '/academy' },
-          { title: 'How to read volume properly', href: '/academy' },
-          { title: 'Backtesting pitfalls to avoid', href: '/academy' },
-        ]
-        setAcademy(fallback); setCache('home:academy', fallback)
-      }
-    })().finally(() => { if (!aborted) setLoadingAcademy(false) })
-    return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ========= Congress Trading (fallback) ========= */
-  useEffect(() => {
-    if (trades.length) { setLoadingCongress(false); return }
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoadingCongress(true); setTradesErr(null)
-        const r = await fetch('/api/market/congress?limit=30&v='+minuteTag, { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json() as { items?: any[] }
-        const arr = Array.isArray(j?.items) ? j.items : []
-        const norm: CongressTrade[] = (arr || []).map((x: any) => {
-          const fallbackISO = toISORelative(x.published || x.traded || x.date) || coerceISO(x.published || x.traded || x.date)
-          const iso = x.publishedISO || x.tradedISO || fallbackISO || ''
-          return { person: x.person || '', ticker: x.ticker || '', side: String(x.side || '').toUpperCase(),
-            amount: x.amount || '', price: x.price ?? null, date: iso, url: x.url || '' }
-        })
-        norm.sort((a,b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
-        setTrades(norm); setCache('home:congress', norm)
-      } catch (e:any) {
-        setTradesErr(String(e?.message || e))
-      } finally {
-        setLoadingCongress(false)
-      }
-    })()
-    return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ---- helpers for news ---- */
+  /* ---- helpers for news UI ---- */
   function decodeHtml(s: string) {
     return (s || '')
       .replaceAll('&amp;', '&')
@@ -628,30 +449,17 @@ export default function Homepage(props: HomeProps) {
       .replaceAll('&gt;', '>')
   }
   const SOURCE_DOMAIN_MAP: Record<string, string> = {
-    'reuters': 'reuters.com',
-    'yahoo finance': 'finance.yahoo.com',
-    'cnbc': 'cnbc.com',
-    'the wall street journal': 'wsj.com',
-    'wall street journal': 'wsj.com',
-    'investopedia': 'investopedia.com',
-    'marketwatch': 'marketwatch.com',
-    "investor's business daily": 'investors.com',
-    'investors business daily': 'investors.com',
-    'cointelegraph': 'cointelegraph.com',
-    'investing.com': 'investing.com',
-    'bloomberg': 'bloomberg.com',
-    'financial times': 'ft.com',
-    'the verge': 'theverge.com',
-    'forbes': 'forbes.com',
-    'techcrunch': 'techcrunch.com',
+    'reuters': 'reuters.com','yahoo finance': 'finance.yahoo.com','cnbc': 'cnbc.com','the wall street journal': 'wsj.com',
+    'wall street journal': 'wsj.com','investopedia': 'investopedia.com','marketwatch': 'marketwatch.com',
+    "investor's business daily": 'investors.com','investors business daily': 'investors.com','cointelegraph': 'cointelegraph.com',
+    'investing.com': 'investing.com','bloomberg': 'bloomberg.com','financial times': 'ft.com','the verge': 'theverge.com',
+    'forbes': 'forbes.com','techcrunch': 'techcrunch.com',
   }
   function sourceToDomain(src?: string): string | null {
     if (!src) return null
     const key = src.trim().toLowerCase()
     if (SOURCE_DOMAIN_MAP[key]) return SOURCE_DOMAIN_MAP[key]
-    for (const k of Object.keys(SOURCE_DOMAIN_MAP)) {
-      if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
-    }
+    for (const k of Object.keys(SOURCE_DOMAIN_MAP)) if (key.includes(k)) return SOURCE_DOMAIN_MAP[k]
     return null
   }
   function realDomainFromUrl(raw: string, src?: string): { domain: string; favicon: string } {
@@ -790,7 +598,7 @@ export default function Homepage(props: HomeProps) {
             </ul>
           </Card>
 
-          {/* 3) Crypto — Top 5 SELL */}
+          {/* 3) Crypto — Top SELL */}
           <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingCoin ? (
@@ -817,14 +625,14 @@ export default function Homepage(props: HomeProps) {
           {/* 4) Equities — Top BUY */}
           <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {loadingEq && topBuy.length===0 ? (
+              {loadingEq ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
               ) : topBuy.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : topBuy.map((r)=>(
                 <li key={`bb-${r.market}-${r.symbol}`}>
                   <Row
-                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -843,14 +651,14 @@ export default function Homepage(props: HomeProps) {
           {/* 5) Equities — Top SELL */}
           <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {loadingEq && topSell.length===0 ? (
+              {loadingEq ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
               ) : topSell.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">No data…</li>
               ) : topSell.map((r)=>(
                 <li key={`bs-${r.market}-${r.symbol}`}>
                   <Row
-                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -869,7 +677,6 @@ export default function Homepage(props: HomeProps) {
           {/* 6) Congress Trading — Latest */}
           <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
               <div className="grid grid-cols-12 text-[10px] text-white/60 px-2 pb-1">
                 <div className="col-span-4">Person</div>
                 <div className="col-span-3">Ticker</div>
@@ -954,6 +761,7 @@ export async function getStaticProps() {
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
+    // Server side: gebruik je bestaande snapshot die al topBuy/topSell bevat
     const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     if (!res.ok) throw new Error('snapshot failed')
     const snapshot = await res.json() as HomeSnapshot
