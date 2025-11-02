@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { IChartApi, ISeriesApi, CandlestickData, LineData, UTCTimestamp } from 'lightweight-charts'
-import { createChart, ColorType } from 'lightweight-charts'
+import { createChart, ColorType, SeriesType } from 'lightweight-charts'
 
 type Props = {
   symbol: string
@@ -19,7 +19,7 @@ export default function StockChart({
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const seriesRef = useRef<ISeriesApi<'Candlestick' | 'Line'> | null>(null)
+  const seriesRef = useRef<ISeriesApi<SeriesType> | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -35,7 +35,7 @@ export default function StockChart({
     return `${base}/${encodeURIComponent(symbol)}?${params.toString()}`
   }, [symbol, range, interval])
 
-  // Chart aanmaken
+  // Chart init
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -78,7 +78,7 @@ export default function StockChart({
     return () => ro.disconnect()
   }, [height, interval])
 
-  // Data laden
+  // Data ophalen + tekenen
   useEffect(() => {
     let aborted = false
     const controller = new AbortController()
@@ -115,7 +115,7 @@ export default function StockChart({
             const o = open[i], h = high[i], l = low[i], c = close[i]
             if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
               data.push({
-                time: ts[i] as UTCTimestamp, // ✅ type fix
+                time: ts[i] as UTCTimestamp,
                 open: o as number,
                 high: h as number,
                 low:  l as number,
@@ -125,8 +125,7 @@ export default function StockChart({
           }
 
           if (data.length >= 2) {
-            // @ts-expect-error union type
-            const s = chart.addCandlestickSeries({
+            const s = chart.addSeries(SeriesType.Candlestick, {
               upColor: '#16a34a',
               downColor: '#dc2626',
               wickUpColor: '#16a34a',
@@ -137,22 +136,22 @@ export default function StockChart({
             seriesRef.current = s
             chart.timeScale().fitContent()
           } else {
-            const line = chart.addLineSeries({ lineWidth: 2 })
+            const s = chart.addSeries(SeriesType.Line, { lineWidth: 2 })
             const lineData: LineData[] = ts
               .map((t, i) => (typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null))
               .filter(Boolean) as LineData[]
-            line.setData(lineData)
-            seriesRef.current = line
+            s.setData(lineData)
+            seriesRef.current = s
             chart.timeScale().fitContent()
           }
         } else {
-          const line = chart.addLineSeries({ lineWidth: 2 })
+          const s = chart.addSeries(SeriesType.Line, { lineWidth: 2 })
           const lineData: LineData[] = ts
             .map((t, i) => (typeof close[i] === 'number' ? { time: t as UTCTimestamp, value: close[i] as number } : null))
             .filter(Boolean) as LineData[]
           if (lineData.length < 2) throw new Error('Onvoldoende datapoints')
-          line.setData(lineData)
-          seriesRef.current = line
+          s.setData(lineData)
+          seriesRef.current = s
           chart.timeScale().fitContent()
         }
       } catch (e: any) {
