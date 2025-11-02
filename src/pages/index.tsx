@@ -398,11 +398,68 @@ export default function Homepage(props: HomeProps) {
         setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
         setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
-        // equity/crypto laten we hieronder opnieuw exact berekenen, zodat scores 1:1 matchen
+        // equity/crypto berekenen we elders exact
       } catch {}
     })()
     return () => { stop = true }
   }, [])
+
+  /* ---------- NEWS warm-up (SWR prime) ---------- */
+  useEffect(() => {
+    let aborted = false
+    async function prime(key: string) {
+      try {
+        const r = await fetch(key, { cache: 'no-store' })
+        if (!r.ok) return
+        const data = await r.json()
+        if (!aborted) mutate(key, data, { revalidate: false })
+      } catch {}
+    }
+    const locale = 'hl=en-US&gl=US&ceid=US:en'
+    prime(`/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${locale}`)
+    prime(`/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${locale}`)
+    return () => { aborted = true }
+  }, [])
+
+  /* ---------- NEWS fallback (instant) ---------- */
+  useEffect(() => {
+    if (newsCrypto.length && newsEq.length) { setLoadingNewsCrypto(false); setLoadingNewsEq(false); return }
+    let aborted = false
+
+    async function load(topic: 'crypto' | 'equities') {
+      const query =
+        topic === 'crypto'
+          ? 'crypto OR bitcoin OR ethereum OR blockchain'
+          : 'equities OR stocks OR stock market OR aandelen OR beurs'
+      const locale = 'hl=en-US&gl=US&ceid=US:en'
+      const url = `/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`
+      try {
+        topic === 'crypto' ? setLoadingNewsCrypto(true) : setLoadingNewsEq(true)
+        const r = await fetch(url, { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr: NewsItem[] = (j.items || []).slice(0, 6).map((x: any) => ({
+          title: x.title || '',
+          url: x.link,
+          source: x.source || '',
+          published: x.pubDate || '',
+          image: null,
+        }))
+        if (aborted) return
+        if (topic === 'crypto') { setNewsCrypto(arr); setCache('home:news:crypto', arr); setLoadingNewsCrypto(false) }
+        else { setNewsEq(arr); setCache('home:news:eq', arr); setLoadingNewsEq(false) }
+      } catch {
+        if (aborted) return
+        if (topic === 'crypto') { setNewsCrypto([]); setLoadingNewsCrypto(false) }
+        else { setNewsEq([]); setLoadingNewsEq(false) }
+      }
+    }
+
+    if (!newsCrypto.length) load('crypto')
+    if (!newsEq.length) load('equities')
+
+    return () => { aborted = true }
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
      EQUITIES — Exacte scores (zelfde endpoint als aandeel-pagina)
@@ -434,7 +491,6 @@ export default function Homepage(props: HomeProps) {
   // Bereken tops/bottoms per markt op basis van exacte scores
   useEffect(() => {
     let aborted = false
-    // alleen spinner tonen als we nog niets hebben om te renderen
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
     ;(async () => {
@@ -445,7 +501,6 @@ export default function Homepage(props: HomeProps) {
         for (const market of MARKET_ORDER) {
           const cons = constituentsForMarket(market)
           if (!cons.length) continue
-          // eerst cache, dan netwerk alleen waar nodig
           const scores = await pool(cons, 6, async (c) => {
             const cached = getScoreCache(c.symbol)
             if (Number.isFinite(cached)) return { ...c, score: cached as number }
