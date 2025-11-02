@@ -411,11 +411,16 @@ export default function Homepage(props: HomeProps) {
     setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
     setLoadingAcademy(academy.length === 0)
     setLoadingCongress(trades.length === 0)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- ZACHTE REFRESH: één call naar snapshot ---------- */
   useEffect(() => {
+    // skip als er binnen TTL al verse cache is
+    const hasFresh =
+      (getCache<ScoredEq[]>('home:eq:topBuy')?.length || 0) > 0 &&
+      (getCache<ScoredEq[]>('home:eq:topSell')?.length || 0) > 0
+    if (hasFresh) return
+
     let stop = false
     ;(async () => {
       try {
@@ -496,11 +501,16 @@ export default function Homepage(props: HomeProps) {
      EQUITIES — Top BUY/SELL (KV eerst, per-markt fallback)
      ======================= */
 
-  // KV-bulk binnenhalen
+  // KV-bulk binnenhalen (geen revalidate bij mount; behoud vorige data)
   const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
     `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
     bulkFetcher,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+    {
+      revalidateOnFocus: false,
+      revalidateOnMount: false,
+      keepPreviousData: true,
+      dedupingInterval: 30_000,
+    }
   )
 
   // helpers obv KV data
@@ -534,7 +544,8 @@ export default function Homepage(props: HomeProps) {
 
   useEffect(() => {
     if (!homeSnapKV) return
-    setLoadingEq(true); setScoreErr(null)
+    if (!topBuy.length || !topSell.length) setLoadingEq(true) // laat bestaande data staan
+    setScoreErr(null)
 
     ;(async () => {
       try {
@@ -919,7 +930,7 @@ export default function Homepage(props: HomeProps) {
             </ul>
           </Card>
 
-          {/* 3) Crypto — Top SELL */}
+          {/* 3) Crypto — Top 5 SELL */}
           <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingCoin ? (
@@ -946,7 +957,7 @@ export default function Homepage(props: HomeProps) {
           {/* 4) Equities — Top BUY */}
           <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {loadingEq ? (
+              {loadingEq && topBuy.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
               ) : topBuy.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">No data…</li>
@@ -972,7 +983,7 @@ export default function Homepage(props: HomeProps) {
           {/* 5) Equities — Top SELL */}
           <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {loadingEq ? (
+              {loadingEq && topSell.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
               ) : topSell.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">No data…</li>
