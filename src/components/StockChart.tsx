@@ -1,140 +1,205 @@
-// src/components/StockChart.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-
-type Point = { t: number; c?: number }
-type ApiResp = { symbol: string; range: string; interval: string; points: Point[] }
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { IChartApi, ISeriesApi, CandlestickData, LineData } from 'lightweight-charts'
+import { createChart } from 'lightweight-charts'
 
 type Props = {
   symbol: string
-  range?: '1mo' | '3mo' | '6mo' | '1y' | '2y' | '5y' | 'max'
-  interval?: '1d' | '1wk' | '1mo'
+  range?: '1d'|'5d'|'1mo'|'3mo'|'6mo'|'1y'|'2y'|'5y'|'10y'|'ytd'|'max'
+  interval?: '1m'|'2m'|'5m'|'15m'|'30m'|'60m'|'90m'|'1h'|'1d'|'1wk'|'1mo'|'3mo'
   height?: number
   className?: string
 }
 
-const fmtNum = (n: number) => {
-  if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B'
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
-  return String(n)
-}
-
-export default function StockChart({ symbol, range = '6mo', interval = '1d', height = 160, className }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-  const [w, setW] = useState(360)
-  const [data, setData] = useState<Point[]>([])
-  const [loading, setLoading] = useState(true)
+/**
+ * Lichtgewicht koersgrafiek:
+ * - Data-bron: Yahoo chart API (zonder API key).
+ * - Probeert candles te tonen; valt terug op line chart als OHLC niet volledig is.
+ * - Resizable via ResizeObserver.
+ */
+export default function StockChart({
+  symbol,
+  range = '6mo',
+  interval = '1d',
+  height = 260,
+  className = '',
+}: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick' | 'Line'> | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
-  // responsive width
-  useEffect(() => {
-    if (!wrapRef.current) return
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setW(Math.max(100, Math.floor(e.contentRect.width)))
+  // Yahoo accepteert Europese suffixen zoals .AS; niets strippen hier.
+  const url = useMemo(() => {
+    const base = 'https://query1.finance.yahoo.com/v8/finance/chart'
+    const params = new URLSearchParams({
+      range,
+      interval,
+      includePrePost: 'false',
+      useYfid: 'true',
+      corsDomain: 'finance.yahoo.com',
     })
-    ro.observe(wrapRef.current)
-    return () => ro.disconnect()
-  }, [])
+    return `${base}/${encodeURIComponent(symbol)}?${params.toString()}`
+  }, [symbol, range, interval])
 
-  // fetch data
+  // Chart init + resize handling
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    // chart aanmaken (eenmalig)
+    if (!chartRef.current) {
+      chartRef.current = createChart(el, {
+        width: el.clientWidth || 600,
+        height,
+        layout: {
+          background: { type: 'Solid', color: 'transparent' },
+          textColor: 'rgba(255,255,255,0.85)',
+        },
+        grid: {
+          vertLines: { color: 'rgba(255,255,255,0.06)' },
+          horzLines: { color: 'rgba(255,255,255,0.06)' },
+        },
+        rightPriceScale: {
+          borderColor: 'rgba(255,255,255,0.12)',
+        },
+        timeScale: {
+          borderColor: 'rgba(255,255,255,0.12)',
+          timeVisible: ['1m','2m','5m','15m','30m','60m','90m','1h'].includes(interval),
+          secondsVisible: false,
+        },
+        crosshair: { mode: 1 },
+        handleScale: {
+          axisPressedMouseMove: { time: true, price: true },
+          pinch: true,
+        },
+      })
+    } else {
+      chartRef.current.applyOptions({ height })
+    }
+
+    const chart = chartRef.current!
+
+    // responsive breedte
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        if (e.contentRect?.width) {
+          chart.applyOptions({ width: Math.floor(e.contentRect.width) })
+          chart.timeScale().fitContent()
+        }
+      }
+    })
+    ro.observe(el)
+
+    return () => {
+      ro.disconnect()
+      // chart NIET verwijderen bij unmount van data-effect; enkel wanneer component echt wordt verwijderd
+      // (Next.js routings wisselen, maar detailpagina blijft meestal gemount)
+    }
+  }, [height, interval])
+
+  // Data laden + serie tekenen
   useEffect(() => {
     let aborted = false
-    setLoading(true); setErr(null)
-    ;(async () => {
+    const controller = new AbortController()
+
+    async function run() {
+      setLoading(true)
+      setErr(null)
       try {
-        const url = `/api/chart?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`
-        const r = await fetch(url, { cache: 'no-store' })
+        const r = await fetch(url, { signal: controller.signal, cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = (await r.json()) as ApiResp
-        const pts = (j.points || []).filter(p => Number.isFinite(p.c as number)) as Required<Point>[]
-        if (!aborted) setData(pts)
+        const j = await r.json()
+
+        const result = j?.chart?.result?.[0]
+        const error = j?.chart?.error
+        if (error) throw new Error(String(error?.description || 'Yahoo error'))
+        if (!result) throw new Error('Geen result uit Yahoo')
+
+        const ts: number[] = result.timestamp || []
+        const q = result.indicators?.quote?.[0] || {}
+        const open = (q.open || []) as Array<number | null>
+        const high = (q.high || []) as Array<number | null>
+        const low  = (q.low  || []) as Array<number | null>
+        const close= (q.close|| []) as Array<number | null>
+
+        // Bepalen of we candles kunnen tekenen (voldoende geldige OHLC’s)
+        const haveOHLC = open.length && high.length && low.length && close.length
+
+        const chart = chartRef.current
+        if (!chart) return
+
+        // Re-create series bij sym/interval/range wissel
+        if (seriesRef.current) {
+          chart.removeSeries(seriesRef.current)
+          seriesRef.current = null
+        }
+
+        // Probeer candles
+        if (haveOHLC) {
+          const data: CandlestickData[] = []
+          for (let i = 0; i < ts.length; i++) {
+            const o = open[i], h = high[i], l = low[i], c = close[i]
+            if ([o,h,l,c].every(v => typeof v === 'number' && Number.isFinite(v as number))) {
+              // Lightweight-charts accepteert UNIX seconds direct
+              data.push({ time: ts[i] as number, open: o as number, high: h as number, low: l as number, close: c as number })
+            }
+          }
+
+          if (data.length >= 2) {
+            // @ts-expect-error type inference voor union
+            const s = chart.addCandlestickSeries({
+              upColor: '#16a34a',
+              downColor: '#dc2626',
+              wickUpColor: '#16a34a',
+              wickDownColor: '#dc2626',
+              borderVisible: false,
+            })
+            s.setData(data)
+            seriesRef.current = s
+            chart.timeScale().fitContent()
+          } else {
+            // Fallback naar line
+            const line = chart.addLineSeries({ lineWidth: 2 })
+            const lineData: LineData[] = ts
+              .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
+              .filter(Boolean) as LineData[]
+            line.setData(lineData)
+            seriesRef.current = line
+            chart.timeScale().fitContent()
+          }
+        } else {
+          // Alleen close beschikbaar → line chart
+          const line = chartRef.current.addLineSeries({ lineWidth: 2 })
+          const lineData: LineData[] = ts
+            .map((t: number, i: number) => (typeof close[i] === 'number' ? { time: t, value: close[i] as number } : null))
+            .filter(Boolean) as LineData[]
+          if (lineData.length < 2) throw new Error('Onvoldoende datapoints voor grafiek')
+          line.setData(lineData)
+          seriesRef.current = line
+          chartRef.current.timeScale().fitContent()
+        }
       } catch (e: any) {
         if (!aborted) setErr(String(e?.message || e))
       } finally {
         if (!aborted) setLoading(false)
       }
-    })()
-    return () => { aborted = true }
-  }, [symbol, range, interval])
-
-  const { min, max } = useMemo(() => {
-    const vals = data.map(p => p.c)
-    const mn = Math.min(...vals)
-    const mx = Math.max(...vals)
-    return { min: Number.isFinite(mn) ? mn : 0, max: Number.isFinite(mx) ? mx : 1 }
-  }, [data])
-
-  // draw
-  useEffect(() => {
-    const el = canvasRef.current
-    if (!el) return
-    const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1))
-    el.width = w * dpr
-    el.height = height * dpr
-    el.style.width = `${w}px`
-    el.style.height = `${height}px`
-    const ctx = el.getContext('2d')
-    if (!ctx) return
-    ctx.scale(dpr, dpr)
-
-    // bg (transparent, integrate with card)
-    ctx.clearRect(0, 0, w, height)
-
-    if (!data.length) {
-      // baseline
-      ctx.strokeStyle = 'rgba(0,0,0,0.1)'
-      ctx.beginPath()
-      ctx.moveTo(8, height - 20)
-      ctx.lineTo(w - 8, height - 20)
-      ctx.stroke()
-      return
     }
 
-    const padL = 8, padR = 8, padT = 6, padB = 22
-    const W = Math.max(1, w - padL - padR)
-    const H = Math.max(1, height - padT - padB)
-    const y = (v: number) => {
-      const norm = (v - min) / (max - min || 1)
-      return padT + (1 - norm) * H
-    }
-    const x = (i: number) => padL + (i / Math.max(1, data.length - 1)) * W
-
-    // area gradient
-    const g = ctx.createLinearGradient(0, padT, 0, padT + H)
-    g.addColorStop(0, 'rgba(59,130,246,0.35)')     // blue-500 ~ top
-    g.addColorStop(1, 'rgba(59,130,246,0.04)')     // fade
-
-    // path
-    ctx.beginPath()
-    ctx.moveTo(x(0), y(data[0].c))
-    for (let i = 1; i < data.length; i++) ctx.lineTo(x(i), y(data[i].c))
-    // stroke
-    ctx.lineWidth = 1.6
-    ctx.strokeStyle = 'rgba(59,130,246,0.9)'
-    ctx.stroke()
-    // fill area
-    ctx.lineTo(x(data.length - 1), padT + H)
-    ctx.lineTo(x(0), padT + H)
-    ctx.closePath()
-    ctx.fillStyle = g
-    ctx.fill()
-
-    // min/max labels (subtle)
-    ctx.fillStyle = 'rgba(107,114,128,0.9)' // gray-500
-    ctx.font = '10px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
-    ctx.textAlign = 'left'
-    ctx.fillText(fmtNum(min), 8, height - 6)
-    ctx.textAlign = 'right'
-    ctx.fillText(fmtNum(max), w - 8, 10)
-
-  }, [data, w, height, min, max])
+    run()
+    return () => { aborted = true; controller.abort() }
+  }, [url, symbol, range, interval])
 
   return (
-    <div ref={wrapRef} className={className}>
-      {loading && <div className="text-[11px] text-gray-500">Chart laden…</div>}
-      {err && <div className="text-[11px] text-red-600">Chart fout: {err}</div>}
-      <canvas ref={canvasRef} />
+    <div className={className}>
+      <div
+        ref={containerRef}
+        className="w-full"
+        style={{ height, minHeight: height }}
+      />
+      <div className="mt-1 text-[11px] text-white/50 select-none">
+        {loading ? 'Laden…' : err ? `Grafiek fout: ${err}` : 'Data: Yahoo Finance'}
+      </div>
     </div>
   )
 }
