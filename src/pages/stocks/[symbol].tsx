@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import useSWR from 'swr'
 import ScoreBadge from '@/components/ScoreBadge'
-import StockChart from '@/components/StockChart' // ★ ADDED
+import StockChart from '@/components/StockChart'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
@@ -47,10 +47,14 @@ function normalizeAndDecorate(raw?: SnapItemRaw) {
   const macdHist = (raw.macd?.hist ?? raw.macdHist) ?? null
   const volNow = raw.volume?.volume ?? null
   const volAvg = raw.volume?.avg20d ?? null
-  const volRatio = raw.volume?.ratio ?? (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
-    ? Number(volNow)/Number(volAvg) : null)
+  const volRatio =
+    raw.volume?.ratio ??
+    (Number.isFinite(volNow as number) &&
+    Number.isFinite(volAvg as number) &&
+    (volAvg as number) !== 0
+      ? Number(volNow) / Number(volAvg)
+      : null)
 
-  // status fallback regels (conservatief, gelijk aan eerdere client-heuristiek)
   const maStatus: Advice =
     raw.ma?.status ??
     ((Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number))
@@ -58,7 +62,7 @@ function normalizeAndDecorate(raw?: SnapItemRaw) {
       : 'HOLD')
 
   const rsiStatus: Advice =
-    (typeof raw.rsi === 'object' ? raw.rsi?.status as Advice|undefined : undefined) ??
+    (typeof raw.rsi === 'object' ? (raw.rsi as any)?.status as Advice | undefined : undefined) ??
     (Number.isFinite(rsiNum as number)
       ? (Number(rsiNum) >= 60 ? 'BUY' : Number(rsiNum) <= 40 ? 'SELL' : 'HOLD')
       : 'HOLD')
@@ -86,15 +90,15 @@ function normalizeAndDecorate(raw?: SnapItemRaw) {
   }
 }
 
-// Zelfde weging als elders — werkt op statusvelden (nu altijd beschikbaar via normalizeAndDecorate)
+// Zelfde weging als elders — werkt op statusvelden
 function computeLocalScoreFromStatuses(it: ReturnType<typeof normalizeAndDecorate> | null): number | null {
   if (!it) return null
   const toNorm = (p: number) => (p + 2) / 4
   const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const pMA  = toPtsFromStatus(it.ma?.status)
-  const pMACD= toPtsFromStatus(it.macd?.status)
-  const pRSI = toPtsFromStatus(it.rsi?.status)
-  const pVOL = toPtsFromStatus(it.volume?.status)
+  const pMA   = toPtsFromStatus(it.ma?.status)
+  const pMACD = toPtsFromStatus(it.macd?.status)
+  const pRSI  = toPtsFromStatus(it.rsi?.status)
+  const pVOL  = toPtsFromStatus(it.volume?.status)
   const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
   const score = Math.round(Math.max(0, Math.min(1, agg)) * 100)
   return Number.isFinite(score) ? score : null
@@ -132,6 +136,9 @@ export default function StockDetail() {
   const macd  = itemNorm?.macd
   const vol   = itemNorm?.volume
 
+  // ★ FIX: Stooq-ticker voor AEX (.AS → .NL). Voor andere markten laten we 'sym' staan.
+  const chartSymbol = sym.endsWith('.AS') ? sym.replace(/\.AS$/, '') + '.NL' : sym
+
   return (
     <>
       <Head><title>{sym.replace('.AS','')} — SignalHub</title></Head>
@@ -150,17 +157,12 @@ export default function StockDetail() {
               <span className="ml-2 opacity-70">(preview via local calc)</span>
             )}
           </div>
-
-          {/* ★ ADDED: compacte koersgrafiek (geen wijzigingen elders) */}
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
-            <StockChart symbol={sym} range="6mo" interval="1d" height={200} />
-          </div>
-          {/* ★ END ADDED */}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {snapErr && <div className="mb-3 text-red-500 text-sm">Fout bij laden: {String((snapErr as any)?.message || snapErr)}</div>}
 
+          {/* Indicatoren */}
           <div className="grid md:grid-cols-2 gap-4">
             {/* MA */}
             <div className="table-card p-4">
@@ -203,6 +205,11 @@ export default function StockDetail() {
                 Vol: {fmt(vol?.volume, 0)} · Ave(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
               </div>
             </div>
+          </div>
+
+          {/* ★ Chart ONDER de indicatoren */}
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+            <StockChart symbol={chartSymbol} range="6mo" interval="1d" height={260} />
           </div>
 
           <div className="mt-6 flex gap-3">
