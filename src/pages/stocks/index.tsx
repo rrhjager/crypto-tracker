@@ -34,10 +34,70 @@ function statusFromScore(score: number): Advice {
 }
 const toPtsFromStatus = (status?: Advice) => status === 'BUY' ? 2 : status === 'SELL' ? -2 : 0
 
+// ---- ruimer type & normalisatie (zelfde als detail) ----
+type SnapItemRaw = {
+  symbol: string
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   { period?: number; rsi: number | null; status?: Advice } | number | null
+  macd?:  { macd: number | null; signal: number | null; hist?: number | null; status?: Advice }
+  macdHist?: number | null
+  volume?:{ volume: number | null; avg20d: number | null; ratio?: number | null; status?: Advice }
+}
+type SnapResp = { items: SnapItemRaw[]; updatedAt: number }
+
+function normalizeAndDecorate(raw?: SnapItemRaw) {
+  if (!raw) return null as any
+  const ma50 = raw.ma?.ma50 ?? null
+  const ma200 = raw.ma?.ma200 ?? null
+  const rsiNum = typeof raw.rsi === 'number' ? raw.rsi : (raw.rsi?.rsi ?? null)
+  const rsiPeriod = (typeof raw.rsi === 'object' && raw.rsi && 'period' in raw.rsi) ? (raw.rsi as any).period : 14
+  const macdVal = raw.macd?.macd ?? null
+  const macdSig = raw.macd?.signal ?? null
+  const macdHist = (raw.macd?.hist ?? raw.macdHist) ?? null
+  const volNow = raw.volume?.volume ?? null
+  const volAvg = raw.volume?.avg20d ?? null
+  const volRatio = raw.volume?.ratio ?? (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
+    ? Number(volNow)/Number(volAvg) : null)
+
+  const maStatus: Advice =
+    raw.ma?.status ??
+    ((Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number))
+      ? (Number(ma50) > Number(ma200) ? 'BUY' : Number(ma50) < Number(ma200) ? 'SELL' : 'HOLD')
+      : 'HOLD')
+
+  const rsiStatus: Advice =
+    (typeof raw.rsi === 'object' ? raw.rsi?.status as Advice|undefined : undefined) ??
+    (Number.isFinite(rsiNum as number)
+      ? (Number(rsiNum) >= 60 ? 'BUY' : Number(rsiNum) <= 40 ? 'SELL' : 'HOLD')
+      : 'HOLD')
+
+  const macdStatus: Advice =
+    raw.macd?.status ??
+    (Number.isFinite(macdHist as number)
+      ? (Number(macdHist) > 0 ? 'BUY' : Number(macdHist) < 0 ? 'SELL' : 'HOLD')
+      : (Number.isFinite(macdVal as number) && Number.isFinite(macdSig as number)
+          ? (Number(macdVal) > Number(macdSig) ? 'BUY' : Number(macdVal) < Number(macdSig) ? 'SELL' : 'HOLD')
+          : 'HOLD'))
+
+  const volStatus: Advice =
+    raw.volume?.status ??
+    (Number.isFinite(volRatio as number)
+      ? (Number(volRatio) >= 1.2 ? 'BUY' : Number(volRatio) <= 0.8 ? 'SELL' : 'HOLD')
+      : 'HOLD')
+
+  return {
+    symbol: raw.symbol,
+    ma: { ma50, ma200, status: maStatus as Advice },
+    rsi: { period: rsiPeriod, rsi: rsiNum, status: rsiStatus as Advice },
+    macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus as Advice },
+    volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus as Advice },
+  }
+}
+
 export default function Stocks() {
   const symbols = useMemo(() => AEX.map(x => x.symbol), [])
 
-  // 1) Quotes (batch, 20s poll) – ongewijzigd
+  // 1) Quotes (batch, 20s poll)
   const [quotes, setQuotes] = useState<Record<string, Quote>>({})
   const [qErr, setQErr] = useState<string | null>(null)
   useEffect(() => {
@@ -61,15 +121,6 @@ export default function Stocks() {
   }, [symbols])
 
   // 2) Snapshot-list (1 call/30s)
-  type SnapItem = {
-    symbol: string
-    ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
-    rsi?:   { period: number; rsi: number | null; status?: Advice }
-    macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
-    volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
-  }
-  type SnapResp = { items: SnapItem[]; updatedAt: number }
-
   const snapUrl = useMemo(
     () => `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
     [symbols]
@@ -79,13 +130,16 @@ export default function Stocks() {
     (url) => fetch(url, { cache: 'no-store' }).then(r => r.json()),
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
+
   const snapBySym = useMemo(() => {
-    const m: Record<string, SnapItem> = {}
-    snap?.items?.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    const m: Record<string, ReturnType<typeof normalizeAndDecorate>> = {}
+    snap?.items?.forEach(it => {
+      if (it?.symbol) m[it.symbol] = normalizeAndDecorate(it)
+    })
     return m
   }, [snap])
 
-  // 3) Score 0..100 (zelfde weging; nu op basis van snapshot-status)
+  // 3) Score 0..100 (zelfde weging, nu zeker op basis van status — altijd beschikbaar)
   const scoreMap = useMemo(() => {
     const toNorm = (pts: number) => (pts + 2) / 4
     const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
@@ -132,7 +186,7 @@ export default function Stocks() {
     upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // Samenvatting + heatmap (ongewijzigd, gebruikt nu scoreMap)
+  // Samenvatting + heatmap
   const summary = useMemo(() => {
     const withScore = AEX.map(a => ({ sym: a.symbol, s: scoreMap[a.symbol] })).filter(x => Number.isFinite(x.s))
     const totalWithScore = withScore.length || 0
@@ -237,7 +291,7 @@ export default function Stocks() {
               </table>
             </div>
 
-            {/* Rechterkolom (ongewijzigd) */}
+            {/* Rechterkolom */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
