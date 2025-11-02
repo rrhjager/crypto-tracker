@@ -157,6 +157,21 @@ export default function Stocks() {
     return map
   }, [symbols, snapBySym])
 
+  // ➕ NIEUW: schrijf scores weg voor de homepage (zelfde cacheformaat)
+  useEffect(() => {
+    try {
+      const now = Date.now()
+      Object.entries(scoreMap).forEach(([sym, s]) => {
+        if (Number.isFinite(s as number)) {
+          localStorage.setItem(
+            `score:${sym}`,
+            JSON.stringify({ ts: now, data: { score: Math.round(Number(s)) } })
+          )
+        }
+      })
+    } catch {}
+  }, [scoreMap])
+
   // 4) 7d/30d batch – ongewijzigd
   const [ret7Map, setRet7Map] = useState<Record<string, number>>({})
   const [ret30Map, setRet30Map] = useState<Record<string, number>>({})
