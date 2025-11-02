@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
+import useSWR from 'swr' // ← NIEUW
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
@@ -50,6 +51,33 @@ type HomeSnapshot = {
 }
 type HomeProps = { snapshot: HomeSnapshot | null }
 
+/* ---------- BULK HOME SNAPSHOT (KV-first) TYPES — lokaal voor deze file ---------- */
+type HomeSnap = {
+  symbol: string
+  status: 'BUY'|'SELL'|'HOLD'|string|null
+  score: number | null        // punten-schaal (-2..+2) vanuit API
+  rsi: number | null
+  macdHist: number | null
+  maTrend: 'BUY'|'SELL'|'HOLD'|null
+  updatedAt: number | null
+}
+type HomeSnapshotResponse = {
+  markets: string[]
+  updatedAt: number
+  items: Record<string, HomeSnap[]>
+}
+const LABEL_TO_KEY: Record<string,string> = {
+  'AEX':'AEX', 'S&P 500':'SP500', 'NASDAQ':'NASDAQ', 'Dow Jones':'DOWJONES',
+  'DAX':'DAX', 'FTSE 100':'FTSE100', 'Nikkei 225':'NIKKEI225',
+  'Hang Seng':'HANGSENG', 'Sensex':'SENSEX'
+}
+const bulkFetcher = async (url: string): Promise<HomeSnapshotResponse|null> => {
+  const r = await fetch(url, { headers: { 'Cache-Control': 'no-cache' }})
+  if (r.status === 304) return null
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 function statusFromScore(score: number): Advice {
@@ -95,60 +123,34 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 }
 
 /* =======================
-   AANDELEN — aggregatie
+   AANDELEN — aggregatie (NIEUW: KV-first bulk endpoint)
    ======================= */
-type MaCrossResp = { symbol: string; ma50: number | null; ma200: number | null; status?: Advice | string; points?: number | string | null }
-type RsiResp    = { symbol: string; period: number; rsi: number | null; status?: Advice | string; points?: number | string | null }
-type MacdResp   = { symbol: string; fast: number; slow: number; signalPeriod: number; macd: number | null; signal: number | null; hist: number | null; status?: Advice | string; points?: number | string | null }
-type Vol20Resp  = { symbol: string; period: number; volume: number | null; avg20: number | null; ratio: number | null; status?: Advice | string; points?: number | string | null }
+// Eén lichte bulk-call die per markt een compacte lijst met snapshots levert.
+// We rekenen client-side alleen de Top BUY/SELL per markt uit (géén extra API fan-out).
+const MARKETS_HOME = 'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100' as const
+const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
+  `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
+  bulkFetcher,
+  { revalidateOnFocus: false, dedupingInterval: 30_000 }
+)
 
-const scoreToPts = (s: number) => clamp((s / 100) * 4 - 2, -2, 2)
-function deriveMaPoints(ma?: MaCrossResp): number | null {
-  const ma50 = ma?.ma50, ma200 = ma?.ma200
-  if (ma50 == null || ma200 == null) return null
-  let maScore = 50
-  if (ma50 > ma200) {
-    const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, 0.2)
-    maScore = 60 + (spread / 0.2) * 40
-  } else if (ma50 < ma200) {
-    const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, 0.2)
-    maScore = 40 - (spread / 0.2) * 40
+// Helper: pak lijst per UI-label
+function snapsForLabelKV(label: MarketLabel): HomeSnap[] {
+  const key = LABEL_TO_KEY[label] || (label as string).toUpperCase()
+  return homeSnapKV?.items?.[key] ?? []
+}
+
+// Score-mapping naar 0..100 UI-schaal (ScoreBadge), met fallback op status
+function toUiScoreFromSnap(s: HomeSnap): number {
+  if (typeof s.score === 'number' && Number.isFinite(s.score)) {
+    // s.score is -2..+2 → map naar 0..100
+    const pct = ((s.score + 2) / 4) * 100
+    return Math.round(clamp(pct, 0, 100))
   }
-  return scoreToPts(maScore)
-}
-function deriveRsiPoints(rsiResp?: RsiResp): number | null {
-  const r = rsiResp?.rsi
-  if (typeof r !== 'number') return null
-  const rsiScore = clamp(((r - 30) / 40) * 100, 0, 100)
-  return scoreToPts(rsiScore)
-}
-function deriveMacdPoints(macd?: MacdResp, ma?: MaCrossResp): number | null {
-  const hist = macd?.hist
-  const ma50 = ma?.ma50 ?? null
-  if (typeof hist !== 'number') return null
-  if (ma50 && ma50 > 0) {
-    const t = 0.01
-    const relClamped = clamp((hist / ma50) / t, -1, 1)
-    const macdScore = 50 + relClamped * 20
-    return scoreToPts(macdScore)
-  }
-  const macdScore = hist > 0 ? 60 : hist < 0 ? 40 : 50
-  return scoreToPts(macdScore)
-}
-function deriveVolPoints(vol?: Vol20Resp): number | null {
-  const ratio = vol?.ratio
-  if (typeof ratio !== 'number') return null
-  const delta = clamp((ratio - 1) / 1, -1, 1)
-  const volScore = clamp(50 + delta * 30, 0, 100)
-  return scoreToPts(volScore)
-}
-const toPtsSmart = (status?: Advice | string, pts?: number | string | null, fallback: () => number | null = () => null) => {
-  if (isFiniteNum(pts)) return clamp(toNum(pts), -2, 2)
-  const s = String(status || '').toUpperCase()
-  if (s === 'BUY')  return  2
-  if (s === 'SELL') return -2
-  const f = fallback()
-  return f == null ? 0 : clamp(f, -2, 2)
+  const st = String(s.status || '').toUpperCase()
+  if (st === 'BUY')  return 75
+  if (st === 'SELL') return 25
+  return 50
 }
 
 /* =======================
@@ -519,56 +521,57 @@ export default function Homepage(props: HomeProps) {
   },[minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     EQUITIES — fallback
+     EQUITIES — Top BUY/SELL (SNEL via KV-first bulk)
      ======================= */
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  async function calcScoreForSymbol(symbol: string, v: number): Promise<number | null> {
-    try {
-      const r = await fetch(`/api/indicators/score/${encodeURIComponent(symbol)}?v=${v}`, { cache: 'no-store' })
-      if (!r.ok) return null
-      const j = await r.json() as { score?: number|null }
-      if (Number.isFinite(j?.score as number)) return Math.round(Number(j.score))
-      return null
-    } catch { return null }
-  }
-
+  // Vervangt het oude, trage per-symbool score-endpoint fan-out.
   useEffect(() => {
-    if (topBuy.length && topSell.length) return
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoadingEq(true); setScoreErr(null)
-        const outBuy: ScoredEq[] = []; const outSell: ScoredEq[] = []
-        for (const market of MARKET_ORDER) {
-          const cons = constituentsForMarket(market)
-          if (!cons.length) continue
-          const symbols = cons.map(c => c.symbol)
-          const scores = await pool(symbols, 4, async (sym) => await calcScoreForSymbol(sym, minuteTag))
-          const rows = cons.map((c, i) => ({ symbol: c.symbol, name: c.name, market, score: scores[i] ?? (null as any) }))
-            .filter(r => Number.isFinite(r.score as number)) as Array<ScoredEq>
-          if (rows.length) {
-            const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-            const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-            if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-            if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-          }
+    // Als props.snapshot al gevuld is, blijft UI gelijk; zodra KV-bulk binnenkomt, mogen we updaten.
+    if (!homeSnapKV) return
+    try {
+      setLoadingEq(true); setScoreErr(null)
+      const outBuy: ScoredEq[] = []
+      const outSell: ScoredEq[] = []
+
+      for (const market of MARKET_ORDER) {
+        const cons = constituentsForMarket(market)
+        if (!cons.length) continue
+
+        const snaps = snapsForLabelKV(market)
+        if (!snaps.length) continue
+
+        // Map: symbol -> uiScore (0..100)
+        const scoreMap = new Map<string, number>()
+        for (const s of snaps) {
+          scoreMap.set(s.symbol, toUiScoreFromSnap(s))
         }
-        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-        const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
-        const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
-        if (!aborted) {
-          setTopBuy(finalBuy); setTopSell(finalSell)
-          setCache('home:eq:topBuy',  finalBuy); setCache('home:eq:topSell', finalSell)
+
+        const rows = cons
+          .map(c => ({ symbol: c.symbol, name: c.name, market, score: scoreMap.get(c.symbol) ?? 50 }))
+          .filter(r => Number.isFinite(r.score as number)) as ScoredEq[]
+
+        if (rows.length) {
+          const top = [...rows].sort((a,b)=> b.score - a.score)[0]
+          const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
+          if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
+          if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
         }
-      } catch (e:any) {
-        if (!aborted) setScoreErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoadingEq(false)
       }
-    })()
-    return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+
+      const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
+      const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
+      const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
+
+      setTopBuy(finalBuy); setTopSell(finalSell)
+      setCache('home:eq:topBuy',  finalBuy); setCache('home:eq:topSell', finalSell)
+    } catch (e:any) {
+      setScoreErr(String(e?.message || e))
+    } finally {
+      setLoadingEq(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeSnapKV])
 
   /* =======================
      CRYPTO — fallback (met MKR/VET overrides + defensieve retry)

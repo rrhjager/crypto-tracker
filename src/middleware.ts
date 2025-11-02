@@ -27,7 +27,7 @@ const PUBLIC_ALLOW = [
   // ✅ homepage + news + scores
   '/api/news/',                   // Google/Equities/Crypto news
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
-  '/api/home/snapshot',           // 🔥 Edge snapshot aggregator voor homepage
+  '/api/home/snapshot',           // 🔥 Edge snapshot aggregator voor homepage (legacy)
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -125,8 +125,12 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // === Kleine limiter voor news & home snapshot endpoints ===
-  if (pathname.startsWith('/api/news/') || pathname.startsWith('/api/home/snapshot')) {
+  // === Kleine limiter voor news, legacy home-snapshot en NIEUW market home-snapshot ===
+  if (
+    pathname.startsWith('/api/news/') ||
+    pathname.startsWith('/api/home/snapshot') ||        // legacy
+    pathname.startsWith('/api/market/home-snapshot')     // ← toegevoegd
+  ) {
     const limitParam = Number(searchParams.get('limit') || searchParams.get('n') || '0')
     if (Number.isFinite(limitParam) && limitParam > 50) {
       return new NextResponse('Too many results requested', { status: 400 })
