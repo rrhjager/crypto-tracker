@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
-import useSWR from 'swr' // ← NIEUW
+import useSWR from 'swr' // SWR hook
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
@@ -51,11 +51,11 @@ type HomeSnapshot = {
 }
 type HomeProps = { snapshot: HomeSnapshot | null }
 
-/* ---------- BULK HOME SNAPSHOT (KV-first) TYPES — lokaal voor deze file ---------- */
+/* ---------- BULK HOME SNAPSHOT (KV-first) TYPES ---------- */
 type HomeSnap = {
   symbol: string
   status: 'BUY'|'SELL'|'HOLD'|string|null
-  score: number | null        // punten-schaal (-2..+2) vanuit API
+  score: number | null        // -2..+2 uit API
   rsi: number | null
   macdHist: number | null
   maTrend: 'BUY'|'SELL'|'HOLD'|null
@@ -77,6 +77,7 @@ const bulkFetcher = async (url: string): Promise<HomeSnapshotResponse|null> => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
+const MARKETS_HOME = 'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100' as const
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -120,37 +121,6 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
   })
   await Promise.all(workers)
   return out
-}
-
-/* =======================
-   AANDELEN — aggregatie (NIEUW: KV-first bulk endpoint)
-   ======================= */
-// Eén lichte bulk-call die per markt een compacte lijst met snapshots levert.
-// We rekenen client-side alleen de Top BUY/SELL per markt uit (géén extra API fan-out).
-const MARKETS_HOME = 'AEX,SP500,NASDAQ,DOWJONES,DAX,FTSE100' as const
-const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
-  `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
-  bulkFetcher,
-  { revalidateOnFocus: false, dedupingInterval: 30_000 }
-)
-
-// Helper: pak lijst per UI-label
-function snapsForLabelKV(label: MarketLabel): HomeSnap[] {
-  const key = LABEL_TO_KEY[label] || (label as string).toUpperCase()
-  return homeSnapKV?.items?.[key] ?? []
-}
-
-// Score-mapping naar 0..100 UI-schaal (ScoreBadge), met fallback op status
-function toUiScoreFromSnap(s: HomeSnap): number {
-  if (typeof s.score === 'number' && Number.isFinite(s.score)) {
-    // s.score is -2..+2 → map naar 0..100
-    const pct = ((s.score + 2) / 4) * 100
-    return Math.round(clamp(pct, 0, 100))
-  }
-  const st = String(s.status || '').toUpperCase()
-  if (st === 'BUY')  return 75
-  if (st === 'SELL') return 25
-  return 50
 }
 
 /* =======================
@@ -523,11 +493,33 @@ export default function Homepage(props: HomeProps) {
   /* =======================
      EQUITIES — Top BUY/SELL (SNEL via KV-first bulk)
      ======================= */
+
+  // 1) Haal bulk KV-first data BINNEN de component op:
+  const { data: homeSnapKV } = useSWR<HomeSnapshotResponse>(
+    `/api/market/home-snapshot?markets=${MARKETS_HOME}`,
+    bulkFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )
+
+  // 2) Helpers die van de SWR-data afhangen ook binnen de component:
+  function snapsForLabelKV(label: MarketLabel): HomeSnap[] {
+    const key = LABEL_TO_KEY[label] || (label as string).toUpperCase()
+    return homeSnapKV?.items?.[key] ?? []
+  }
+  function toUiScoreFromSnap(s: HomeSnap): number {
+    if (typeof s.score === 'number' && Number.isFinite(s.score)) {
+      const pct = ((s.score + 2) / 4) * 100 // -2..+2 → 0..100
+      return Math.round(clamp(pct, 0, 100))
+    }
+    const st = String(s.status || '').toUpperCase()
+    if (st === 'BUY')  return 75
+    if (st === 'SELL') return 25
+    return 50
+  }
+
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  // Vervangt het oude, trage per-symbool score-endpoint fan-out.
   useEffect(() => {
-    // Als props.snapshot al gevuld is, blijft UI gelijk; zodra KV-bulk binnenkomt, mogen we updaten.
     if (!homeSnapKV) return
     try {
       setLoadingEq(true); setScoreErr(null)
@@ -541,7 +533,6 @@ export default function Homepage(props: HomeProps) {
         const snaps = snapsForLabelKV(market)
         if (!snaps.length) continue
 
-        // Map: symbol -> uiScore (0..100)
         const scoreMap = new Map<string, number>()
         for (const s of snaps) {
           scoreMap.set(s.symbol, toUiScoreFromSnap(s))
@@ -1051,7 +1042,6 @@ export default function Homepage(props: HomeProps) {
 
 export async function getStaticProps() {
   try {
-    // Robuuste base bepaling voor build/ISR:
     const base =
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
@@ -1059,9 +1049,8 @@ export async function getStaticProps() {
     const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     if (!res.ok) throw new Error('snapshot failed')
     const snapshot = await res.json() as HomeSnapshot
-    return { props: { snapshot }, revalidate: 120 } // html elke 2 min opnieuw genereren
+    return { props: { snapshot }, revalidate: 120 }
   } catch {
-    // Fail-closed: client hydrateert alsnog vanuit cache/snapshot-call
     return { props: { snapshot: null }, revalidate: 120 }
   }
 }
