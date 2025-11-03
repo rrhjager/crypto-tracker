@@ -678,7 +678,7 @@ export default function Homepage(props: HomeProps) {
     return (s || '')
       .replaceAll('&amp;', '&')
       .replaceAll('&quot;', '"')
-      .replaceAll('&#39;', "'")
+      .replaceAll("&#39;", "'")
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
   }
@@ -888,7 +888,7 @@ export default function Homepage(props: HomeProps) {
                         </div>
                       </div>
                     }
-                    right={<div className="origin-right scale-90 sm:cale-100"><ScoreBadge score={r.score} /></div>}
+                    right={<div className="origin-right scale-90 sm:scale-100"><ScoreBadge score={r.score} /></div>}
                   />
                 </li>
               ))}
