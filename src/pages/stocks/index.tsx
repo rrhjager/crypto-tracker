@@ -459,7 +459,7 @@ export default function Homepage(props: HomeProps) {
     if (!newsEq.length) load('equities')
 
     return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [minuteTag]) // eslint-disable-next-line react-hooks/exhaustive-deps
 
   /* =======================
      EQUITIES — Exacte scores + Fallback voor AEX
@@ -789,7 +789,7 @@ export default function Homepage(props: HomeProps) {
     return (s || '')
       .replaceAll('&amp;', '&')
       .replaceAll('&quot;', '"')
-      .replaceAll('&#39;', "'')
+      .replaceAll("&#39;", "'")
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
   }
@@ -1043,12 +1043,11 @@ export default function Homepage(props: HomeProps) {
                 <div className="col-span-3 text-right">Amount / Price</div>
               </div>
               <ul className="divide-y divide-white/8">
-                {/* ... unchanged list rendering ... */}
-                {trades.length === 0 && !loadingCongress && (
+                {loadingCongress ? (
+                  <li className="py-3 text-white/60 text-[12px]">Loading…</li>
+                ) : trades.length === 0 ? (
                   <li className="py-3 text-white/60 text-[12px]">No trades…</li>
-                )}
-                {loadingCongress && <li className="py-3 text-white/60 text-[12px]">Loading…</li>}
-                {!loadingCongress && trades.slice(0, 14).map((t, i) => (
+                ) : trades.slice(0, 14).map((t, i) => (
                   <li key={`tr-${i}-${t.person}-${t.ticker}`} className="px-2">
                     <div
                       className="grid grid-cols-12 items-center gap-2 py-2 px-2 rounded-lg hover:bg-white/6 transition"
