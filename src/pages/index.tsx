@@ -792,7 +792,7 @@ export default function Homepage(props: HomeProps) {
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               <div className="text-white/80 space-y-3 leading-relaxed">
                 <p className="text-[13px]">
-                  SignalHub provides a clean, actionable view of crypto and equities — built for clarity and speed.
+                  SignalHub provides a clean, actionable view of crypto and equities. Built for clarity and speed.
                   Less noise, more direction: momentum, volume, and trend in one place.
                 </p>
                 <ul className="space-y-1">
