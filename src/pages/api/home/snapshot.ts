@@ -71,12 +71,93 @@ function marketList(label: MarketLabel) {
   return []
 }
 
+// ======================
+// Warmup helpers (nieuw)
+// ======================
+type MarketKey = 'AEX' | 'SP500' | 'NASDAQ' | 'DOWJONES' | 'DAX' | 'FTSE100' | 'NIKKEI225' | 'HANGSENG' | 'SENSEX'
+const MARKET_SYMBOLS: Record<MarketKey, string[]> = {
+  AEX: AEX.map(x => x.symbol),
+  SP500: SP500.map(x => x.symbol),
+  NASDAQ: NASDAQ.map(x => x.symbol),
+  DOWJONES: DOWJONES.map(x => x.symbol),
+  DAX: DAX_FULL.map(x => x.symbol),
+  FTSE100: FTSE100.map(x => x.symbol),
+  NIKKEI225: NIKKEI225.map(x => x.symbol),
+  HANGSENG: HANGSENG.map(x => x.symbol),
+  SENSEX: SENSEX.map(x => x.symbol),
+}
+
+const CHUNK = 50
+const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
+function chunk<T>(arr:T[], size:number){ const out:T[][]=[]; for (let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
+async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promise<R[]>{
+  const out:R[] = new Array(arr.length) as any
+  let i=0
+  await Promise.all(new Array(n).fill(0).map(async () => {
+    while (i < arr.length) {
+      const idx = i++
+      out[idx] = await fn(arr[idx], idx)
+    }
+  }))
+  return out
+}
+
+function getOrigin(req: NextApiRequest) {
+  const proto = (req.headers['x-forwarded-proto'] as string) || 'https'
+  const host  = (req.headers['x-forwarded-host'] as string) || req.headers.host || 'localhost:3000'
+  return `${proto}://${host}`
+}
+
+async function warmMarkets(origin: string, keys: MarketKey[]) {
+  const results: Array<{ market: MarketKey; warmed: number }> = []
+  for (const key of keys) {
+    const symbols = MARKET_SYMBOLS[key] || []
+    if (!symbols.length) { results.push({ market: key, warmed: 0 }); continue }
+    const groups = chunk(symbols, CHUNK)
+    const parts = await pool(groups, 3, async (group, gi) => {
+      if (gi) await sleep(80)
+      const url = `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error(`snapshot warm ${key}[${gi}] HTTP ${r.status}`)
+      const j = await r.json() as { items?: any[] }
+      return j.items?.length || 0
+    })
+    results.push({ market: key, warmed: parts.reduce((a,b)=>a+Number(b||0), 0) })
+  }
+  return results
+}
+
 // Klein in-memory cache op de edge-runtime (per region/process)
 let CACHE: { ts: number; data: Snapshot } | null = null
 const MEM_TTL_MS = 60 * 1000 // 1 minuut, om latency nog verder te drukken
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // --------- Warmup modus (nieuw) ----------
+    // Voor cron/externe ping: /api/home/snapshot?warm=1&markets=ALL
+    const warm = String(req.query.warm || '0') === '1'
+    if (warm) {
+      const origin = getOrigin(req)
+      const q = String(req.query.markets || 'ALL').toUpperCase()
+      const keys: MarketKey[] =
+        q === 'ALL'
+          ? (Object.keys(MARKET_SYMBOLS) as MarketKey[])
+          : q.split(',').map(s => s.trim()).filter((m): m is MarketKey => m in MARKET_SYMBOLS)
+
+      // (optioneel) simpele token guard
+      if (process.env.WARMUP_TOKEN) {
+        const token = (req.query.token as string) || (req.headers['x-warmup-token'] as string)
+        if (token !== process.env.WARMUP_TOKEN) {
+          return res.status(401).json({ error: 'Unauthorized' })
+        }
+      }
+
+      const warmed = await warmMarkets(origin, keys)
+      res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=180')
+      return res.status(200).json({ warmed, when: new Date().toISOString() })
+    }
+    // --------- Einde warmup ----------
+
     // 1) Edge in-memory cache eerst
     if (CACHE && (Date.now() - CACHE.ts) < MEM_TTL_MS) {
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
@@ -120,7 +201,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const academyResp = await fetchJSON<any>(`${BASE}/api/academy/list?v=${v}`)
     const academy: { title: string; href: string }[] = academyResp?.items?.slice(0, 8) || []
 
-    // Congress (laatste bovenaan sorteren gebeurt al op de homepage; hier gewoon doorgeven)
+    // Congress
     const congressResp = await fetchJSON<any>(`${BASE}/api/market/congress?limit=30&v=${v}`)
     const congress = congressResp?.items || []
 
@@ -159,7 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Crypto universe (zelfde set als op de homepage)
+    // Crypto universe
     const COINS: { symbol: string; name: string }[] = [
       { symbol: 'BTC-USD',  name: 'Bitcoin' },
       { symbol: 'ETH-USD',  name: 'Ethereum' },

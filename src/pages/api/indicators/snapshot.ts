@@ -203,6 +203,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       })
     )
 
+    // Kleine toevoeging: laat CDN kort cachen en revalidatie toelaten
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+
     return res.status(200).json({ items })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
