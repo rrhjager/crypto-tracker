@@ -10,7 +10,7 @@ type Advice = 'BUY' | 'HOLD' | 'SELL'
 const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
 const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
 
-// ----- API types (ruimer, want API kan variëren) -----
+// ----- API types -----
 type SnapItemRaw = {
   symbol: string
   ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
@@ -20,7 +20,6 @@ type SnapItemRaw = {
   volume?:{ volume: number | null; avg20d: number | null; ratio?: number | null; status?: Advice }
 }
 type SnapResp = { items: SnapItemRaw[]; updatedAt?: number }
-
 type ScoreResp = { symbol: string; score: number | null }
 
 // ----- helpers -----
@@ -34,7 +33,7 @@ function fmt(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
 
-/** Normalizeert verschillende response-vormen en vult missende statussen aan. */
+/** Normalizeert response en vult missende statussen aan. */
 function normalizeAndDecorate(raw?: SnapItemRaw) {
   if (!raw) return null as any
   const ma50 = raw.ma?.ma50 ?? null
@@ -46,10 +45,12 @@ function normalizeAndDecorate(raw?: SnapItemRaw) {
   const macdHist = (raw.macd?.hist ?? raw.macdHist) ?? null
   const volNow = raw.volume?.volume ?? null
   const volAvg = raw.volume?.avg20d ?? null
-  const volRatio = raw.volume?.ratio ?? (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
-    ? Number(volNow)/Number(volAvg) : null)
+  const volRatio =
+    raw.volume?.ratio ??
+    (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
+      ? Number(volNow)/Number(volAvg)
+      : null)
 
-  // status fallback regels (conservatief, gelijk aan eerdere client-heuristiek)
   const maStatus: Advice =
     raw.ma?.status ??
     ((Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number))
@@ -85,15 +86,15 @@ function normalizeAndDecorate(raw?: SnapItemRaw) {
   }
 }
 
-// Zelfde weging als elders — werkt op statusvelden (nu altijd beschikbaar via normalizeAndDecorate)
+// Zelfde weging als op de lijstpagina
 function computeLocalScoreFromStatuses(it: ReturnType<typeof normalizeAndDecorate> | null): number | null {
   if (!it) return null
   const toNorm = (p: number) => (p + 2) / 4
   const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const pMA  = toPtsFromStatus(it.ma?.status)
-  const pMACD= toPtsFromStatus(it.macd?.status)
-  const pRSI = toPtsFromStatus(it.rsi?.status)
-  const pVOL = toPtsFromStatus(it.volume?.status)
+  const pMA   = toPtsFromStatus(it.ma?.status)
+  const pMACD = toPtsFromStatus(it.macd?.status)
+  const pRSI  = toPtsFromStatus(it.rsi?.status)
+  const pVOL  = toPtsFromStatus(it.volume?.status)
   const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
   const score = Math.round(Math.max(0, Math.min(1, agg)) * 100)
   return Number.isFinite(score) ? score : null
@@ -103,7 +104,7 @@ export default function StockDetail() {
   const router = useRouter()
   const sym = String(router.query.symbol || '').toUpperCase()
 
-  // 1) Indicators (1 call / 30s)
+  // 1) Snapshot (alle indicatoren tegelijk)
   const { data: snap, error: snapErr } = useSWR<SnapResp>(
     sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
     fetcher,
@@ -111,7 +112,7 @@ export default function StockDetail() {
   )
   const itemNorm = normalizeAndDecorate(snap?.items?.[0])
 
-  // 2) Centrale score (lichtgewicht), maar lokale score is er meteen
+  // 2) Centrale score (optioneel sneller)
   const { data: serverScoreData } = useSWR<ScoreResp>(
     sym ? `/api/indicators/score/${encodeURIComponent(sym)}` : null,
     fetcher,
@@ -121,21 +122,21 @@ export default function StockDetail() {
     ? Math.round(Number(serverScoreData!.score))
     : null
 
-  // 3) Direct tonen via fallback; live verversen zodra serverScore binnen is
+  // 3) Combineer lokale en server score
   const fallbackScore = computeLocalScoreFromStatuses(itemNorm)
   const score = serverScore ?? fallbackScore ?? 50
   const scoreStatus: Advice = statusFromScore(score)
 
-  const ma    = itemNorm?.ma
-  const rsi   = itemNorm?.rsi
-  const macd  = itemNorm?.macd
-  const vol   = itemNorm?.volume
+  const ma   = itemNorm?.ma
+  const rsi  = itemNorm?.rsi
+  const macd = itemNorm?.macd
+  const vol  = itemNorm?.volume
 
   return (
     <>
       <Head><title>{sym.replace('.AS','')} — SignalHub</title></Head>
       <main className="min-h-screen">
-        {/* Header met totaal-score rechts */}
+        {/* Header met totaalscore */}
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <div className="flex items-center justify-between gap-3">
             <h1 className="hero">{sym.replace('.AS','')}</h1>
@@ -151,6 +152,7 @@ export default function StockDetail() {
           </div>
         </section>
 
+        {/* Indicatorblokken */}
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {snapErr && <div className="mb-3 text-red-500 text-sm">Fout bij laden: {String((snapErr as any)?.message || snapErr)}</div>}
 
