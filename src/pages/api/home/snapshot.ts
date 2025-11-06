@@ -201,9 +201,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const academyResp = await fetchJSON<any>(`${BASE}/api/academy/list?v=${v}`)
     const academy: { title: string; href: string }[] = academyResp?.items?.slice(0, 8) || []
 
-    // Congress
+    // Congress — normaliseren + sorteren zodat nieuwste altijd zichtbaar is
     const congressResp = await fetchJSON<any>(`${BASE}/api/market/congress?limit=30&v=${v}`)
-    const congress = congressResp?.items || []
+    const congressRaw: any[] = Array.isArray(congressResp?.items) ? congressResp!.items : []
+    const congress = congressRaw
+      .map((x) => {
+        const dateISO =
+          (typeof x.publishedISO === 'string' && x.publishedISO) ||
+          (typeof x.tradedISO === 'string' && x.tradedISO) ||
+          (typeof x.published === 'string' && x.published) ||
+          (typeof x.traded === 'string' && x.traded) ||
+          ''
+        return {
+          person: x.person || '',
+          ticker: (x.ticker || '').toUpperCase(),
+          side: String(x.side || '—').toUpperCase(),
+          amount: x.amount || '',
+          price: x.price ?? null,
+          date: dateISO,
+          url: x.url || '',
+        }
+      })
+      .filter(t => t.date && !Number.isNaN(Date.parse(t.date)))
+      .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))
+      .slice(0, 30)
 
     // Equities top buy/sell per markt
     const MARKETS: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
