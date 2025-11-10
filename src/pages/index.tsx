@@ -390,8 +390,7 @@ export default function Homepage(props: HomeProps) {
     let stop = false
     ;(async () => {
       try {
-        // Laat de browser/CDN cache z'n werk doen (geen no-store)
-        const r = await fetch('/api/home/snapshot')
+        const r = await fetch('/api/home/snapshot', { cache: 'no-store' })
         if (!r.ok) return
         const s = await r.json() as HomeSnapshot
         if (stop) return
@@ -410,7 +409,7 @@ export default function Homepage(props: HomeProps) {
     let aborted = false
     async function prime(key: string) {
       try {
-        const r = await fetch(key) // geen no-store
+        const r = await fetch(key, { cache: 'no-store' })
         if (!r.ok) return
         const data = await r.json()
         if (!aborted) mutate(key, data, { revalidate: false })
@@ -436,7 +435,7 @@ export default function Homepage(props: HomeProps) {
       const url = `/api/news/google?q=${encodeURIComponent(query)}&${locale}&v=${minuteTag}`
       try {
         topic === 'crypto' ? setLoadingNewsCrypto(true) : setLoadingNewsEq(true)
-        const r = await fetch(url) // geen no-store
+        const r = await fetch(url, { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json()
         const arr: NewsItem[] = (j.items || []).slice(0, 6).map((x: any) => ({
@@ -477,8 +476,7 @@ export default function Homepage(props: HomeProps) {
 
   async function fetchStrictScore(sym: string, v: number): Promise<number | null> {
     try {
-      // laat CDN meehelpen
-      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`)
+      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`, { cache: 'no-store' })
       if (!r.ok) return null
       const j = await r.json() as { score?: number|null }
       if (Number.isFinite(j?.score as number)) {
@@ -565,7 +563,7 @@ export default function Homepage(props: HomeProps) {
         const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
           async function tryFetch(sym: string) {
             const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${minuteTag}`
-            const r = await fetch(url) // geen no-store
+            const r = await fetch(url, { cache: 'no-store' })
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { results?: IndResp[] }
             return j
@@ -621,7 +619,7 @@ export default function Homepage(props: HomeProps) {
     ;(async () => {
       try {
         setLoadingAcademy(true)
-        const r = await fetch('/api/academy/list?v='+minuteTag) // geen no-store
+        const r = await fetch('/api/academy/list?v='+minuteTag, { cache: 'no-store' })
         if (r.ok) {
           const j = await r.json() as { items?: AcademyItem[] }
           if (!aborted && Array.isArray(j.items) && j.items.length) {
@@ -654,7 +652,7 @@ export default function Homepage(props: HomeProps) {
     ;(async () => {
       try {
         setLoadingCongress(true); setTradesErr(null)
-        const r = await fetch('/api/market/congress?limit=30&v='+minuteTag) // geen no-store
+        const r = await fetch('/api/market/congress?limit=30&v='+minuteTag, { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const j = await r.json() as { items?: any[] }
         const arr = Array.isArray(j?.items) ? j.items : []
@@ -680,7 +678,7 @@ export default function Homepage(props: HomeProps) {
     return (s || '')
       .replaceAll('&amp;', '&')
       .replaceAll('&quot;', '"')
-      .replaceAll("&#39;", "'')
+      .replaceAll("&#39;", "'")
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
   }
@@ -781,8 +779,6 @@ export default function Homepage(props: HomeProps) {
       <Head>
         <title>SignalHub — Clarity in Markets</title>
         <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
-        {/* Start netwerk vroeg */}
-        <link rel="preload" as="fetch" href="/api/home/snapshot" crossOrigin="" />
         <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
         <link rel="dns-prefetch" href="https://query2.finance.yahoo.com" />
@@ -1013,8 +1009,7 @@ export async function getStaticProps() {
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
-    // Laat ISR/CDN de snapshot cachen (geen no-store)
-    const res = await fetch(`${base}/api/home/snapshot`)
+    const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     if (!res.ok) throw new Error('snapshot failed')
     const snapshot = await res.json() as HomeSnapshot
     return { props: { snapshot }, revalidate: 120 }
