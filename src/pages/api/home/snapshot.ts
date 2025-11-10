@@ -160,7 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 1) Edge in-memory cache eerst
     if (CACHE && (Date.now() - CACHE.ts) < MEM_TTL_MS) {
-      res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
+      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
       return res.status(200).json(CACHE.data)
     }
 
@@ -169,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const cached = await kvGetJSON<Snapshot>(kvKey)
     if (cached) {
       CACHE = { ts: Date.now(), data: cached }
-      res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120')
+      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
       return res.status(200).json(cached)
     }
 
@@ -351,7 +351,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await kvSetJSON(kvKey, data, TTL_SEC)
     CACHE = { ts: Date.now(), data }
 
-    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=120')
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
     return res.status(200).json(data)
   } catch (err: any) {
     return res.status(500).json({ error: String(err?.message || err) })

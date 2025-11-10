@@ -491,6 +491,10 @@ export default function Homepage(props: HomeProps) {
   // Bereken tops/bottoms per markt op basis van exacte scores
   useEffect(() => {
     let aborted = false
+
+    // ⛔ Skip zware client-run als we SSR/ISR-snapshot hebben meegekregen
+    if (props.snapshot) return () => { aborted = true }
+
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
     ;(async () => {
@@ -1012,8 +1016,8 @@ export async function getStaticProps() {
     const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     if (!res.ok) throw new Error('snapshot failed')
     const snapshot = await res.json() as HomeSnapshot
-    return { props: { snapshot }, revalidate: 120 }
+    return { props: { snapshot }, revalidate: 300 }
   } catch {
-    return { props: { snapshot: null }, revalidate: 120 }
+    return { props: { snapshot: null }, revalidate: 300 }
   }
 }

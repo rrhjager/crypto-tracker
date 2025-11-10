@@ -7,6 +7,10 @@
     {
       "path": "/api/internal/warm-home",
       "schedule": "*/3 * * * *"
+    },
+    {
+      "path": "/api/internal/warm-index",
+      "schedule": "*/3 * * * *"
     }
   ]
 }
