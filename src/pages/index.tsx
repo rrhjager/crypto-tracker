@@ -678,7 +678,7 @@ export default function Homepage(props: HomeProps) {
     return (s || '')
       .replaceAll('&amp;', '&')
       .replaceAll('&quot;', '"')
-      .replaceAll("&#39;", "'")
+      .replaceAll('&#39;', "'")
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
   }
