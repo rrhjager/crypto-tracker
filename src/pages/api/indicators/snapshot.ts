@@ -1,8 +1,6 @@
 // src/pages/api/home/snapshot.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-import { COINS as COIN_LIST, yahooSymbol } from '@/lib/coins' // 👈 jouw centrale coin-lijst
-
 export const config = { runtime: 'nodejs' }
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -10,7 +8,7 @@ type NewsIn = { title: string; link: string; source?: string; pubDate?: string }
 type NewsOut = { title: string; url: string; source?: string; published?: string; image?: string | null }
 
 type SnapItem = {
-  symbol: string   // verwacht Yahoo-style (bv. BTC-USD) van /api/indicators/snapshot
+  symbol: string
   score?: number | null
 }
 
@@ -26,7 +24,7 @@ type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice 
 type HomeSnapshot = {
   newsCrypto: NewsOut[];
   newsEq: NewsOut[];
-  // equities topBuy/topSell blijven leeg; homepage rekent die exact client-side per markt
+  // equities topBuy/topSell laten we leeg; homepage rekent die exact client-side per markt
   topBuy: any[];
   topSell: any[];
   coinTopBuy: ScoredCoin[];
@@ -38,10 +36,63 @@ type HomeSnapshot = {
 const TTL_S = 300
 const CRYPTO_BATCH = 25
 
-// Klein hulpsetje voor status → label
+// Yahoo-crypto universum (zelfde als op de homepage)
+const COINS: { symbol: string; name: string }[] = [
+  { symbol: 'BTC-USD',  name: 'Bitcoin' },
+  { symbol: 'ETH-USD',  name: 'Ethereum' },
+  { symbol: 'BNB-USD',  name: 'BNB' },
+  { symbol: 'SOL-USD',  name: 'Solana' },
+  { symbol: 'XRP-USD',  name: 'XRP' },
+  { symbol: 'ADA-USD',  name: 'Cardano' },
+  { symbol: 'DOGE-USD', name: 'Dogecoin' },
+  { symbol: 'TON-USD',  name: 'Toncoin' },
+  { symbol: 'TRX-USD',  name: 'TRON' },
+  { symbol: 'AVAX-USD', name: 'Avalanche' },
+  { symbol: 'DOT-USD',  name: 'Polkadot' },
+  { symbol: 'LINK-USD', name: 'Chainlink' },
+  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
+  { symbol: 'LTC-USD',  name: 'Litecoin' },
+  { symbol: 'MATIC-USD', name: 'Polygon' },
+  { symbol: 'XLM-USD',  name: 'Stellar' },
+  { symbol: 'NEAR-USD', name: 'NEAR' },
+  { symbol: 'ICP-USD',  name: 'Internet Computer' },
+  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
+  { symbol: 'FIL-USD',  name: 'Filecoin' },
+  { symbol: 'XMR-USD',  name: 'Monero' },
+  { symbol: 'APT-USD',  name: 'Aptos' },
+  { symbol: 'ARB-USD',  name: 'Arbitrum' },
+  { symbol: 'OP-USD',   name: 'Optimism' },
+  { symbol: 'SUI-USD',  name: 'Sui' },
+  { symbol: 'HBAR-USD', name: 'Hedera' },
+  { symbol: 'ALGO-USD', name: 'Algorand' },
+  { symbol: 'VET-USD',  name: 'VeChain' },
+  { symbol: 'EGLD-USD', name: 'MultiversX' },
+  { symbol: 'AAVE-USD', name: 'Aave' },
+  { symbol: 'INJ-USD',  name: 'Injective' },
+  { symbol: 'MKR-USD',  name: 'Maker' },
+  { symbol: 'RUNE-USD', name: 'THORChain' },
+  { symbol: 'IMX-USD',  name: 'Immutable' },
+  { symbol: 'FLOW-USD', name: 'Flow' },
+  { symbol: 'SAND-USD', name: 'The Sandbox' },
+  { symbol: 'MANA-USD', name: 'Decentraland' },
+  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+  { symbol: 'QNT-USD',  name: 'Quant' },
+  { symbol: 'GRT-USD',  name: 'The Graph' },
+  { symbol: 'CHZ-USD',  name: 'Chiliz' },
+  { symbol: 'CRV-USD',  name: 'Curve DAO' },
+  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
+  { symbol: 'FTM-USD',  name: 'Fantom' },
+  { symbol: 'XTZ-USD',  name: 'Tezos' },
+  { symbol: 'LDO-USD',  name: 'Lido DAO' },
+  { symbol: 'SNX-USD',  name: 'Synthetix' },
+  { symbol: 'STX-USD',  name: 'Stacks' },
+  { symbol: 'AR-USD',   name: 'Arweave' },
+  { symbol: 'GMX-USD',  name: 'GMX' },
+]
+
+// Small helpers
 const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
 
-// Pool helper (concurrency)
 async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(arr.length) as any
   let i = 0
@@ -56,7 +107,6 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
   return out
 }
 
-// Base URL afleiden (werkt lokaal, Vercel, proxy)
 function baseUrl(req: NextApiRequest) {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '')
   if (envBase) return envBase
@@ -65,7 +115,7 @@ function baseUrl(req: NextApiRequest) {
   return `${proto}://${host}`
 }
 
-/** News via je eigen Google endpoint */
+/** News via eigen Google endpoint */
 async function fetchNews(req: NextApiRequest, query: string): Promise<NewsOut[]> {
   const url = `${baseUrl(req)}/api/news/google?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`
   try {
@@ -113,23 +163,12 @@ async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
   } catch { return [] }
 }
 
-/** Server-side CRYPTO toplists
- *  Belangrijk:
- *  - we gebruiken ALLEEN coins uit lib/coins.ts
- *  - voor /api/indicators/snapshot mappen we naar Yahoo symbols (BTC → BTC-USD)
- *  - we mappen scores terug naar basis-symbool (BTC) voor je routes/UX
- */
+/** Server-side CRYPTO toplists via jouw eigen /api/indicators/snapshot (Yahoo symbols) */
 async function computeCryptoServerSide(req: NextApiRequest) {
-  // 1) Bouw Yahoo-symbols lijst vanuit jouw basislijst
-  const yahooSymbols = COIN_LIST.map(c => yahooSymbol(c.symbol)) // bv. BTC -> BTC-USD
-
-  // 2) Batches maken
+  const symbols = COINS.map(c => c.symbol)
   const batches: string[][] = []
-  for (let i = 0; i < yahooSymbols.length; i += CRYPTO_BATCH) {
-    batches.push(yahooSymbols.slice(i, i + CRYPTO_BATCH))
-  }
+  for (let i = 0; i < symbols.length; i += CRYPTO_BATCH) batches.push(symbols.slice(i, i + CRYPTO_BATCH))
 
-  // 3) Fetch helper per batch
   async function fetchBatch(chunk: string[]): Promise<IndicatorsSnapshotResp> {
     const url = `${baseUrl(req)}/api/indicators/snapshot?symbols=${encodeURIComponent(chunk.join(','))}`
     const r = await fetch(url, { cache: 'no-store' })
@@ -137,29 +176,24 @@ async function computeCryptoServerSide(req: NextApiRequest) {
     return (await r.json()) as IndicatorsSnapshotResp
   }
 
-  // 4) Parallel ophalen (pool 3)
+  // parallel in beperkte pool
   const results = await pool(batches, 3, fetchBatch)
-
-  // 5) Score-map vullen (key = Yahoo-symbol)
-  const scoreByYahoo = new Map<string, number>()
+  const mapScore = new Map<string, number>()
   for (const res of results) {
     for (const it of (res.items || [])) {
       if (Number.isFinite(it?.score as number)) {
-        scoreByYahoo.set(it.symbol, Math.round(Number(it.score)))
+        mapScore.set(it.symbol, Math.round(Number(it.score)))
       }
     }
   }
 
-  // 6) Terug mappen naar jouw basislijst (BTC, ETH, ...)
-  const rows = COIN_LIST
+  const rows = COINS
     .map(c => {
-      const y = yahooSymbol(c.symbol) // bv. BTC-USD
-      const s = scoreByYahoo.get(y)
+      const s = mapScore.get(c.symbol)
       return Number.isFinite(s) ? { symbol: c.symbol, name: c.name, score: s as number } : null
     })
     .filter(Boolean) as { symbol: string; name: string; score: number }[]
 
-  // 7) Sorteren en top 5 BUY/SELL
   const desc = [...rows].sort((a,b)=> b.score - a.score)
   const asc  = [...rows].sort((a,b)=> a.score - b.score)
 
@@ -184,13 +218,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       newsEq,
       topBuy: [],
       topSell: [],
-      coinTopBuy: crypto.coinTopBuy,   // ⬅️ basis-symbool (BTC/ETH/...)
-      coinTopSell: crypto.coinTopSell, // ⬅️ basis-symbool (BTC/ETH/...)
+      coinTopBuy: crypto.coinTopBuy,
+      coinTopSell: crypto.coinTopSell,
       academy,
       congress,
     }
 
-    // korte CDN-cache; ISR van index.tsx regelt verdere revalidate
+    // korte CDN-cache; ISR van index.tsx bepaalt revalidate verder
     res.setHeader('Cache-Control', `public, s-maxage=${TTL_S}, stale-while-revalidate=60`)
     res.status(200).json(snapshot)
   } catch (e:any) {
