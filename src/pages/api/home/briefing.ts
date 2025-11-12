@@ -80,19 +80,16 @@ export default async function handler(
     const todayISO = new Date().toISOString().slice(0, 10)
 
     const system = [
-      'You are a professional markets analyst.',
-      'Write a short, flowing intraday briefing (no bullets, no markdown, plain text only).',
-      'Length target: 90–120 words.',
-      'Use only provided data. Do not invent facts.',
-      'Structure clearly in this order inside one paragraph:',
-      '1) Summarize key macro or regulatory decisions expected TODAY (e.g., CPI, FOMC, ETF, SEC, major policy).',
-      'Briefly state how markets are likely to react (positive, negative, or cautious).',
-      '2) Then cover crypto: what is moving and likely sentiment based on the crypto headlines.',
-      '3) Then cover equities: main themes and expected market tone from equity headlines.',
-      '4) Then note if any major US Congress BUY trades occurred yesterday (include name/ticker).',
-      '5) End with "Takeaway:" summarizing expected mood (risk-on/off) and what to watch next.',
-      'Keep it factual, concise, and focused on implications.'
-    ].join(' ')
+        'You are a professional markets analyst. Write a concise investor briefing.',
+        'Structure it clearly with three main bullet points and a short takeaway line at the end.',
+        'Keep it under 150 words total.',
+        'Bullets:',
+        '• Key macro or regulatory developments (with likely market reaction: positive/negative).',
+        '• Crypto market updates or major moves (and expected short-term impact).',
+        '• Stock market or earnings highlights (and sentiment direction).',
+        'Then end with: "Takeaway:" followed by one short sentence summarizing what investors should focus on.',
+        'Be objective, factual, and avoid filler language.'
+      ].join(' ')
 
     const userPayload = {
       date: todayISO,
