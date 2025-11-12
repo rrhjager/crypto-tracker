@@ -109,7 +109,7 @@ type IndResp = {
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-  if (!s || skip.has(s)) return null
+  if (!s || skip has(s)) return null
   return `${s}USDT`
 }
 
@@ -492,8 +492,10 @@ export default function Homepage(props: HomeProps) {
   useEffect(() => {
     let aborted = false
 
-    // ⛔ Skip zware client-run als we SSR/ISR-snapshot hebben meegekregen
-    if (props.snapshot) return () => { aborted = true }
+    // ⛔ Skip zware client-run ALLEEN als SSR/ISR-snapshot ook écht equities bevat
+    if (props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length) {
+      return () => { aborted = true }
+    }
 
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
