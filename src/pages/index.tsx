@@ -50,7 +50,9 @@ type HomeSnapshot = {
   academy: { title: string; href: string }[];
   congress: CongressTrade[];
 }
-type HomeProps = { snapshot: HomeSnapshot | null }
+
+type Briefing = { advice: string }
+type HomeProps = { snapshot: HomeSnapshot | null; briefing: Briefing | null }
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -370,6 +372,22 @@ export default function Homepage(props: HomeProps) {
   )
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
+
+  // AI briefing state (SSR + client fallback)
+  const [briefing, setBriefing] = useState<string>(props.briefing?.advice || '')
+  useEffect(() => {
+    if (briefing) return
+    let aborted = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/home/briefing', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = await r.json() as Briefing
+        if (!aborted && j?.advice) setBriefing(j.advice)
+      } catch {}
+    })()
+    return () => { aborted = true }
+  }, [briefing])
 
   // flags bijwerken obv cache/snapshot
   useEffect(() => {
@@ -838,6 +856,24 @@ export default function Homepage(props: HomeProps) {
 
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         <div className="grid gap-5 lg:grid-cols-3">
+
+          {/* Daily AI Briefing — paginabreed, compact */}
+          <section className="lg:col-span-3 rounded-2xl border border-white/10 bg-white/[0.03] shadow-[0_6px_30px_-10px_rgba(0,0,0,0.25)]">
+            <header className="flex items-center justify-between px-5 pt-4 pb-2">
+              <h2 className="text-[15px] font-semibold">Daily AI Briefing</h2>
+              <Link href="/about" className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
+                What’s this? <span aria-hidden>→</span>
+              </Link>
+            </header>
+            <div className="px-5 pb-4">
+              {briefing ? (
+                <BriefingText text={briefing} />
+              ) : (
+                <div className="text-white/60 text-[13px]">Generating today’s briefing…</div>
+              )}
+            </div>
+          </section>
+
           {/* 1) Hero */}
           <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
@@ -1054,17 +1090,45 @@ export default function Homepage(props: HomeProps) {
   )
 }
 
+const BriefingText: React.FC<{ text: string }> = ({ text }) => {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <div className={`${open ? '' : 'max-h-40 overflow-hidden'} relative`}>
+        <p className="text-[13px] leading-relaxed whitespace-pre-line text-white/90">
+          {text}
+        </p>
+        {!open && (
+          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-black/60 to-transparent pointer-events-none rounded-b-2xl" />
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="mt-2 text-[12px] text-white/70 hover:text-white underline"
+      >
+        {open ? 'Show less' : 'Read more'}
+      </button>
+    </div>
+  )
+}
+
 export async function getStaticProps() {
   try {
     const base =
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
-    const res = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
-    if (!res.ok) throw new Error('snapshot failed')
-    const snapshot = await res.json() as HomeSnapshot
-    return { props: { snapshot }, revalidate: 300 }
+    const [resSnap, resBrief] = await Promise.all([
+      fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
+      fetch(`${base}/api/home/briefing`, { cache: 'no-store' }),
+    ])
+
+    const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
+    const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
+
+    return { props: { snapshot, briefing }, revalidate: 300 }
   } catch {
-    return { props: { snapshot: null }, revalidate: 300 }
+    return { props: { snapshot: null, briefing: null }, revalidate: 300 }
   }
 }
