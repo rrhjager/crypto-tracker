@@ -80,7 +80,7 @@ export default async function handler(
     const system = [
       'You are a professional markets analyst.',
       'Write a concise investor briefing in 3–4 short bullet points (under 100 words total).',
-      'Each bullet must start with "• Topic: ..." — the topic name is bold (like Macro, Crypto, Equities, Congress).',
+      'Each bullet must start with "•Topic: ..." — the topic name is bold (like Macro, Crypto, Equities, Congress).',
       'Leave one blank line between each bullet point for readability.',
       'Each bullet should describe the event/news AND end with what it likely means for equities and crypto markets (positive, negative, neutral).',
       'End with a single line starting with "Takeaway:" that sums up the short-term market outlook.',
