@@ -27,7 +27,8 @@ const PUBLIC_ALLOW = [
   // ✅ homepage + news + scores
   '/api/news/',                   // Google/Equities/Crypto news
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
-  '/api/home/snapshot',           // 🔥 Edge snapshot aggregator voor homepage (legacy)
+  '/api/home/snapshot',           // legacy homepage snapshot
+  '/api/home/briefing',           // ✅ NIEUW: AI daily briefing
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -87,7 +88,7 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // Bots blokkeren (edge-gecachede 403)
+  // Bots blokkeren
   if (isBot(req.headers.get('user-agent'))) {
     return new NextResponse('Forbidden for bots', {
       status: 403,
@@ -95,7 +96,7 @@ export function middleware(req: NextRequest) {
     })
   }
 
-  // Alleen jouw site (origin/referer/host)
+  // Alleen jouw site
   if (!isSameOrigin(req)) {
     return new NextResponse('Forbidden (origin)', {
       status: 403,
@@ -125,11 +126,11 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // === Kleine limiter voor news, legacy home-snapshot en NIEUW market home-snapshot ===
+  // === Kleine limiter voor news, home-snapshots ===
   if (
     pathname.startsWith('/api/news/') ||
-    pathname.startsWith('/api/home/snapshot') ||        // legacy
-    pathname.startsWith('/api/market/home-snapshot')     // ← toegevoegd
+    pathname.startsWith('/api/home/snapshot') ||
+    pathname.startsWith('/api/market/home-snapshot')
   ) {
     const limitParam = Number(searchParams.get('limit') || searchParams.get('n') || '0')
     if (Number.isFinite(limitParam) && limitParam > 50) {
