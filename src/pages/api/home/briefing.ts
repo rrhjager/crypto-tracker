@@ -87,7 +87,6 @@ export default async function handler(
       'Be factual, specific, and analytical. No generic advice, no repetition.',
       'Conclude with one line starting with "Takeaway:" summarizing the short-term outlook.',
       'Format cleanly as Markdown with bullets and bold topic names.'
-      'Have a white space between the different topics'
     ].join(' ')
 
     const userPayload = {
