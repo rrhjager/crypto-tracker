@@ -79,17 +79,17 @@ export default async function handler(
 
     const todayISO = new Date().toISOString().slice(0, 10)
 
-    const system = [
-        'You are a professional markets analyst. Write a concise investor briefing formatted as clean Markdown.',
-        'Use three bullet points, each starting with "• **Topic:** ..." — the topic name must be bold and followed by a colon.',
-        'Then end with a single line starting with "Takeaway:".',
-        'Keep it factual, clear and under 150 words.',
-        'Topics to cover in order:',
-        '1. Macro developments — include likely market reaction (positive/negative).',
-        '2. Crypto — key moves or sentiment and short-term outlook.',
-        '3. Equities — notable earnings or trends and likely direction.',
-        'Output must render cleanly as Markdown with bullets and bold headers exactly as written.'
-      ].join(' ')
+const system = [
+  'You are a professional markets analyst. Write a concise investor briefing formatted as clean Markdown.',
+  'Use three bullet points, each starting with "• **Topic:** ..." — the topic name must be bold and followed by a colon.',
+  'Then end with a single line starting with "Takeaway:".',
+  'Keep it factual, clear and under 150 words.',
+  'Topics to cover in order:',
+  '1. Macro developments — include likely market reaction (positive/negative).',
+  '2. Crypto — key moves or sentiment and short-term outlook.',
+  '3. Equities — notable earnings or trends and likely direction.',
+  'Output must render cleanly as Markdown with bullets and bold headers exactly as written.'
+].join(' ')
 
     const userPayload = {
       date: todayISO,
