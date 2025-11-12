@@ -857,54 +857,14 @@ export default function Homepage(props: HomeProps) {
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         <div className="grid gap-5 lg:grid-cols-3">
 
-          {/* Daily AI Briefing — paginabreed, compact */}
-          <section className="lg:col-span-3 rounded-2xl border border-white/10 bg-white/[0.03] shadow-[0_6px_30px_-10px_rgba(0,0,0,0.25)]">
-            <header className="flex items-center justify-between px-5 pt-4 pb-2">
-              <h2 className="text-[15px] font-semibold">Daily AI Briefing</h2>
-              <Link href="/about" className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
-                What’s this? <span aria-hidden>→</span>
-              </Link>
-            </header>
-            <div className="px-5 pb-4">
+          {/* 1) Hero — vervangen door AI briefing */}
+          <Card title="Daily AI Briefing">
+            <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {briefing ? (
                 <BriefingText text={briefing} />
               ) : (
                 <div className="text-white/60 text-[13px]">Generating today’s briefing…</div>
               )}
-            </div>
-          </section>
-
-          {/* 1) Hero */}
-          <Card title="Cut the noise. Catch the signal." actionHref="/about" actionLabel="About us">
-            <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              <div className="text-white/80 space-y-3 leading-relaxed">
-                <p className="text-[13px]">
-                  SignalHub provides a clean, actionable view of crypto and equities. Built for clarity and speed.
-                  Less noise, more direction: momentum, volume, and trend in one place.
-                </p>
-                <ul className="space-y-1">
-                  <li className="flex items-center gap-2 text-[13px]">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Unified BUY / HOLD / SELL signals across major cryptos and stock markets → spot high-conviction setups in seconds
-                  </li>
-                  <li className="flex items-center gap-2 text-[13px]">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Momentum, volume & trend analytics → understand why assets move and predict future movements
-                  </li>
-                  <li className="flex items-center gap-2 text-[13px]">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/60" />
-                    Market Intel feeds → track hedge funds, congress trades, and macro trends as they unfold
-                  </li>
-                </ul>
-                <div className="pt-1 flex gap-2">
-                  <Link href="/crypto" className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-white transition text-[13px]">
-                    Open crypto →
-                  </Link>
-                  <Link href="/aex" className="px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-white transition text-[13px]">
-                    Open AEX →
-                  </Link>
-                </div>
-              </div>
             </div>
           </Card>
 
