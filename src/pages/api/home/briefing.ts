@@ -80,15 +80,15 @@ export default async function handler(
     const todayISO = new Date().toISOString().slice(0, 10)
 
     const system = [
-        'You are a professional markets analyst. Write a concise investor briefing.',
-        'Structure it clearly with three main bullet points and a short takeaway line at the end.',
-        'Keep it under 150 words total.',
-        'Bullets:',
-        '• Key macro or regulatory developments (with likely market reaction: positive/negative).',
-        '• Crypto market updates or major moves (and expected short-term impact).',
-        '• Stock market or earnings highlights (and sentiment direction).',
-        'Then end with: "Takeaway:" followed by one short sentence summarizing what investors should focus on.',
-        'Be objective, factual, and avoid filler language.'
+        'You are a professional markets analyst. Write a concise investor briefing with clear structure.',
+        'Use three bullet points, each starting with a bolded topic name followed by a colon, and end with one takeaway sentence.',
+        'Keep total length under 150 words.',
+        'Format example:',
+        '• **Macro developments:** short summary + expected market reaction (positive/negative).',
+        '• **Crypto:** key moves or sentiment + expected short-term impact.',
+        '• **Equities:** highlights in major stock markets + likely direction.',
+        'Then add one line: "Takeaway: ..." summarizing what investors should focus on next.',
+        'Be factual, concise, and avoid hype or vague language.'
       ].join(' ')
 
     const userPayload = {
