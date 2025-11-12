@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
-import type { GetServerSideProps } from 'next'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
@@ -55,70 +54,11 @@ async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promi
   return out
 }
 
-/** ---------- SSR helpers (alleen binnen dit bestand) ---------- **/
-function resolveBaseURL(req?: any): string {
-  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim()
-  if (envBase) return envBase.replace(/\/+$/,'')
-  const host = req?.headers?.['x-forwarded-host'] || req?.headers?.host
-  const proto = (req?.headers?.['x-forwarded-proto'] || 'https') as string
-  if (host) return `${proto}://${host}`
-  return 'http://localhost:3000'
-}
-
-async function fetchJSON<T>(url: string, init: RequestInit = {}, retries = 2, timeoutMs = 9000): Promise<T> {
-  let lastErr: unknown
-  for (let a = 0; a <= retries; a++) {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-    try {
-      const r = await fetch(url, {
-        ...init,
-        signal: ctrl.signal,
-        headers: { accept: 'application/json', ...(init.headers||{}) },
-        cache: 'no-store',
-      })
-      clearTimeout(timer)
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      return (await r.json()) as T
-    } catch (e) {
-      clearTimeout(timer)
-      lastErr = e
-      if (a === retries) break
-      await new Promise(res => setTimeout(res, 300 * (a + 1))) // 300ms, 600ms
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('fetch failed')
-}
-
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
-  const base = resolveBaseURL(ctx.req)
-  const symbols = AEX.map(x => x.symbol)
-  const groups = chunk(symbols, CHUNK)
-
-  // zelfde batching als client, maar dan op de server voor instant FCP
-  const parts = await pool(groups, 4, async (group, gi) => {
-    if (gi) await sleep(80)
-    const url = `${base}/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
-    const j: { items: SnapItem[] } = await fetchJSON(url)
-    return j.items || []
-  })
-
-  return {
-    props: {
-      initialItems: parts.flat(),
-      now: Date.now(),
-    },
-  }
-}
-
-/** ---------- Page component ---------- **/
-type Props = { initialItems: SnapItem[]; now: number }
-
-export default function AEXIndex(props: Props) {
+export default function AEXIndex() {
   const symbols = useMemo(() => AEX.map(x => x.symbol), [])
 
   // 1) Snapshot (batches, vervangt quotes + ret-batch + oude snapshot-list)
-  const [items, setItems] = useState<SnapItem[]>(props.initialItems || [])
+  const [items, setItems] = useState<SnapItem[]>([])
   const [snapErr, setSnapErr] = useState<string | null>(null)
 
   useEffect(() => {
@@ -142,7 +82,6 @@ export default function AEXIndex(props: Props) {
         if (!aborted) timer = setTimeout(load, 30000) // 30s refresh
       }
     }
-    // Start direct de refresh-loop; initialItems zorgt al voor instant view
     load()
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])

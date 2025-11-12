@@ -7,8 +7,19 @@ type Advice = 'BUY' | 'HOLD' | 'SELL'
 type NewsIn = { title: string; link: string; source?: string; pubDate?: string }
 type NewsOut = { title: string; url: string; source?: string; published?: string; image?: string | null }
 
+// ---- SnapItem is superset zodat equities-snapshot én home beide werken ----
 type SnapItem = {
   symbol: string
+  // equities velden:
+  price?: number | null
+  change?: number | null
+  changePct?: number | null
+  ret7Pct?: number | null
+  ret30Pct?: number | null
+  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?:   number | null
+  macd?:  { macd: number | null; signal: number | null; hist: number | null }
+  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null }
   score?: number | null
 }
 
@@ -108,7 +119,7 @@ async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promi
 }
 
 function baseUrl(req: NextApiRequest) {
-  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '')
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, '')
   if (envBase) return envBase
   const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
   const host = req.headers.host
@@ -203,8 +214,94 @@ async function computeCryptoServerSide(req: NextApiRequest) {
   return { coinTopBuy, coinTopSell }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<HomeSnapshot | { error: string }>) {
+/** ---------- Handler met equities fast-path ---------- */
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<HomeSnapshot | { error: string } | { items: SnapItem[] }>
+) {
   try {
+    // EQUITIES FAST-PATH: als ?symbols= is meegegeven, geef lijst van aandelen terug
+    const symbolsRaw = String(req.query.symbols || '').trim()
+    if (symbolsRaw) {
+      res.setHeader('Cache-Control', 'public, s-maxage=20, stale-while-revalidate=60')
+      const base = baseUrl(req)
+      const symbols = symbolsRaw.split(',').map(s => s.trim()).filter(Boolean)
+
+      // 1) Quotes (prijs + 24h change/pct)
+      const quotesUrl = `${base}/api/quotes?symbols=${encodeURIComponent(symbols.join(','))}`
+      const quotesResp = await fetch(quotesUrl, { cache: 'no-store', headers: { accept: 'application/json' } })
+      if (!quotesResp.ok) return res.status(502).json({ error: `quotes HTTP ${quotesResp.status}` })
+      const quotes = await quotesResp.json() as {
+        quotes: Record<string, {
+          symbol: string
+          regularMarketPrice: number | null
+          regularMarketChange: number | null
+          regularMarketChangePercent: number | null
+          currency?: string
+        }>
+      }
+
+      // 2) Scores (batch indien beschikbaar; anders fallback per symbool)
+      let scoreMap = new Map<string, number | null>()
+      try {
+        const scoreUrl = `${base}/api/indicators/score-batch?symbols=${encodeURIComponent(symbols.join(','))}`
+        const scoreResp = await fetch(scoreUrl, { cache: 'no-store', headers: { accept: 'application/json' } })
+        if (!scoreResp.ok) throw new Error(`score-batch HTTP ${scoreResp.status}`)
+        const scoreRows = await scoreResp.json() as { items: { symbol: string; score: number | null }[] }
+        scoreMap = new Map(scoreRows.items.map(r => [r.symbol, Number.isFinite(r.score as number) ? Math.round(Number(r.score)) : null]))
+      } catch {
+        // fallback pool (max 6 tegelijk)
+        const poolSize = 6
+        let i = 0
+        await Promise.all(new Array(poolSize).fill(0).map(async () => {
+          while (i < symbols.length) {
+            const idx = i++
+            const s = symbols[idx]
+            try {
+              const r = await fetch(`${base}/api/indicators/score/${encodeURIComponent(s)}`, { cache: 'no-store', headers: { accept: 'application/json' } })
+              if (!r.ok) throw new Error()
+              const j = await r.json() as { symbol: string; score: number | null }
+              scoreMap.set(s, Number.isFinite(j?.score as number) ? Math.round(Number(j.score)) : null)
+            } catch {
+              scoreMap.set(s, null)
+            }
+          }
+        }))
+      }
+
+      // 3) Returns 7d & 30d (soft-fail)
+      let ret7Map = new Map<string, number | null>(), ret30Map = new Map<string, number | null>()
+      try {
+        const [ret7Resp, ret30Resp] = await Promise.all([
+          fetch(`${base}/api/indicators/ret-batch?days=7&symbols=${encodeURIComponent(symbols.join(','))}`,  { cache:'no-store', headers:{accept:'application/json'} }),
+          fetch(`${base}/api/indicators/ret-batch?days=30&symbols=${encodeURIComponent(symbols.join(','))}`, { cache:'no-store', headers:{accept:'application/json'} }),
+        ])
+        if (ret7Resp.ok) {
+          const ret7 = await ret7Resp.json() as { items: { symbol:string; days:number; pct:number|null }[] }
+          ret7Map = new Map(ret7.items.map(r => [r.symbol, r.pct ?? null]))
+        }
+        if (ret30Resp.ok) {
+          const ret30 = await ret30Resp.json() as { items: { symbol:string; days:number; pct:number|null }[] }
+          ret30Map = new Map(ret30.items.map(r => [r.symbol, r.pct ?? null]))
+        }
+      } catch { /* laat leeg */ }
+
+      // 4) Bouw items voor equities-snapshot
+      const items: SnapItem[] = symbols.map(sym => {
+        const q = quotes.quotes[sym]
+        const price = q?.regularMarketPrice ?? null
+        const change = q?.regularMarketChange ?? null
+        const changePct = q?.regularMarketChangePercent ?? null
+        const score = scoreMap.get(sym) ?? null
+        const ret7Pct = ret7Map.get(sym) ?? null
+        const ret30Pct = ret30Map.get(sym) ?? null
+        return { symbol: sym, price, change, changePct, score, ret7Pct, ret30Pct }
+      })
+
+      return res.status(200).json({ items })
+    }
+
+    // ---- HOME SNAPSHOT (ongewijzigde logica) ----
     const [newsCrypto, newsEq, academy, congress, crypto] = await Promise.all([
       fetchNews(req, 'crypto OR bitcoin OR ethereum OR blockchain'),
       fetchNews(req, 'equities OR stocks OR stock market OR aandelen OR beurs'),

@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import useSWR from 'swr'
 import ScoreBadge from '@/components/ScoreBadge'
-import type { GetServerSideProps } from 'next'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
@@ -20,6 +19,11 @@ type SnapItem = {
 type SnapResp = { items: SnapItem[]; updatedAt?: number }
 type ScoreResp = { symbol: string; score: number | null }
 
+const fetcher = async <T,>(url: string): Promise<T> => {
+  const r = await fetch(url, { cache: 'no-store' })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
 function fmt(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
@@ -90,133 +94,30 @@ function computeLocalScoreFromStatuses(it: ReturnType<typeof normalizeAndDecorat
   return Number.isFinite(score) ? score : null
 }
 
-/** ---------- SSR helpers ---------- **/
-
-function resolveBaseURL(req?: any): string {
-  // 1) Respecteer expliciete env
-  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim()
-  if (envBase) return envBase.replace(/\/+$/,'')
-  // 2) Bouw absolute URL uit host header (werkt op Vercel en lokaal)
-  const host = req?.headers?.['x-forwarded-host'] || req?.headers?.host
-  const proto = (req?.headers?.['x-forwarded-proto'] || 'https') as string
-  if (host) return `${proto}://${host}`
-  // 3) Fallback voor local dev
-  return 'http://localhost:3000'
-}
-
-async function fetchJSON<T>(url: string, init: RequestInit = {}, retries = 2, timeoutMs = 9000): Promise<T> {
-  let lastErr: unknown
-  for (let a = 0; a <= retries; a++) {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-    try {
-      const r = await fetch(url, {
-        ...init,
-        signal: ctrl.signal,
-        headers: {
-          accept: 'application/json',
-          ...(init.headers || {}),
-        },
-        cache: 'no-store',
-      })
-      clearTimeout(timer)
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      return (await r.json()) as T
-    } catch (e) {
-      clearTimeout(timer)
-      lastErr = e
-      if (a === retries) break
-      await new Promise(res => setTimeout(res, 300 * (a + 1))) // 300ms, 600ms
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('fetch failed')
-}
-
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
-  const sym = String(ctx.params?.symbol || '').toUpperCase()
-  if (!sym) {
-    return { notFound: true }
-  }
-
-  const base = resolveBaseURL(ctx.req)
-  const snapURL = `${base}/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}`
-  const scoreURL = `${base}/api/indicators/score/${encodeURIComponent(sym)}`
-
-  // Haal beide in parallel op, met retry/timeout
-  const [snapRes, scoreRes] = await Promise.allSettled([
-    fetchJSON<SnapResp>(snapURL),
-    fetchJSON<ScoreResp>(scoreURL),
-  ])
-
-  const snap = snapRes.status === 'fulfilled' ? snapRes.value : { items: [] as SnapItem[] }
-  const scoreData = scoreRes.status === 'fulfilled' ? scoreRes.value : { symbol: sym, score: null as number | null }
-
-  // Normaliseer en bereken lokale fallback score voor instant view
-  const itemNorm = normalizeAndDecorate(snap?.items?.[0])
-  const fallbackScore = computeLocalScoreFromStatuses(itemNorm)
-
-  return {
-    props: {
-      sym,
-      initialSnap: snap,
-      initialScoreData: scoreData,
-      initialFallbackScore: fallbackScore ?? 50,
-      now: Date.now(),
-    },
-  }
-}
-
-/** ---------- Page component ---------- **/
-
-type Props = {
-  sym: string
-  initialSnap: SnapResp
-  initialScoreData: ScoreResp
-  initialFallbackScore: number
-  now: number
-}
-
-const swrFetcher = async <T,>(url: string): Promise<T> => {
-  // zelfde retry/timeout als SSR
-  return fetchJSON<T>(url, {}, 2, 9000)
-}
-
-export default function StockDetail(props: Props) {
+export default function StockDetail() {
   const router = useRouter()
-  const sym = (props?.sym || String(router.query.symbol || '')).toUpperCase()
+  const sym = String(router.query.symbol || '').toUpperCase()
 
-  // 1) Snapshot (1 symbool) — met fallbackData zodat FCP direct gevuld is
+  // 1) Snapshot voor 1 symbool (zoals SP500 detail)
   const { data: snap, error: snapErr } = useSWR<SnapResp>(
     sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
-    swrFetcher,
-    {
-      refreshInterval: 30_000,
-      revalidateOnFocus: false,
-      keepPreviousData: true,
-      dedupingInterval: 10_000,
-      fallbackData: props.initialSnap,
-    }
+    fetcher,
+    { refreshInterval: 30_000, revalidateOnFocus: false }
   )
   const itemNorm = normalizeAndDecorate(snap?.items?.[0])
 
-  // 2) Centrale score (lichtgewicht) — met fallbackData
+  // 2) Centrale score (lichtgewicht)
   const { data: serverScoreData } = useSWR<ScoreResp>(
     sym ? `/api/indicators/score/${encodeURIComponent(sym)}` : null,
-    swrFetcher,
-    {
-      refreshInterval: 60_000,
-      revalidateOnFocus: false,
-      keepPreviousData: true,
-      dedupingInterval: 10_000,
-      fallbackData: props.initialScoreData,
-    }
+    fetcher,
+    { refreshInterval: 60_000, revalidateOnFocus: false }
   )
   const serverScore = Number.isFinite(serverScoreData?.score as number)
     ? Math.round(Number(serverScoreData!.score))
     : null
 
   // 3) Combineer lokale en server score
-  const fallbackScore = computeLocalScoreFromStatuses(itemNorm) ?? props.initialFallbackScore
+  const fallbackScore = computeLocalScoreFromStatuses(itemNorm)
   const score = serverScore ?? fallbackScore ?? 50
   const scoreStatus: Advice = statusFromScore(score)
 
@@ -240,7 +141,7 @@ export default function StockDetail(props: Props) {
           <div className="mt-1 text-sm text-white/60">
             Overall signal: <span className="font-medium">{scoreStatus}</span>
             {serverScore == null && fallbackScore != null && (
-              <span className="ml-2 opacity-70">(instant via local calc)</span>
+              <span className="ml-2 opacity-70">(preview via local calc)</span>
             )}
           </div>
         </section>
