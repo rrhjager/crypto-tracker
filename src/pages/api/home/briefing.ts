@@ -48,21 +48,17 @@ async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
 }
 
 function sanitizePlain(s: string): string {
-  // verwijder markdown en bullets/labels
   let out = (s || '')
     .replace(/\*\*/g, '')
     .replace(/\*/g, '')
     .replace(/^#+\s*/gm, '')
-    .replace(/^\s*[-•]\s+/gm, '') // verwijder list markers
+    .replace(/^\s*[-•]\s+/gm, '')
     .replace(/\r/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-
-  // kleine safety: geen sectiekoppen of "Bullet x"
-  out = out.replace(/^\s*(bullet|point)\s*\d+\s*[:.-]?\s*/gim, '')
-           .replace(/\b(Bullet|Point)\s*\d+\b/g, '')
-  if (out.length > 1400) out = out.slice(0, 1400)
+  out = out.replace(/\b(Bullet|Point)\s*\d+\b/g, '')
+  if (out.length > 900) out = out.slice(0, 900)
   return out
 }
 
@@ -74,30 +70,28 @@ export default async function handler(
     const apiKey = process.env.OPENAI_API_KEY
     if (!apiKey) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' })
 
-    // Lichte context ophalen (parallel)
     const [newsCrypto, newsEq, newsMacro, congress] = await Promise.all([
       fetchNews(req, 'crypto OR bitcoin OR ethereum OR blockchain'),
       fetchNews(req, 'equities OR stocks OR stock market OR earnings'),
-      // breder macro-/regulatie-/geopolitiek spectrum
-      fetchNews(req, 'CPI OR inflation OR FOMC OR rate decision OR payrolls OR PMI OR SEC OR ETF OR sanctions OR geopolitics OR guidance'),
+      fetchNews(req, 'CPI OR inflation OR FOMC OR rate decision OR payrolls OR PMI OR SEC OR ETF OR geopolitics OR sanctions OR oil OR USD'),
       fetchCongress(req),
     ])
 
     const todayISO = new Date().toISOString().slice(0, 10)
 
-    // ——— LLM prompt ———
-    // Één lopend verhaal; vaste volgorde; geen bullets/labels/markdown.
     const system = [
-      'You are a markets analyst. Write a concise intraday briefing for active investors.',
-      'Plain text only (no markdown, no lists, no asterisks).',
-      'Length target: about 120–170 words.',
-      'Strict section ORDER inside a single flowing narrative:',
-      '1) Start with the most consequential scheduled or regulatory decisions and macro catalysts expected TODAY (e.g., CPI, FOMC, payrolls, major policy, ETF/SEC items, key guidance).',
-      '2) Then cover crypto: key drivers or themes for today inferred from the provided crypto headlines.',
-      '3) Then cover equities: what to watch in stocks today based on the provided headlines (earnings, sectors, factors).',
-      '4) Then briefly mention the largest BUY in US Congress trading from YESTERDAY if present (name/ticker) — if none, keep this part minimal or note absence without inventing.',
-      '5) End with a single sentence starting with "Takeaway:" summarizing likely posture (risk-on/off) and what to monitor next.',
-      'Use only the provided items; do not invent or assume facts beyond them.'
+      'You are a professional markets analyst.',
+      'Write a short, flowing intraday briefing (no bullets, no markdown, plain text only).',
+      'Length target: 90–120 words.',
+      'Use only provided data. Do not invent facts.',
+      'Structure clearly in this order inside one paragraph:',
+      '1) Summarize key macro or regulatory decisions expected TODAY (e.g., CPI, FOMC, ETF, SEC, major policy).',
+      'Briefly state how markets are likely to react (positive, negative, or cautious).',
+      '2) Then cover crypto: what is moving and likely sentiment based on the crypto headlines.',
+      '3) Then cover equities: main themes and expected market tone from equity headlines.',
+      '4) Then note if any major US Congress BUY trades occurred yesterday (include name/ticker).',
+      '5) End with "Takeaway:" summarizing expected mood (risk-on/off) and what to watch next.',
+      'Keep it factual, concise, and focused on implications.'
     ].join(' ')
 
     const userPayload = {
@@ -117,8 +111,8 @@ export default async function handler(
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        temperature: 0.25,
-        max_tokens: 380,
+        temperature: 0.3,
+        max_tokens: 350,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: `Use this JSON as your only source:\n${JSON.stringify(userPayload)}` }
