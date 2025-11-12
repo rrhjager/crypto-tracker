@@ -49,16 +49,14 @@ async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
 
 function sanitizePlain(s: string): string {
   let out = (s || '')
-    .replace(/\*\*/g, '')
-    .replace(/\*/g, '')
+    .replace(/\*\*/g, '**') // keep bold
     .replace(/^#+\s*/gm, '')
-    .replace(/^\s*[-•]\s+/gm, '')
+    .replace(/^\s*[-•]\s+/gm, '• ')
     .replace(/\r/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  out = out.replace(/\b(Bullet|Point)\s*\d+\b/g, '')
-  if (out.length > 800) out = out.slice(0, 800)
+  if (out.length > 900) out = out.slice(0, 900)
   return out
 }
 
@@ -81,12 +79,12 @@ export default async function handler(
 
     const system = [
       'You are a professional markets analyst.',
-      'Write a very concise investor briefing in 3–4 short bullet points (max 150 words total).',
-      'Each bullet must start with "• **Topic:** ..." where the topic is bold (like Macro, Crypto, Equities, Congress).',
-      'Each bullet should describe the event/news and end with what it likely means for equities and crypto markets (positive, negative, neutral).',
-      'Be factual, specific, and analytical. No generic advice, no repetition.',
-      'Conclude with one line starting with "Takeaway:" summarizing the short-term outlook.',
-      'Format cleanly as Markdown with bullets and bold topic names.'
+      'Write a concise investor briefing in 3–4 short bullet points (under 100 words total).',
+      'Each bullet must start with "• **Topic:** ..." — the topic name is bold (like Macro, Crypto, Equities, Congress).',
+      'Leave one blank line between each bullet point for readability.',
+      'Each bullet should describe the event/news AND end with what it likely means for equities and crypto markets (positive, negative, neutral).',
+      'End with a single line starting with "Takeaway:" that sums up the short-term market outlook.',
+      'Format must render cleanly in Markdown.'
     ].join(' ')
 
     const userPayload = {
@@ -107,7 +105,7 @@ export default async function handler(
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         temperature: 0.3,
-        max_tokens: 300,
+        max_tokens: 320,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: `Use this JSON as your only data source:\n${JSON.stringify(userPayload)}` }
