@@ -48,22 +48,21 @@ async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
 }
 
 function sanitizePlain(s: string): string {
-  // verwijder markdown bold/italic/headings/listsymbolen en dubbele spaties
+  // verwijder markdown en bullets/labels
   let out = (s || '')
     .replace(/\*\*/g, '')
     .replace(/\*/g, '')
     .replace(/^#+\s*/gm, '')
-    .replace(/^\s*-\s+/gm, '• ')
-    .replace(/^\s*\u2022\s*/gm, '• ')
+    .replace(/^\s*[-•]\s+/gm, '') // verwijder list markers
     .replace(/\r/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
-  // veiligheidsnet: zorg dat bullets beginnen met "• "
-  out = out.replace(/^\s*(?:\-|•)?\s*(?=What|Biggest|Other)/m, '• ')
-  // max ~1200 chars om te voorkomen dat het uit de hand loopt
-  if (out.length > 1200) out = out.slice(0, 1200)
+  // kleine safety: geen sectiekoppen of "Bullet x"
+  out = out.replace(/^\s*(bullet|point)\s*\d+\s*[:.-]?\s*/gim, '')
+           .replace(/\b(Bullet|Point)\s*\d+\b/g, '')
+  if (out.length > 1400) out = out.slice(0, 1400)
   return out
 }
 
@@ -75,30 +74,30 @@ export default async function handler(
     const apiKey = process.env.OPENAI_API_KEY
     if (!apiKey) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' })
 
-    // Haal lichtgewicht context op
+    // Lichte context ophalen (parallel)
     const [newsCrypto, newsEq, newsMacro, congress] = await Promise.all([
       fetchNews(req, 'crypto OR bitcoin OR ethereum OR blockchain'),
       fetchNews(req, 'equities OR stocks OR stock market OR earnings'),
-      // extra query’s gericht op macro/kalender/regulatie/geopolitiek (buiten je eigen site)
-      fetchNews(req, 'CPI OR inflation OR FOMC OR rate decision OR payrolls OR PMI OR SEC OR ETF OR sanctions OR geopolitics'),
+      // breder macro-/regulatie-/geopolitiek spectrum
+      fetchNews(req, 'CPI OR inflation OR FOMC OR rate decision OR payrolls OR PMI OR SEC OR ETF OR sanctions OR geopolitics OR guidance'),
       fetchCongress(req),
     ])
 
     const todayISO = new Date().toISOString().slice(0, 10)
 
     // ——— LLM prompt ———
-    // Doel: 3 bullets + korte takeaway, geen markdown, geen sterretjes.
+    // Één lopend verhaal; vaste volgorde; geen bullets/labels/markdown.
     const system = [
-      'You are a markets analyst writing a concise intraday briefing for active investors.',
-      'Write in plain text only (no markdown, no asterisks).',
-      'Keep it tight (~120–150 words).',
-      'Output format:',
-      '• Bullet 1: What to watch TODAY (macro events/earnings/known catalysts).',
-      '• Bullet 2: Biggest BUY in US Congress trades YESTERDAY (if any); otherwise skip this bullet entirely.',
-      '• Bullet 3: Other key risks/opportunities likely to impact equities or crypto today (regulation, ETFs, geopolitics, liquidity, positioning).',
-      'Then a single-sentence line starting with "Takeaway:" on the likely market posture (risk-on/off, volatility, defensives vs cyclicals).',
-      'Use only the provided items; do not invent facts. Prefer specific tickers/events when present.',
-      'Do not include any asterisks or markdown symbols.'
+      'You are a markets analyst. Write a concise intraday briefing for active investors.',
+      'Plain text only (no markdown, no lists, no asterisks).',
+      'Length target: about 120–170 words.',
+      'Strict section ORDER inside a single flowing narrative:',
+      '1) Start with the most consequential scheduled or regulatory decisions and macro catalysts expected TODAY (e.g., CPI, FOMC, payrolls, major policy, ETF/SEC items, key guidance).',
+      '2) Then cover crypto: key drivers or themes for today inferred from the provided crypto headlines.',
+      '3) Then cover equities: what to watch in stocks today based on the provided headlines (earnings, sectors, factors).',
+      '4) Then briefly mention the largest BUY in US Congress trading from YESTERDAY if present (name/ticker) — if none, keep this part minimal or note absence without inventing.',
+      '5) End with a single sentence starting with "Takeaway:" summarizing likely posture (risk-on/off) and what to monitor next.',
+      'Use only the provided items; do not invent or assume facts beyond them.'
     ].join(' ')
 
     const userPayload = {
@@ -119,6 +118,7 @@ export default async function handler(
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         temperature: 0.25,
+        max_tokens: 380,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: `Use this JSON as your only source:\n${JSON.stringify(userPayload)}` }
