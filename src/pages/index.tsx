@@ -22,6 +22,7 @@ import { SENSEX } from '@/lib/sensex'
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
 const CARD_CONTENT_H = 'h-[280px]'
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
+const CRYPTO_BATCH = 15 // ~50 coins → 4 requests
 
 /* ---------------- types ---------------- */
 type Advice = 'BUY' | 'HOLD' | 'SELL'
@@ -544,7 +545,7 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag])
 
   /* =======================
-     CRYPTO — defensief zoals eerder
+     CRYPTO — snelle bulk-batches + SSR skip
      ======================= */
 
   const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
@@ -561,49 +562,91 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    if (coinTopBuy.length && coinTopSell.length) return
+    // ⛔ Als SSR/ISR snapshot al crypto lijsten heeft, niets client-side doen
+    if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
+      setLoadingCoin(false)
+      return
+    }
+    if (!coinTopBuy.length || !coinTopSell.length) setLoadingCoin(true)
+
     let aborted = false
-    ;(async () => {
+    type BatchResp = { results?: IndResp[] }
+
+    async function fetchBatch(symbols: string[], v: number): Promise<BatchResp> {
+      const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(symbols.join(','))}&v=${v}`
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return (await r.json()) as BatchResp
+    }
+
+    (async () => {
       try {
-        setLoadingCoin(true); setCoinErr(null)
-        const batchScores = await pool(pairs, 8, async ({ c, pair }) => {
-          async function tryFetch(sym: string) {
-            const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(sym)}&v=${minuteTag}`
-            const r = await fetch(url, { cache: 'no-store' })
-            if (!r.ok) throw new Error(`HTTP ${r.status}`)
-            const j = await r.json() as { results?: IndResp[] }
-            return j
-          }
+        setCoinErr(null)
+        const syms = pairs.map(p => p.pair)
+
+        // splits in batches van CRYPTO_BATCH
+        const batches: string[][] = []
+        for (let i = 0; i < syms.length; i += CRYPTO_BATCH) {
+          batches.push(syms.slice(i, i + CRYPTO_BATCH))
+        }
+
+        // parallel met pool(4); bij lege result probeer lowercase fallback
+        const batchResults = await pool(batches, 4, async (chunk) => {
           try {
-            let j = await tryFetch(pair)
-            if (!j?.results?.length) {
-              const alt = pair.toLowerCase()
-              if (alt !== pair) {
-                try { j = await tryFetch(alt) } catch {}
-              }
+            const j = await fetchBatch(chunk, minuteTag)
+            if (j?.results?.length) return j
+            const lower = chunk.map(s => s.toLowerCase())
+            if (lower.join(',') !== chunk.join(',')) {
+              try { return await fetchBatch(lower, minuteTag) } catch {}
             }
-            const ind = (j?.results || [])[0]
-            const { score } = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
-            try { localStorage.setItem(`ta:${pair}`, JSON.stringify({ score, ts: Date.now() })) } catch {}
-            return { symbol: c.symbol, name: c.name, score }
+            return { results: [] }
           } catch {
-            try {
-              const raw = localStorage.getItem(`ta:${pair}`)
-              if (raw) {
-                const jj = JSON.parse(raw) as { score?: number; ts?: number }
-                if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts||0) < TTL_MS)) {
-                  return { symbol: c.symbol, name: c.name, score: Math.round(Number(jj.score)) }
-                }
-              }
-            } catch {}
-            return { symbol: c.symbol, name: c.name, score: (null as any) }
+            return { results: [] }
           }
         })
-        const rows = batchScores.filter(r => Number.isFinite(r.score as number)) as { symbol:string; name:string; score:number }[]
+
+        // map: pair -> score
+        const scoreMap = new Map<string, number>()
+        for (const br of batchResults) {
+          for (const ind of (br.results || [])) {
+            const { score } = computeScoreStatus({
+              ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
+            } as any)
+            if (Number.isFinite(score)) {
+              const s = Math.round(Number(score))
+              scoreMap.set(ind.symbol, s)
+              try { localStorage.setItem(`ta:${ind.symbol}`, JSON.stringify({ score: s, ts: Date.now() })) } catch {}
+            }
+          }
+        }
+
+        // fallback naar localStorage voor missende symbolen
+        for (const { pair } of pairs) {
+          if (scoreMap.has(pair)) continue
+          try {
+            const raw = localStorage.getItem(`ta:${pair}`)
+            if (raw) {
+              const jj = JSON.parse(raw) as { score?: number; ts?: number }
+              if (Number.isFinite(jj?.score) && (Date.now() - (jj.ts || 0) < TTL_MS)) {
+                scoreMap.set(pair, Math.round(Number(jj.score)))
+              }
+            }
+          } catch {}
+        }
+
+        // rows met Yahoo symbols (c.symbol)
+        const rows = pairs
+          .map(({ c, pair }) => {
+            const s = scoreMap.get(pair)
+            return Number.isFinite(s) ? { symbol: c.symbol, name: c.name, score: s as number } : null
+          })
+          .filter(Boolean) as { symbol: string; name: string; score: number }[]
+
         const sortedDesc = [...rows].sort((a,b)=> b.score - a.score)
         const sortedAsc  = [...rows].sort((a,b)=> a.score - b.score)
         const buys  = sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
         const sells = sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
         if (!aborted) {
           setCoinTopBuy(buys); setCoinTopSell(sells)
           setCache('home:coin:topBuy',  buys); setCache('home:coin:topSell', sells)
@@ -614,8 +657,10 @@ export default function Homepage(props: HomeProps) {
         if (!aborted) setLoadingCoin(false)
       }
     })()
+
     return () => { aborted = true }
-  }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairs, minuteTag])
 
   /* ========= Academy (fallback) ========= */
   type AcademyItem = { title: string; href: string }
