@@ -18,6 +18,9 @@ import { NIKKEI225 } from '@/lib/nikkei225'
 import { HANGSENG } from '@/lib/hangseng'
 import { SENSEX } from '@/lib/sensex'
 
+// ⬇️ centrale coin-lijst (basis-symbool + binance pair)
+import { COINS as BASE_COINS } from '@/lib/coins'
+
 /* ---------------- config ---------------- */
 const TTL_MS = 5 * 60 * 1000 // 5 min cache
 const CARD_CONTENT_H = 'h-[280px]'
@@ -109,7 +112,7 @@ type IndResp = {
 // SYM → SYMUSDT (stablecoins overslaan)
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
+  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
@@ -196,60 +199,6 @@ function constituentsForMarket(label: MarketLabel) {
     return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
   return STATIC_CONS[label] || []
 }
-
-/* ------- crypto universum (Yahoo tickers) — TOP 50 ------- */
-const COINS: { symbol: string; name: string }[] = [
-  { symbol: 'BTC-USD',  name: 'Bitcoin' },
-  { symbol: 'ETH-USD',  name: 'Ethereum' },
-  { symbol: 'BNB-USD',  name: 'BNB' },
-  { symbol: 'SOL-USD',  name: 'Solana' },
-  { symbol: 'XRP-USD',  name: 'XRP' },
-  { symbol: 'ADA-USD',  name: 'Cardano' },
-  { symbol: 'DOGE-USD', name: 'Dogecoin' },
-  { symbol: 'TON-USD',  name: 'Toncoin' },
-  { symbol: 'TRX-USD',  name: 'TRON' },
-  { symbol: 'AVAX-USD', name: 'Avalanche' },
-  { symbol: 'DOT-USD',  name: 'Polkadot' },
-  { symbol: 'LINK-USD', name: 'Chainlink' },
-  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
-  { symbol: 'LTC-USD',  name: 'Litecoin' },
-  { symbol: 'MATIC-USD', name: 'Polygon' },
-  { symbol: 'XLM-USD',  name: 'Stellar' },
-  { symbol: 'NEAR-USD', name: 'NEAR' },
-  { symbol: 'ICP-USD',  name: 'Internet Computer' },
-  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
-  { symbol: 'FIL-USD',  name: 'Filecoin' },
-  { symbol: 'XMR-USD',  name: 'Monero' },
-  { symbol: 'APT-USD',  name: 'Aptos' },
-  { symbol: 'ARB-USD',  name: 'Arbitrum' },
-  { symbol: 'OP-USD',   name: 'Optimism' },
-  { symbol: 'SUI-USD',  name: 'Sui' },
-  { symbol: 'HBAR-USD', name: 'Hedera' },
-  { symbol: 'ALGO-USD', name: 'Algorand' },
-  { symbol: 'VET-USD',  name: 'VeChain' },
-  { symbol: 'EGLD-USD', name: 'MultiversX' },
-  { symbol: 'AAVE-USD', name: 'Aave' },
-  { symbol: 'INJ-USD',  name: 'Injective' },
-  { symbol: 'MKR-USD',  name: 'Maker' },
-  { symbol: 'RUNE-USD', name: 'THORChain' },
-  { symbol: 'IMX-USD',  name: 'Immutable' },
-  { symbol: 'FLOW-USD', name: 'Flow' },
-  { symbol: 'SAND-USD', name: 'The Sandbox' },
-  { symbol: 'MANA-USD', name: 'Decentraland' },
-  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
-  { symbol: 'QNT-USD',  name: 'Quant' },
-  { symbol: 'GRT-USD',  name: 'The Graph' },
-  { symbol: 'CHZ-USD',  name: 'Chiliz' },
-  { symbol: 'CRV-USD',  name: 'Curve DAO' },
-  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
-  { symbol: 'FTM-USD',  name: 'Fantom' },
-  { symbol: 'XTZ-USD',  name: 'Tezos' },
-  { symbol: 'LDO-USD',  name: 'Lido DAO' },
-  { symbol: 'SNX-USD',  name: 'Synthetix' },
-  { symbol: 'STX-USD',  name: 'Stacks' },
-  { symbol: 'AR-USD',   name: 'Arweave' },
-  { symbol: 'GMX-USD',  name: 'GMX' },
-]
 
 /* ---------------- small UI primitives ---------------- */
 const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
@@ -546,19 +495,19 @@ export default function Homepage(props: HomeProps) {
 
   /* =======================
      CRYPTO — snelle bulk-batches + SSR skip
+     Alleen coins uit lib/coins.ts
      ======================= */
 
-  const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
+  // Bouw lijst (basis-symbool + binance pair). Als pair ontbreekt, maak 'm afgeleid.
   const pairs = useMemo(() => {
-    return COINS.map(c => {
-      const ov = PAIR_OVERRIDES[c.symbol]
-      if (ov) return { c, pair: ov }
-      const base = c.symbol.replace('-USD', '')
-      const p1 = toBinancePair(base)
-      if (p1) return { c, pair: p1 }
-      const p2 = toBinancePair(c.symbol)
-      return { c, pair: p2 || '' }
-    }).filter(x => !!x.pair) as { c:{symbol:string; name:string}; pair:string }[]
+    return BASE_COINS.map(c => {
+      const base = (c.symbol || '').toUpperCase()
+      const pair =
+        c.pairUSD?.binance ||
+        toBinancePair(base) ||
+        '' // als dit leeg is, filteren we 'm eruit
+      return pair ? { c: { symbol: base, name: c.name }, pair } : null
+    }).filter(Boolean) as { c:{symbol:string; name:string}; pair:string }[]
   }, [])
 
   useEffect(() => {
@@ -634,7 +583,7 @@ export default function Homepage(props: HomeProps) {
           } catch {}
         }
 
-        // rows met Yahoo symbols (c.symbol)
+        // rows met BASIS-symbool (BTC/ETH/...)
         const rows = pairs
           .map(({ c, pair }) => {
             const s = scoreMap.get(pair)

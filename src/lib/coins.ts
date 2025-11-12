@@ -1,17 +1,17 @@
 // src/lib/coins.ts
 export type Coin = {
-  symbol: string;
-  name: string;
-  slug?: string;            // optioneel; default = symbol.toLowerCase()
-  santimentSlug?: string;   // optioneel fallback
+  symbol: string
+  name: string
+  slug?: string           // optioneel; default = symbol.toLowerCase()
+  santimentSlug?: string  // optioneel fallback
   pairUSD: {
-    binance?: string;       // bv. "BTCUSDT"
-  };
-};
+    binance?: string      // bv. "BTCUSDT"
+  }
+}
 
-// Let op: géén stablecoins (USDT/USDC/BUSD/FDUSD/TUSD/DAI).
+// Let op: géén stablecoins (USDT/USDC/BUSD/FDUSD/TUSD/DAI)
 export const COINS: Coin[] = [
-  // Top 10 (je huidige set)
+  // Top 10
   { symbol: "BTC",  name: "Bitcoin",        pairUSD: { binance: "BTCUSDT"  } },
   { symbol: "ETH",  name: "Ethereum",       pairUSD: { binance: "ETHUSDT"  } },
   { symbol: "BNB",  name: "BNB",            pairUSD: { binance: "BNBUSDT"  } },
@@ -67,10 +67,27 @@ export const COINS: Coin[] = [
   { symbol: "AR",   name: "Arweave",          pairUSD: { binance: "ARUSDT"   } },
   { symbol: "ROSE", name: "Oasis Network",    pairUSD: { binance: "ROSEUSDT" } },
   { symbol: "KAVA", name: "Kava",             pairUSD: { binance: "KAVAUSDT" } },
-  { symbol: "EGLD", name: "MultiversX (Elrond)", pairUSD: { binance: "EGLDUSDT" } },
+  { symbol: "EGLD", name: "MultiversX",       pairUSD: { binance: "EGLDUSDT" } },
   { symbol: "XEC",  name: "eCash",            pairUSD: { binance: "XECUSDT"  } },
   { symbol: "IOTA", name: "IOTA",             pairUSD: { binance: "IOTAUSDT" } },
   { symbol: "RUNE", name: "THORChain",        pairUSD: { binance: "RUNEUSDT" } },
   { symbol: "PYTH", name: "Pyth Network",     pairUSD: { binance: "PYTHUSDT" } },
   { symbol: "JUP",  name: "Jupiter",          pairUSD: { binance: "JUPUSDT"  } },
-];
+]
+
+// === Helpers ===
+
+// Snel lookup set (alle symbolen)
+export const COIN_SET = new Set(COINS.map(c => c.symbol.toUpperCase()))
+
+export const isSupportedCoin = (symbol: string) => COIN_SET.has(symbol.toUpperCase())
+
+// Route helper voor de crypto detailpagina
+export const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
+
+// Yahoo Finance symbool (voor APIs die Yahoo gebruiken)
+export const yahooSymbol = (symbol: string) => `${symbol.toUpperCase()}-USD`
+
+// Vind coin-object op symbool
+export const findCoin = (symbol: string) =>
+  COINS.find(c => c.symbol.toUpperCase() === symbol.toUpperCase()) || null
