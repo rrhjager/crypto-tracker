@@ -1,213 +1,233 @@
-// src/pages/api/indicators/snapshot.ts
+// src/pages/api/home/snapshot.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
-import { getYahooDailyOHLC } from '@/lib/providers/quote'
 
 export const config = { runtime: 'nodejs' }
 
-const TTL_SEC = 300
-const REVALIDATE_SEC = 20
-const RANGE: '1y' | '2y' = '1y'
+type Advice = 'BUY' | 'HOLD' | 'SELL'
+type NewsIn = { title: string; link: string; source?: string; pubDate?: string }
+type NewsOut = { title: string; url: string; source?: string; published?: string; image?: string | null }
 
-type Bar = { close?: number; volume?: number }
-type Advice = 'BUY'|'SELL'|'HOLD'
-
-type SnapResp = {
+type SnapItem = {
   symbol: string
-  // prijs & dag
-  price?: number | null
-  change?: number | null
-  changePct?: number | null
-  // ✨ nieuw: 7/30 "dagen" (bars) performance
-  ret7Pct?: number | null
-  ret30Pct?: number | null
-  // indicatoren
-  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?: number | null
-  macd?: { macd: number | null; signal: number | null; hist: number | null }
-  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  // samengestelde score
-  score?: number
+  score?: number | null
 }
 
-type ApiResp = { items: SnapResp[] }
+type IndicatorsSnapshotResp = { items: SnapItem[] }
 
-function normCloses(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.close === 'number' ? b.close : null))
-      .filter((n): n is number => typeof n === 'number')
-  }
-  if (ohlc && Array.isArray(ohlc.closes)) {
-    return (ohlc.closes as any[]).filter((n): n is number => typeof n === 'number')
-  }
-  return []
+type CongressTrade = {
+  person?: string; ticker?: string; side?: 'BUY'|'SELL'|string;
+  amount?: string|number; price?: string|number|null; date?: string; url?: string;
 }
 
-function normVolumes(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.volume === 'number' ? b.volume : null))
-      .filter((n): n is number => typeof n === 'number')
-  }
-  if (ohlc && Array.isArray(ohlc.volumes)) {
-    return (ohlc.volumes as any[]).filter((n): n is number => typeof n === 'number')
-  }
-  return []
+type ScoredCoin = { symbol: string; name: string; score: number; signal: Advice }
+
+type HomeSnapshot = {
+  newsCrypto: NewsOut[];
+  newsEq: NewsOut[];
+  // equities topBuy/topSell laten we leeg; homepage rekent die exact client-side per markt
+  topBuy: any[];
+  topSell: any[];
+  coinTopBuy: ScoredCoin[];
+  coinTopSell: ScoredCoin[];
+  academy: { title: string; href: string }[];
+  congress: CongressTrade[];
 }
 
-const sma = (arr: number[], p: number): number | null => {
-  if (!Array.isArray(arr) || arr.length < p) return null
-  const s = arr.slice(-p)
-  return s.reduce((a, b) => a + b, 0) / p
+const TTL_S = 300
+const CRYPTO_BATCH = 25
+
+// Yahoo-crypto universum (zelfde als op de homepage)
+const COINS: { symbol: string; name: string }[] = [
+  { symbol: 'BTC-USD',  name: 'Bitcoin' },
+  { symbol: 'ETH-USD',  name: 'Ethereum' },
+  { symbol: 'BNB-USD',  name: 'BNB' },
+  { symbol: 'SOL-USD',  name: 'Solana' },
+  { symbol: 'XRP-USD',  name: 'XRP' },
+  { symbol: 'ADA-USD',  name: 'Cardano' },
+  { symbol: 'DOGE-USD', name: 'Dogecoin' },
+  { symbol: 'TON-USD',  name: 'Toncoin' },
+  { symbol: 'TRX-USD',  name: 'TRON' },
+  { symbol: 'AVAX-USD', name: 'Avalanche' },
+  { symbol: 'DOT-USD',  name: 'Polkadot' },
+  { symbol: 'LINK-USD', name: 'Chainlink' },
+  { symbol: 'BCH-USD',  name: 'Bitcoin Cash' },
+  { symbol: 'LTC-USD',  name: 'Litecoin' },
+  { symbol: 'MATIC-USD', name: 'Polygon' },
+  { symbol: 'XLM-USD',  name: 'Stellar' },
+  { symbol: 'NEAR-USD', name: 'NEAR' },
+  { symbol: 'ICP-USD',  name: 'Internet Computer' },
+  { symbol: 'ETC-USD',  name: 'Ethereum Classic' },
+  { symbol: 'FIL-USD',  name: 'Filecoin' },
+  { symbol: 'XMR-USD',  name: 'Monero' },
+  { symbol: 'APT-USD',  name: 'Aptos' },
+  { symbol: 'ARB-USD',  name: 'Arbitrum' },
+  { symbol: 'OP-USD',   name: 'Optimism' },
+  { symbol: 'SUI-USD',  name: 'Sui' },
+  { symbol: 'HBAR-USD', name: 'Hedera' },
+  { symbol: 'ALGO-USD', name: 'Algorand' },
+  { symbol: 'VET-USD',  name: 'VeChain' },
+  { symbol: 'EGLD-USD', name: 'MultiversX' },
+  { symbol: 'AAVE-USD', name: 'Aave' },
+  { symbol: 'INJ-USD',  name: 'Injective' },
+  { symbol: 'MKR-USD',  name: 'Maker' },
+  { symbol: 'RUNE-USD', name: 'THORChain' },
+  { symbol: 'IMX-USD',  name: 'Immutable' },
+  { symbol: 'FLOW-USD', name: 'Flow' },
+  { symbol: 'SAND-USD', name: 'The Sandbox' },
+  { symbol: 'MANA-USD', name: 'Decentraland' },
+  { symbol: 'AXS-USD',  name: 'Axie Infinity' },
+  { symbol: 'QNT-USD',  name: 'Quant' },
+  { symbol: 'GRT-USD',  name: 'The Graph' },
+  { symbol: 'CHZ-USD',  name: 'Chiliz' },
+  { symbol: 'CRV-USD',  name: 'Curve DAO' },
+  { symbol: 'ENJ-USD',  name: 'Enjin Coin' },
+  { symbol: 'FTM-USD',  name: 'Fantom' },
+  { symbol: 'XTZ-USD',  name: 'Tezos' },
+  { symbol: 'LDO-USD',  name: 'Lido DAO' },
+  { symbol: 'SNX-USD',  name: 'Synthetix' },
+  { symbol: 'STX-USD',  name: 'Stacks' },
+  { symbol: 'AR-USD',   name: 'Arweave' },
+  { symbol: 'GMX-USD',  name: 'GMX' },
+]
+
+// Small helpers
+const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
+
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
-function rsiWilder(closes: number[], period = 14): number | null {
-  if (closes.length < period + 1) return null
-  let gains = 0, losses = 0
-  for (let i = 1; i <= period; i++) {
-    const d = closes[i] - closes[i - 1]
-    if (d >= 0) gains += d
-    else losses -= d
-  }
-  let avgGain = gains / period
-  let avgLoss = losses / period
-  for (let i = period + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1]
-    const g = d > 0 ? d : 0
-    const l = d < 0 ? -d : 0
-    avgGain = (avgGain * (period - 1) + g) / period
-    avgLoss = (avgLoss * (period - 1) + l) / period
-  }
-  if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  const v = 100 - 100 / (1 + rs)
-  return Number.isFinite(v) ? v : null
+function baseUrl(req: NextApiRequest) {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '')
+  if (envBase) return envBase
+  const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
+  const host = req.headers.host
+  return `${proto}://${host}`
 }
 
-function emaLast(arr: number[], period: number): number | null {
-  if (arr.length < period) return null
-  const k = 2 / (period + 1)
-  let ema = arr.slice(0, period).reduce((a, b) => a + b, 0) / period
-  for (let i = period; i < arr.length; i++) ema = arr[i] * k + ema * (1 - k)
-  return ema
-}
-
-function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
-  if (arr.length < slow + signal) return { macd: null, signal: null, hist: null }
-  const series: number[] = []
-  for (let i = slow; i <= arr.length; i++) {
-    const slice = arr.slice(0, i)
-    const f = emaLast(slice, fast)
-    const s = emaLast(slice, slow)
-    if (f != null && s != null) series.push(f - s)
-  }
-  if (series.length < signal) return { macd: null, signal: null, hist: null }
-  const m = series[series.length - 1]
-  const sig = emaLast(series, signal)
-  const h = sig != null ? m - sig : null
-  return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
-}
-
-// score helpers (zelfde weging)
-const adv = (v:number|null, lo:number, hi:number): Advice =>
-  v==null?'HOLD':(v<lo?'SELL':v>hi?'BUY':'HOLD')
-const scoreFrom = (ma:Advice, macd:Advice, rsi:Advice, vol:Advice) => {
-  const pts = (s:Advice)=> s==='BUY'?2:s==='SELL'?-2:0
-  const n = (p:number)=> (p+2)/4
-  const W_MA=.40, W_MACD=.30, W_RSI=.20, W_VOL=.10
-  const agg = W_MA*n(pts(ma)) + W_MACD*n(pts(macd)) + W_RSI*n(pts(rsi)) + W_VOL*n(pts(vol))
-  return Math.round(Math.max(0, Math.min(1, agg)) * 100)
-}
-
-async function computeOne(symbol: string): Promise<SnapResp> {
-  const ohlc = await getYahooDailyOHLC(symbol, RANGE)
-  const closes = normCloses(ohlc)
-  const vols = normVolumes(ohlc)
-
-  const ma50 = sma(closes, 50)
-  const ma200 = sma(closes, 200)
-  const maStatus: Advice | undefined =
-    typeof ma50 === 'number' && typeof ma200 === 'number'
-      ? (ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD')
-      : undefined
-
-  const rsi = rsiWilder(closes, 14)
-  const { macd, signal, hist } = macdLast(closes, 12, 26, 9)
-
-  const volume = vols.length ? vols[vols.length - 1] : null
-  const last20 = vols.slice(-20)
-  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
-  const ratio =
-    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
-      ? volume / avg20d
-      : null
-
-  // prijs/dag
-  const last = closes.length ? closes[closes.length - 1] : null
-  const prev = closes.length > 1 ? closes[closes.length - 2] : null
-  const change = (last != null && prev != null) ? last - prev : null
-  const changePct = (change != null && prev) ? (change / prev * 100) : null
-
-  // ✨ 7/30 bars terug (praktisch ≈ 7/30 dagen trading)
-  const pctFromBars = (n:number) =>
-    closes.length > n ? ((closes[closes.length-1] / closes[closes.length-1-n]) - 1) * 100 : null
-  const ret7Pct  = pctFromBars(7)
-  const ret30Pct = pctFromBars(30)
-
-  // score
-  const macdStatus: Advice = (macd!=null && signal!=null)
-    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
-    : 'HOLD'
-  const rsiStatus: Advice = rsi==null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
-  const volStatus: Advice = adv(ratio, 0.8, 1.2)
-  const score = scoreFrom(maStatus ?? 'HOLD', macdStatus, rsiStatus, volStatus)
-
-  return {
-    symbol,
-    price: last ?? null,
-    change,
-    changePct,
-    ret7Pct,
-    ret30Pct,
-    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
-    rsi: rsi ?? null,
-    macd: { macd: macd ?? null, signal: signal ?? null, hist: hist ?? null },
-    volume: { volume: volume ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null },
-    score,
-  }
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResp | { error: string }>) {
+/** News via eigen Google endpoint */
+async function fetchNews(req: NextApiRequest, query: string): Promise<NewsOut[]> {
+  const url = `${baseUrl(req)}/api/news/google?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`
   try {
-    const listRaw = (req.query.symbols ?? req.query.symbol ?? '').toString().trim()
-    if (!listRaw) return res.status(400).json({ error: 'Missing symbol(s)' })
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) return []
+    const j = await r.json() as { items?: NewsIn[] }
+    return (j.items || []).slice(0, 6).map((x) => ({
+      title: x.title || '',
+      url: (x as any).link,
+      source: x.source || '',
+      published: x.pubDate || '',
+      image: null,
+    }))
+  } catch { return [] }
+}
 
-    const symbols = listRaw
-      .split(',')
-      .map(s => s.trim().toUpperCase())
-      .filter(Boolean)
+/** Academy */
+async function fetchAcademy(req: NextApiRequest) {
+  try {
+    const r = await fetch(`${baseUrl(req)}/api/academy/list`, { cache: 'no-store' })
+    if (!r.ok) return []
+    const j = await r.json() as { items?: { title: string; href: string }[] }
+    return (j.items || []).slice(0, 8)
+  } catch { return [] }
+}
 
-    if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
+/** Congress */
+async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
+  try {
+    const r = await fetch(`${baseUrl(req)}/api/market/congress?limit=30`, { cache: 'no-store' })
+    if (!r.ok) return []
+    const j = await r.json() as { items?: any[] }
+    const arr = Array.isArray(j?.items) ? j.items : []
+    const toISO = (raw?: string|null) => {
+      if (!raw) return ''
+      if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw)) return raw.slice(0, 10)
+      const ts = Date.parse(raw); return Number.isNaN(ts) ? '' : new Date(ts).toISOString().slice(0, 10)
+    }
+    const norm: CongressTrade[] = arr.map((x: any) => ({
+      person: x.person || '', ticker: x.ticker || '', side: String(x.side || '').toUpperCase(),
+      amount: x.amount || '', price: x.price ?? null, date: x.publishedISO || x.tradedISO || toISO(x.published || x.traded || x.date) || '', url: x.url || ''
+    }))
+    norm.sort((a,b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0))
+    return norm
+  } catch { return [] }
+}
 
-    const items = await Promise.all(
-      symbols.map(async (sym) => {
-        const key = `ind:snapshot:${sym}:${RANGE}`
-        const snapKey = `ind:snap:all:${sym}`
-        const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-          const v = await computeOne(sym)
-          try { await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC) } catch {}
-          return v
-        })
-        return data ?? { symbol: sym, ma: { ma50: null, ma200: null }, rsi: null, macd: { macd: null, signal: null, hist: null }, volume: { volume: null, avg20d: null, ratio: null } }
-      })
-    )
+/** Server-side CRYPTO toplists via jouw eigen /api/indicators/snapshot (Yahoo symbols) */
+async function computeCryptoServerSide(req: NextApiRequest) {
+  const symbols = COINS.map(c => c.symbol)
+  const batches: string[][] = []
+  for (let i = 0; i < symbols.length; i += CRYPTO_BATCH) batches.push(symbols.slice(i, i + CRYPTO_BATCH))
 
-    // Kleine toevoeging: laat CDN kort cachen en revalidatie toelaten
-    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+  async function fetchBatch(chunk: string[]): Promise<IndicatorsSnapshotResp> {
+    const url = `${baseUrl(req)}/api/indicators/snapshot?symbols=${encodeURIComponent(chunk.join(','))}`
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) return { items: [] }
+    return (await r.json()) as IndicatorsSnapshotResp
+  }
 
-    return res.status(200).json({ items })
-  } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+  // parallel in beperkte pool
+  const results = await pool(batches, 3, fetchBatch)
+  const mapScore = new Map<string, number>()
+  for (const res of results) {
+    for (const it of (res.items || [])) {
+      if (Number.isFinite(it?.score as number)) {
+        mapScore.set(it.symbol, Math.round(Number(it.score)))
+      }
+    }
+  }
+
+  const rows = COINS
+    .map(c => {
+      const s = mapScore.get(c.symbol)
+      return Number.isFinite(s) ? { symbol: c.symbol, name: c.name, score: s as number } : null
+    })
+    .filter(Boolean) as { symbol: string; name: string; score: number }[]
+
+  const desc = [...rows].sort((a,b)=> b.score - a.score)
+  const asc  = [...rows].sort((a,b)=> a.score - b.score)
+
+  const coinTopBuy: ScoredCoin[]  = desc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+  const coinTopSell: ScoredCoin[] = asc .slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+  return { coinTopBuy, coinTopSell }
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<HomeSnapshot | { error: string }>) {
+  try {
+    const [newsCrypto, newsEq, academy, congress, crypto] = await Promise.all([
+      fetchNews(req, 'crypto OR bitcoin OR ethereum OR blockchain'),
+      fetchNews(req, 'equities OR stocks OR stock market OR aandelen OR beurs'),
+      fetchAcademy(req),
+      fetchCongress(req),
+      computeCryptoServerSide(req),
+    ])
+
+    const snapshot: HomeSnapshot = {
+      newsCrypto,
+      newsEq,
+      topBuy: [],
+      topSell: [],
+      coinTopBuy: crypto.coinTopBuy,
+      coinTopSell: crypto.coinTopSell,
+      academy,
+      congress,
+    }
+
+    // korte CDN-cache; ISR van index.tsx bepaalt revalidate verder
+    res.setHeader('Cache-Control', `public, s-maxage=${TTL_S}, stale-while-revalidate=60`)
+    res.status(200).json(snapshot)
+  } catch (e:any) {
+    res.status(500).json({ error: String(e?.message || e) })
   }
 }
