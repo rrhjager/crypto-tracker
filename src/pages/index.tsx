@@ -1050,12 +1050,19 @@ export default function Homepage(props: HomeProps) {
   )
 }
 
+import ReactMarkdown from 'react-markdown'
+
 const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   return (
-    <div>
-      <p className="text-[13px] leading-relaxed whitespace-pre-line text-white/90">
+    <div className="prose prose-invert max-w-none text-[13px] leading-relaxed">
+      <ReactMarkdown
+        components={{
+          strong: ({node, ...props}) => <strong className="text-white font-semibold" {...props} />,
+          li: ({node, ...props}) => <li className="mb-1" {...props} />,
+        }}
+      >
         {text}
-      </p>
+      </ReactMarkdown>
     </div>
   )
 }
