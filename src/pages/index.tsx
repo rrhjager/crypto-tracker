@@ -1051,24 +1051,11 @@ export default function Homepage(props: HomeProps) {
 }
 
 const BriefingText: React.FC<{ text: string }> = ({ text }) => {
-  const [open, setOpen] = useState(false)
   return (
     <div>
-      <div className={`${open ? '' : 'max-h-40 overflow-hidden'} relative`}>
-        <p className="text-[13px] leading-relaxed whitespace-pre-line text-white/90">
-          {text}
-        </p>
-        {!open && (
-          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-black/60 to-transparent pointer-events-none rounded-b-2xl" />
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        className="mt-2 text-[12px] text-white/70 hover:text-white underline"
-      >
-        {open ? 'Show less' : 'Read more'}
-      </button>
+      <p className="text-[13px] leading-relaxed whitespace-pre-line text-white/90">
+        {text}
+      </p>
     </div>
   )
 }
