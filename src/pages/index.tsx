@@ -109,7 +109,7 @@ type IndResp = {
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
   const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD'])
-  if (!s || skip has(s)) return null
+  if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
 
