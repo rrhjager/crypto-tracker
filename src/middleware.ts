@@ -27,11 +27,14 @@ const PUBLIC_ALLOW = [
   // ✅ Trump quotes endpoint
   '/api/trump/',
 
-  // ✅ homepage + news + scores
-  '/api/news/',                   // Google/Equities/Crypto news
+  // ✅ nieuws (oude + v1)
+  '/api/news/',        // Google/Equities/Crypto news (legacy)
+  '/api/v1/news/',     // Nieuwe Google News RSS endpoint
+
+  // ✅ homepage + scores
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
   '/api/home/snapshot',           // legacy homepage snapshot
-  '/api/home/briefing',           // ✅ NIEUW: AI daily briefing
+  '/api/home/briefing',           // AI daily briefing
 ]
 
 // 2) Interne routes (cron/warmup/health)
@@ -131,9 +134,10 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  // === Kleine limiter voor news, home-snapshots ===
+  // === Kleine limiter voor news & home-snapshots ===
   if (
     pathname.startsWith('/api/news/') ||
+    pathname.startsWith('/api/v1/news/') ||
     pathname.startsWith('/api/home/snapshot') ||
     pathname.startsWith('/api/market/home-snapshot')
   ) {
