@@ -104,7 +104,7 @@ function parseTransactionsFromXml(
 
       let type: Trade["type"] = "Other";
       const c = code.toUpperCase();
-      if (c === "A" || c === "P") type = "Buy";   // A=acquired, P=open market purchase
+      if (c === "A" || c === "P") type = "Buy";     // A=acquired, P=purchase
       else if (c === "D" || c === "S") type = "Sell"; // D=disposed, S=sale
       else if (c === "G") type = "Grant";
 
@@ -130,6 +130,37 @@ function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string
   const cleanCik = cik.replace(/^0+/, "");
   const cleanAcc = accession.replace(/-/g, "");
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
+}
+
+// Alleen voor ?debug=1: laat zien welke forms/docs er zijn
+async function buildDebugSnapshot() {
+  const debug: any[] = [];
+  for (const cfg of ACTORS) {
+    const filings = await fetchEdgarFilings(cfg.cik);
+    if (!filings?.filings?.recent) {
+      debug.push({
+        actor: cfg.actor,
+        cik: cfg.cik,
+        ticker: cfg.ticker,
+        hasFilings: false,
+        filingsCount: 0,
+        recentForms: [],
+        primaryDocs: [],
+      });
+      continue;
+    }
+    const recent = filings.filings.recent;
+    debug.push({
+      actor: cfg.actor,
+      cik: cfg.cik,
+      ticker: cfg.ticker,
+      hasFilings: true,
+      filingsCount: recent.form.length,
+      recentForms: recent.form.slice(0, 10),
+      primaryDocs: recent.primaryDocument.slice(0, 10),
+    });
+  }
+  return debug;
 }
 
 async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
@@ -180,13 +211,32 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
           ? "Hut 8 Corp"
           : "Unknown issuer");
 
-      const t = parseTransactionsFromXml(
+      const parsed = parseTransactionsFromXml(
         xml,
         companyName,
         config.ticker,
         config.actor
       );
-      trades.push(...t);
+
+      // Fallback: als we om wat voor reden dan ook geen individuele transacties vinden,
+      // maken we één “samenvattingsregel” zodat je de filing wél ziet.
+      if (parsed.length === 0) {
+        const date =
+          firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) || "";
+        trades.push({
+          actor: config.actor,
+          company: companyName,
+          ticker: config.ticker,
+          date,
+          transaction: "Form 4 filed (no individual transactions parsed)",
+          shares: null,
+          price: null,
+          value: null,
+          type: "Other",
+        });
+      } else {
+        trades.push(...parsed);
+      }
     } catch (err) {
       console.error("Error fetching Form 4 XML", xmlUrl, err);
       continue;
@@ -198,9 +248,25 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<TradesResponse | { error: string }>
+  res: NextApiResponse<
+    TradesResponse | { error: string } | { updatedAt: number; debug: any[] }
+  >
 ) {
   try {
+    // Debug-pad: alleen gebruikt als je zelf ?debug=1 in de URL zet
+    if (req.query.debug === "1") {
+      const debug = await buildDebugSnapshot();
+      res.setHeader(
+        "Cache-Control",
+        "public, s-maxage=600, stale-while-revalidate=300"
+      );
+      return res.status(200).json({
+        updatedAt: Date.now(),
+        debug,
+      });
+    }
+
+    // Normale flow voor de Trump Trading pagina
     const all: Trade[] = [];
 
     for (const cfg of ACTORS) {
@@ -222,7 +288,6 @@ export default async function handler(
     });
   } catch (err: any) {
     console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
-    // 500 laten we staan – de Trump-pagina toont dan netjes een foutmelding
     return res.status(500).json({ error: "Failed to load EDGAR trades" });
   }
 }
