@@ -434,9 +434,9 @@ export default function Homepage(props: HomeProps) {
         if (!aborted) mutate(key, data, { revalidate: false })
       } catch {}
     }
-    const locale = 'hl=en-US&gl=US&ceid=US:en'
-    prime(`/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${locale}`)
-    prime(`/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${locale}`)
+    const locale = 'hl=en-US&gl=US'
+    prime(`/api/news/google?q=${encodeURIComponent('crypto OR bitcoin OR ethereum OR blockchain')}&${locale}&ceid=US:en`)
+    prime(`/api/news/google?q=${encodeURIComponent('equities OR stocks OR stock market OR aandelen OR beurs')}&${locale}&ceid=US:en`)
     return () => { aborted = true }
   }, [])
 
@@ -857,7 +857,7 @@ export default function Homepage(props: HomeProps) {
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         <div className="grid gap-5 lg:grid-cols-3">
 
-          {/* 1) Hero — vervangen door AI briefing */}
+          {/* 1) Hero — AI briefing */}
           <Card title="Daily AI Briefing">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {briefing ? (
@@ -1050,40 +1050,72 @@ export default function Homepage(props: HomeProps) {
   )
 }
 
+/**
+ * Rendeert de AI-briefing als bullets + aparte Takeaway-regel.
+ * Herkent blokken als "Crypto:", "Equities:", "Macro:", ... en "Takeaway:".
+ * De Impact-zin wordt cursief getoond.
+ */
 const BriefingText: React.FC<{ text: string }> = ({ text }) => {
-  // Splits de tekst in bullets + één Takeaway regel
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const trimmed = (text || '').trim()
+  if (!trimmed) return null
 
-  const bulletLines: string[] = []
+  type Section = { label: string; body: string }
+
+  const sectionRegex = /\b(Crypto|Equities|Macro|FX|Rates|Commodities|Bonds|Volatility|Takeaway)\s*:/gi
+  const sections: Section[] = []
   let takeaway = ''
 
-  for (const line of lines) {
-    if (/^takeaway:/i.test(line)) {
-      takeaway = line.replace(/^takeaway:\s*/i, '')
-    } else {
-      // strip eventueel leading bullet characters
-      bulletLines.push(line.replace(/^[-•]\s*/, ''))
+  const matches: { label: string; start: number; full: string }[] = []
+  let m: RegExpExecArray | null
+
+  while ((m = sectionRegex.exec(trimmed)) !== null) {
+    matches.push({ label: m[1], start: m.index, full: m[0] })
+  }
+
+  if (!matches.length) {
+    // fallback: alles als één summary zonder takeaway
+    sections.push({ label: 'Summary', body: trimmed })
+  } else {
+    for (let i = 0; i < matches.length; i++) {
+      const cur = matches[i]
+      const next = matches[i + 1]
+      const bodyStart = cur.start + cur.full.length
+      const body = trimmed.slice(bodyStart, next ? next.start : undefined).trim()
+      if (/^takeaway$/i.test(cur.label)) {
+        takeaway = body
+      } else {
+        sections.push({ label: cur.label, body })
+      }
     }
+  }
+
+  // Helper: splits body op een Impact-stuk en maakt dat cursief
+  const splitImpact = (body: string): { main: string; impact?: string } => {
+    const re = /\*?[*]?Impact\*?[*]?\s*:\s*(.+)$/i // pakt zowel **Impact**: als Impact:
+    const match = body.match(re)
+    if (!match) return { main: body }
+    const impactText = match[1].trim()
+    const main = body.slice(0, match.index).trim().replace(/\s+$/,'')
+    return { main, impact: impactText }
   }
 
   return (
     <div className="text-[13px] text-white/90">
       <ul className="space-y-2">
-        {bulletLines.map((line, idx) => {
-          // Verwacht formaat: **Topic:** rest
-          const m = line.match(/^\*{0,2}([^:*]+)\*{0,2}:\s*(.*)$/)
-          const topic = m ? m[1].trim() : ''
-          const body = m ? m[2].trim() : line
-
+        {sections.map((sec, idx) => {
+          const { main, impact } = splitImpact(sec.body)
           return (
             <li key={idx} className="flex items-start gap-2">
-              {/* rond bulletje */}
               <span className="mt-[6px] inline-block h-1.5 w-1.5 rounded-full bg-white/70" />
               <div>
-                {topic && (
-                  <span className="font-semibold">{topic}: </span>
+                <span className="font-semibold">{sec.label}:</span>{' '}
+                <span>{main}</span>
+                {impact && (
+                  <>
+                    {' '}
+                    <span className="italic">Impact: {impact}</span>
+                  </>
                 )}
-                <span>{body}</span>
               </div>
             </li>
           )
@@ -1092,7 +1124,8 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
 
       {takeaway && (
         <p className="mt-3 text-[12px] text-white/75">
-          <span className="font-semibold">Takeaway:</span>{' '}{takeaway}
+          <span className="font-semibold">Takeaway:</span>{' '}
+          <span>{takeaway}</span>
         </p>
       )}
     </div>
