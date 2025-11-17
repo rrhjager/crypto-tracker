@@ -46,7 +46,6 @@ type Trade = {
   transaction: string
   shares: number | null
   price: number | null
-  value: number | null
   type: 'Buy' | 'Sell' | 'Grant' | 'Other'
 }
 
@@ -280,9 +279,12 @@ export default function TrumpTradingPage() {
         const res = await fetch('/api/trump/trades', { cache: 'no-store' })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-        const json: TradesApiResp = await res.json()
+        // ✅ FIX: accepteer zowel `trades` als `items` vanuit de API
+        const json: any = await res.json()
+        const list: Trade[] = json.trades || json.items || []
+
         if (!cancelled) {
-          setTrades(json.trades || [])
+          setTrades(list)
         }
       } catch (e: any) {
         console.error('TrumpTrading trades error', e)
@@ -324,7 +326,7 @@ export default function TrumpTradingPage() {
             Special topic
           </p>
           <h1 className="hero">Trump Trading</h1>
-          <p className="mt-3 max-w-2xl text-sm md:text-base text-black">
+          <p className="mt-3 max-w-2xl text-sm md:text;base text-black">
             This page gives you a focused view on the “Trump trade”: which tickers are directly
             linked to Donald Trump and his family, what major trading/deal events have taken place,
             and what the news flow looks like around those names.
@@ -398,7 +400,7 @@ export default function TrumpTradingPage() {
                   return (
                     <tr
                       key={row.sym}
-                      className="border-b border-white/5 last:border-b-0 text-[13px] text-black"
+                      className="border-b border:white/5 last:border-b-0 text-[13px] text-black"
                     >
                       <td className="px-4 py-2 font-mono text-xs">{row.sym}</td>
                       <td className="px-2 py-2 truncate">
@@ -456,7 +458,7 @@ export default function TrumpTradingPage() {
           </p>
 
           {tradesLoading && !tradesError && (
-            <p className="mt-3 text-sm text-black">Loading trading data…</p>
+            <p className="mt-3 text-sm text:black">Loading trading data…</p>
           )}
           {tradesError && (
             <p className="mt-3 text-sm text-red-600">{tradesError}</p>
@@ -472,14 +474,12 @@ export default function TrumpTradingPage() {
             <div className="mt-4 table-card p-0 overflow-hidden">
               <table className="w-full text-[12px] md:text-[13px]">
                 <colgroup>
-                  <col className="w-[11%]" />  {/* Date */}
-                  <col className="w-[18%]" />  {/* Actor */}
-                  <col className="w-[18%]" />  {/* Company */}
-                  <col className="w-[6%]" />   {/* Ticker */}
-                  <col className="w-[9%]" />   {/* Type */}
-                  <col className="w-[11%]" />  {/* Shares */}
-                  <col className="w-[9%]" />   {/* Price */}
-                  <col className="w-[18%]" />  {/* Value + description */}
+                  <col className="w-[13%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[29%]" />
                 </colgroup>
                 <thead className="bg-slate-950/70 border-b border-white/10">
                   <tr className="text-[11px] uppercase tracking-[0.16em] text-slate-200 text-left">
@@ -488,49 +488,34 @@ export default function TrumpTradingPage() {
                     <th className="px-2 py-2">Company</th>
                     <th className="px-2 py-2">Ticker</th>
                     <th className="px-2 py-2">Type</th>
-                    <th className="px-2 py-2 text-right">Shares</th>
-                    <th className="px-2 py-2 text-right">Price</th>
-                    <th className="px-3 py-2">Value &amp; filing</th>
+                    <th className="px-3 py-2">Filing description</th>
                   </tr>
                 </thead>
                 <tbody>
                   {trades.map((t) => (
                     <tr
                       key={`${t.date}-${t.actor}-${t.ticker}-${t.transaction}`}
-                      className="border-b border-white/5 last:border-b-0 text-black align-top"
+                      className="border-b border-white/5 last:border-b-0 text-black"
                     >
-                      <td className="px-3 py-2 font-mono text-[11px] whitespace-nowrap">
-                        {t.date || '—'}
+                      <td className="px-3 py-2 align-top font-mono text-[11px] whitespace-nowrap">
+                        {t.date}
                       </td>
-                      <td className="px-2 py-2 text-[12px]">
+                      <td className="px-2 py-2 align-top text-[12px]">
                         {t.actor}
                       </td>
-                      <td className="px-2 py-2 text-[12px]">
+                      <td className="px-2 py-2 align-top text-[12px]">
                         {t.company}
                       </td>
-                      <td className="px-2 py-2 font-mono text-[11px]">
+                      <td className="px-2 py-2 align-top font-mono text-[11px]">
                         {t.ticker}
                       </td>
-                      <td className="px-2 py-2 text-[12px]">
+                      <td className="px-2 py-2 align-top text-[12px]">
                         <span className="inline-flex items-center rounded-full px-2 py-[2px] text-[11px] border border-slate-300">
                           {t.type}
                         </span>
                       </td>
-                      <td className="px-2 py-2 text-right font-mono text-[11px]">
-                        {t.shares != null ? t.shares.toLocaleString() : '—'}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-[11px]">
-                        {t.price != null ? `$${t.price.toFixed(2)}` : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-[12px]">
-                        {t.value != null && (
-                          <div className="font-mono text-[11px] mb-1">
-                            ≈ ${t.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                          </div>
-                        )}
-                        <div className="text-[12px]">
-                          {t.transaction || 'Form 4 filing'}
-                        </div>
+                      <td className="px-3 py-2 align-top text-[12px]">
+                        {t.transaction || 'Form 4 filing'}
                       </td>
                     </tr>
                   ))}
@@ -538,8 +523,8 @@ export default function TrumpTradingPage() {
               </table>
 
               <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black">
-                Source: SEC EDGAR Form 4 filings via /api/trump/trades. Parsed for trading insight;
-                for full legal detail always refer to the original SEC documents.
+                Source: SEC EDGAR submissions via /api/trump/trades. Parsed for high-level insight;
+                always refer to the original Form 4 and related filings for full legal detail.
               </div>
             </div>
           )}
