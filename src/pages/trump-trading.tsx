@@ -3,30 +3,23 @@ import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import NewsFeed from '@/components/NewsFeed'
 
-type Quote = {
-  symbol: string
-  longName?: string
-  shortName?: string
-  regularMarketPrice: number | null
-  regularMarketChange: number | null
-  regularMarketChangePercent: number | null
+type LiveData = {
+  price: number | null
+  change: number | null
+  changePercent: number | null
   currency?: string
-  marketState?: string
 }
 
-type QuotesResp = {
-  quotes: Record<string, Quote>
-  meta?: any
-}
+const EQUITY_SYMBOLS = ['DJT', 'DOMH', 'HUT'] as const
+const CRYPTO_SYMBOL = 'BTC' as const
 
-const LIVE_SYMBOLS = ['DJT', 'DOMH', 'HUT', 'BTC'] as const
-type LiveSymbol = (typeof LIVE_SYMBOLS)[number]
+type EquitySymbol = (typeof EQUITY_SYMBOLS)[number]
 
 type TrumpVehicle = {
   id: string
   category: string
   name: string
-  ticker?: LiveSymbol
+  ticker?: EquitySymbol | typeof CRYPTO_SYMBOL
   type: string
   exposure: string
   keyInsight: string
@@ -46,7 +39,7 @@ const VEHICLES: TrumpVehicle[] = [
     exposure: 'Direct equity exposure for Donald J. Trump (majority economic interest via trust).',
     keyInsight:
       'The main listed “Trump asset”. Price reacts aggressively to political headlines, legal news and social media activity.',
-    dataSources: ['SEC EDGAR (8-K, S-1, Form 4)', 'Google News', 'Market data API'],
+    dataSources: ['SEC EDGAR (8-K, S-1, Form 4)', 'Google News', 'Exchange data'],
     updateFrequency: 'Daily / intraday',
     reliability: '★★★★★',
     tags: ['Equity', 'Media', 'Campaign-linked', 'High risk']
@@ -59,8 +52,8 @@ const VEHICLES: TrumpVehicle[] = [
     type: 'US micro-cap / financials',
     exposure: 'Board / ownership exposure for Donald Jr. & Eric Trump.',
     keyInsight:
-      'Rallied >300% around Trump-family involvement. Very illiquid; moves are driven more by news and flows than fundamentals.',
-    dataSources: ['SEC EDGAR (13D/G)', 'Company press releases', 'Google News'],
+      'Rallied more than 300% around Trump-family involvement. Very illiquid; moves are driven more by news and flows than fundamentals.',
+    dataSources: ['SEC EDGAR (13D/G)', 'Company press releases', 'News'],
     updateFrequency: 'Weekly / on news',
     reliability: '★★★★☆',
     tags: ['Micro-cap', 'Illiquid', 'Trump Jr. & Eric']
@@ -112,7 +105,7 @@ const VEHICLES: TrumpVehicle[] = [
     type: 'Search & social data',
     exposure: 'Search trends and social chatter around Trump-linked tickers.',
     keyInsight:
-      'Spikes in search volume and Reddit/news discussion often precede big moves in DJT and micro caps like DOMH.',
+      'Spikes in search volume and Reddit/news discussion often precede large moves in DJT and micro caps like DOMH.',
     dataSources: ['Google Trends', 'Reddit', 'AltIndex / similar'],
     updateFrequency: 'Daily',
     reliability: '★★★☆☆',
@@ -121,50 +114,83 @@ const VEHICLES: TrumpVehicle[] = [
 ]
 
 export default function TrumpTradingPage() {
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
-  const [loadingQuotes, setLoadingQuotes] = useState<boolean>(true)
-  const [quotesError, setQuotesError] = useState<string | null>(null)
+  const [live, setLive] = useState<Record<string, LiveData>>({})
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string | null>(null)
 
-  // === live quotes: DJT, DOMH, HUT, BTC (via /api/quotes) ===
+  const getLive = (sym?: string) => (sym ? live[sym] : undefined)
+
   useEffect(() => {
     let cancelled = false
-    let timer: any
 
     const load = async () => {
       try {
-        setQuotesError(null)
-        setLoadingQuotes(true)
-        const symbolsParam = encodeURIComponent(LIVE_SYMBOLS.join(','))
-        const res = await fetch(`/api/quotes?symbols=${symbolsParam}`, { cache: 'no-store' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json: QuotesResp = await res.json()
-        if (!cancelled) {
-          setQuotes(json.quotes || {})
+        setError(null)
+        setLoading(true)
+
+        const next: Record<string, LiveData> = {}
+
+        // --- 1) Equities via /api/indicators/score/:symbol ---
+        await Promise.all(
+          EQUITY_SYMBOLS.map(async (sym) => {
+            try {
+              const res = await fetch(`/api/indicators/score/${sym}`, { cache: 'no-store' })
+              if (!res.ok) throw new Error(`HTTP ${res.status}`)
+              const json: any = await res.json()
+
+              const price: number | null =
+                json.lastPrice ?? json.price ?? json.close ?? null
+              const change: number | null = json.change ?? json.changeAbs ?? null
+              const changePercent: number | null =
+                json.changePercent ?? json.changePct ?? json.changePercentage ?? null
+              const currency: string | undefined = json.currency ?? 'USD'
+
+              next[sym] = { price, change, changePercent, currency }
+            } catch (e) {
+              console.error(`Error loading equity ${sym}`, e)
+              next[sym] = { price: null, change: null, changePercent: null, currency: 'USD' }
+            }
+          })
+        )
+
+        // --- 2) BTC via /api/quotes (this already works elsewhere) ---
+        try {
+          const res = await fetch('/api/quotes?symbols=BTC', { cache: 'no-store' })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const json: any = await res.json()
+          const q = json.quotes?.BTC || json.quotes?.['BTC-USD'] || null
+
+          next[CRYPTO_SYMBOL] = {
+            price: q?.regularMarketPrice ?? null,
+            change: q?.regularMarketChange ?? null,
+            changePercent: q?.regularMarketChangePercent ?? null,
+            currency: q?.currency ?? 'USD'
+          }
+        } catch (e) {
+          console.error('Error loading BTC quote', e)
+          next[CRYPTO_SYMBOL] = { price: null, change: null, changePercent: null, currency: 'USD' }
         }
-      } catch (e: any) {
+
         if (!cancelled) {
-          console.error('TrumpTrading quotes error', e)
-          setQuotesError('Failed to load live prices.')
+          setLive(next)
+          setLoading(false)
         }
-      } finally {
+      } catch (e) {
+        console.error('TrumpTrading live data error', e)
         if (!cancelled) {
-          setLoadingQuotes(false)
-          timer = setTimeout(load, 30_000) // refresh every 30s
+          setError('Failed to load live data.')
+          setLoading(false)
         }
       }
     }
 
     load()
+    const id = setInterval(load, 30_000) // refresh every 30 seconds
     return () => {
       cancelled = true
-      if (timer) clearTimeout(timer)
+      clearInterval(id)
     }
   }, [])
-
-  const getQuote = (sym?: LiveSymbol) => {
-    if (!sym) return undefined
-    return quotes[sym] || quotes[sym.toUpperCase()]
-  }
 
   return (
     <>
@@ -218,7 +244,7 @@ export default function TrumpTradingPage() {
               Live Trump-linked prices
             </h2>
             <span className="hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-              Powered by /api/quotes · refreshed every 30 seconds
+              Equities via /api/indicators/score · BTC via /api/quotes
             </span>
           </div>
           <p className="mt-2 text-sm text-slate-600 max-w-3xl">
@@ -246,24 +272,19 @@ export default function TrumpTradingPage() {
                 </tr>
               </thead>
               <tbody>
-                {LIVE_SYMBOLS.map((sym) => {
-                  const q = getQuote(sym)
-                  const dispName =
-                    sym === 'BTC'
-                      ? 'Bitcoin'
-                      : q?.longName || q?.shortName || (sym === 'DJT'
-                          ? 'Trump Media & Technology Group'
-                          : sym === 'DOMH'
-                          ? 'Dominari Holdings'
-                          : sym === 'HUT'
-                          ? 'Hut 8 Mining'
-                          : sym)
+                {[
+                  { sym: 'DJT', name: 'Trump Media & Technology Group', currency: 'USD' },
+                  { sym: 'DOMH', name: 'Dominari Holdings', currency: 'USD' },
+                  { sym: 'HUT', name: 'Hut 8 Mining', currency: 'USD' },
+                  { sym: 'BTC', name: 'Bitcoin', currency: 'USD' }
+                ].map((row) => {
+                  const data = getLive(row.sym)
                   const price =
-                    q?.regularMarketPrice != null
-                      ? q.regularMarketPrice.toFixed(q.regularMarketPrice > 100 ? 2 : 4)
+                    data?.price != null
+                      ? data.price.toFixed(data.price > 100 ? 2 : 4)
                       : '—'
-                  const ch = q?.regularMarketChange
-                  const chPct = q?.regularMarketChangePercent
+                  const ch = data?.change
+                  const chPct = data?.changePercent
                   const up = (ch ?? 0) >= 0
                   const chText =
                     ch == null ? '—' : `${up ? '+' : ''}${ch.toFixed(2)}`
@@ -272,16 +293,14 @@ export default function TrumpTradingPage() {
 
                   return (
                     <tr
-                      key={sym}
+                      key={row.sym}
                       className="border-b border-white/5 last:border-b-0 text-[13px] text-slate-100"
                     >
-                      <td className="px-4 py-2 font-mono text-xs">{sym}</td>
-                      <td className="px-2 py-2 truncate">{dispName}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{row.sym}</td>
+                      <td className="px-2 py-2 truncate">{row.name}</td>
                       <td className="px-2 py-2 text-right font-mono">
                         {price}{' '}
-                        {q?.currency && (
-                          <span className="text-[10px] text-slate-400">{q.currency}</span>
-                        )}
+                        <span className="text-[10px] text-slate-400">{row.currency}</span>
                       </td>
                       <td
                         className={`px-2 py-2 text-right font-mono ${
@@ -309,17 +328,16 @@ export default function TrumpTradingPage() {
 
             <div className="px-4 py-2 border-t border-white/5 text-[11px] text-slate-500 flex items-center justify-between">
               <span>
-                Data source: Yahoo Finance / CoinGecko via <code>/api/quotes</code>.
+                Data source: equity data from <code>/api/indicators/score/:symbol</code>, BTC from{' '}
+                <code>/api/quotes</code>.
               </span>
-              {loadingQuotes && <span>Loading live data…</span>}
-              {!loadingQuotes && quotesError && (
-                <span className="text-rose-300">{quotesError}</span>
-              )}
+              {loading && <span>Loading live data…</span>}
+              {!loading && error && <span className="text-rose-300">{error}</span>}
             </div>
           </div>
         </section>
 
-        {/* Key vehicles with per-card live quote snippet */}
+        {/* Key vehicles with per-card live snippet */}
         <section className="max-w-6xl mx-auto px-4 pb-12">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg md:text-xl font-semibold tracking-tight">
@@ -336,8 +354,9 @@ export default function TrumpTradingPage() {
 
           <div className="mt-6 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
             {VEHICLES.map((v) => {
-              const q = getQuote(v.ticker as LiveSymbol | undefined)
-              const hasQuote = !!q && q.regularMarketPrice != null
+              const d = getLive(v.ticker)
+
+              const hasLive = d && d.price != null
 
               return (
                 <article key={v.id} className="table-card flex flex-col h-full">
@@ -362,33 +381,27 @@ export default function TrumpTradingPage() {
                     </span>
                   </header>
 
-                  {hasQuote && (
+                  {hasLive && (
                     <div className="mt-2 text-xs text-slate-300 font-mono flex items-baseline justify-between">
                       <span>
                         Live price:{' '}
                         <span className="text-slate-50">
-                          {q!.regularMarketPrice!.toFixed(
-                            q!.regularMarketPrice! > 100 ? 2 : 4
-                          )}
+                          {d!.price!.toFixed(d!.price! > 100 ? 2 : 4)}
                         </span>{' '}
-                        {q!.currency && (
-                          <span className="text-[10px] text-slate-400">{q!.currency}</span>
+                        {d!.currency && (
+                          <span className="text-[10px] text-slate-400">{d!.currency}</span>
                         )}
                       </span>
-                      {q!.regularMarketChange != null &&
-                        q!.regularMarketChangePercent != null && (
-                          <span
-                            className={
-                              q!.regularMarketChange! >= 0
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
-                            }
-                          >
-                            {q!.regularMarketChange! >= 0 ? '+' : ''}
-                            {q!.regularMarketChange!.toFixed(2)} (
-                            {q!.regularMarketChangePercent!.toFixed(2)}%)
-                          </span>
-                        )}
+                      {d!.change != null && d!.changePercent != null && (
+                        <span
+                          className={
+                            d!.change! >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          }
+                        >
+                          {d!.change! >= 0 ? '+' : ''}
+                          {d!.change!.toFixed(2)} ({d!.changePercent!.toFixed(2)}%)
+                        </span>
+                      )}
                     </div>
                   )}
 
