@@ -26,6 +26,18 @@ type ActorConfig = {
   ticker: string;
 };
 
+type ActorDebug = {
+  actor: string;
+  cik: string;
+  ticker: string;
+  filingsCount: number;
+  inspected: number;
+  forms: string[];
+  primaryDocs: string[];
+  xmlUrls: string[];
+  parsedTrades: number;
+};
+
 // Mapping van personen/bedrijven naar CIK + ticker
 const ACTORS: ActorConfig[] = [
   { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,   ticker: "DJT" },
@@ -40,7 +52,7 @@ const ACTORS: ActorConfig[] = [
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-// Pak eerste <tag><value>…</value></tag> uit een blok, ook met attributes/namespaces
+// Zoek <tag ...><value>xxx</value></tag> (ook met attributes/namespaces)
 function firstValueTag(block: string, tag: string): string | null {
   const re = new RegExp(
     `<${tag}\\b[^>]*>[\\s\\S]*?<value\\b[^>]*>([^<]+)<\\/value>`,
@@ -50,7 +62,7 @@ function firstValueTag(block: string, tag: string): string | null {
   return m && m[1] ? m[1].trim() : null;
 }
 
-// Iets specifiekere helper voor transactionCode (zonder <value>-tag)
+// Simpele <tag>xxx</tag>
 function firstSimpleTag(block: string, tag: string): string | null {
   const re = new RegExp(`<${tag}\\b[^>]*>([^<]+)<\\/${tag}>`, "i");
   const m = block.match(re);
@@ -65,13 +77,13 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  // Vind ALLE <nonDerivativeTransaction ...> ... </nonDerivativeTransaction>
+  // Pak zowel nonDerivativeTransaction als derivativeTransaction blokken
   const txRegex =
-    /<nonDerivativeTransaction\b[^>]*>([\s\S]*?)<\/nonDerivativeTransaction>/gi;
+    /<(nonDerivativeTransaction|derivativeTransaction)\b[^>]*>([\s\S]*?)<\/\1>/gi;
 
   let match: RegExpExecArray | null;
   while ((match = txRegex.exec(xml)) !== null) {
-    const section = match[1] || "";
+    const section = match[2] || "";
 
     const date =
       firstValueTag(section, "transactionDate") ||
@@ -135,26 +147,55 @@ function buildXmlUrl(
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
-async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
+async function loadActorTrades(
+  config: ActorConfig,
+  withDebug: boolean
+): Promise<{ trades: Trade[]; debug: ActorDebug | null }> {
   const filings = await fetchEdgarFilings(config.cik);
-  if (!filings?.filings?.recent) return [];
+  if (!filings?.filings?.recent) {
+    return {
+      trades: [],
+      debug: withDebug
+        ? {
+            actor: config.actor,
+            cik: config.cik,
+            ticker: config.ticker,
+            filingsCount: 0,
+            inspected: 0,
+            forms: [],
+            primaryDocs: [],
+            xmlUrls: [],
+            parsedTrades: 0,
+          }
+        : null,
+    };
+  }
 
   const recent = filings.filings.recent;
   const trades: Trade[] = [];
+  const maxDocs = 10; // max filings per actor
 
-  const maxDocs = 10; // max aantal filings per actor dat we inspecteren
+  const forms: string[] = [];
+  const primaryDocs: string[] = [];
+  const xmlUrls: string[] = [];
+
+  let inspected = 0;
 
   for (let i = 0; i < recent.accessionNumber.length && i < maxDocs; i++) {
     const form = recent.form[i];
-
-    // Alleen echte Form 4 insider transacties meenemen
-    if (form !== "4" && form !== "4/A") continue;
-
-    const accession = recent.accessionNumber[i];
     const primaryDoc = recent.primaryDocument[i];
+
+    // Alleen echte insider-transacties: Form 4 / 4/A
+    if (form !== "4" && form !== "4/A") continue;
     if (!primaryDoc) continue;
 
+    inspected++;
+    forms.push(form);
+    primaryDocs.push(primaryDoc);
+
+    const accession = recent.accessionNumber[i];
     const xmlUrl = buildXmlUrl(config.cik, accession, primaryDoc);
+    xmlUrls.push(xmlUrl);
 
     try {
       const res = await fetchSafe(
@@ -198,22 +239,39 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
     }
   }
 
-  return trades;
+  const debug: ActorDebug | null = withDebug
+    ? {
+        actor: config.actor,
+        cik: config.cik,
+        ticker: config.ticker,
+        filingsCount: recent.accessionNumber.length,
+        inspected,
+        forms,
+        primaryDocs,
+        xmlUrls,
+        parsedTrades: trades.length,
+      }
+    : null;
+
+  return { trades, debug };
 }
 
 // ─────────────────────────────────────────────────────────────
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<TradesResponse | { error: string }>
+  res: NextApiResponse<TradesResponse | { error: string } | any>
 ) {
+  const wantDebug = req.query.debug === "1";
+
   try {
     const all: Trade[] = [];
+    const debugInfo: ActorDebug[] = [];
 
-    // Verzamel trades per actor (serieus maar nog steeds seintje voor SEC rate limits)
     for (const cfg of ACTORS) {
-      const t = await loadActorTrades(cfg);
-      all.push(...t);
+      const { trades, debug } = await loadActorTrades(cfg, wantDebug);
+      all.push(...trades);
+      if (debug) debugInfo.push(debug);
     }
 
     // sorteer op datum, nieuw → oud
@@ -223,7 +281,6 @@ export default async function handler(
       return 0;
     });
 
-    // Hard cap: we houden het overzichtelijk, frontend kan zelf nog slicen
     const limited = all.slice(0, 40);
 
     res.setHeader(
@@ -231,10 +288,13 @@ export default async function handler(
       "public, s-maxage=600, stale-while-revalidate=300"
     );
 
-    return res.status(200).json({
+    const body: any = {
       updatedAt: Date.now(),
       trades: limited,
-    });
+    };
+    if (wantDebug) body.debug = debugInfo;
+
+    return res.status(200).json(body);
   } catch (err: any) {
     console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
     return res.status(500).json({ error: "Failed to load EDGAR trades" });
