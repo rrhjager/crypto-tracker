@@ -105,15 +105,43 @@ function TrumpNewsCard({ symbol, title, description, query, limit = 6 }: TrumpNe
         const params = new URLSearchParams()
         if (query) params.set('name', query)
         if (limit) params.set('limit', String(limit))
+        const qs = params.toString()
 
-        const res = await fetch(`/api/v1/news/${encodeURIComponent(symbol)}?${params.toString()}`, {
-          cache: 'no-store',
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // 🌎 1) Probeer eerst de legacy /api/news/ endpoint (zelfde bron als homepage, Engels)
+        const endpoints = [
+          `/api/news/${encodeURIComponent(symbol)}?${qs}`,
+          `/api/v1/news/${encodeURIComponent(symbol)}?${qs}`,
+        ]
 
-        const json: NewsApiResp = await res.json()
-        if (!cancelled) {
-          setData(json)
+        let lastError: any = null
+        for (const url of endpoints) {
+          try {
+            const res = await fetch(url, { cache: 'no-store' })
+            if (!res.ok) {
+              lastError = new Error(`HTTP ${res.status} for ${url}`)
+              continue
+            }
+
+            const json: any = await res.json()
+            const items: NewsItem[] =
+              json.items || json.news || []
+
+            if (!cancelled) {
+              setData({
+                updatedAt: json.updatedAt || Date.now(),
+                query: json.query || query,
+                items,
+              })
+            }
+            lastError = null
+            break
+          } catch (e) {
+            lastError = e
+          }
+        }
+
+        if (lastError && !cancelled) {
+          throw lastError
         }
       } catch (e) {
         console.error('TrumpNewsCard error', e)
