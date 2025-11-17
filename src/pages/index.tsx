@@ -1051,11 +1051,50 @@ export default function Homepage(props: HomeProps) {
 }
 
 const BriefingText: React.FC<{ text: string }> = ({ text }) => {
+  // Splits de tekst in bullets + één Takeaway regel
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+
+  const bulletLines: string[] = []
+  let takeaway = ''
+
+  for (const line of lines) {
+    if (/^takeaway:/i.test(line)) {
+      takeaway = line.replace(/^takeaway:\s*/i, '')
+    } else {
+      // strip eventueel leading bullet characters
+      bulletLines.push(line.replace(/^[-•]\s*/, ''))
+    }
+  }
+
   return (
-    <div>
-      <p className="text-[13px] leading-relaxed whitespace-pre-line text-white/90">
-        {text}
-      </p>
+    <div className="text-[13px] text-white/90">
+      <ul className="space-y-2">
+        {bulletLines.map((line, idx) => {
+          // Verwacht formaat: **Topic:** rest
+          const m = line.match(/^\*{0,2}([^:*]+)\*{0,2}:\s*(.*)$/)
+          const topic = m ? m[1].trim() : ''
+          const body = m ? m[2].trim() : line
+
+          return (
+            <li key={idx} className="flex items-start gap-2">
+              {/* rond bulletje */}
+              <span className="mt-[6px] inline-block h-1.5 w-1.5 rounded-full bg-white/70" />
+              <div>
+                {topic && (
+                  <span className="font-semibold">{topic}: </span>
+                )}
+                <span>{body}</span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+
+      {takeaway && (
+        <p className="mt-3 text-[12px] text-white/75">
+          <span className="font-semibold">Takeaway:</span>{' '}{takeaway}
+        </p>
+      )}
     </div>
   )
 }
