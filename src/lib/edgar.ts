@@ -1,30 +1,34 @@
+// src/lib/edgar.ts
 import { fetchSafe } from "@/lib/fetchSafe";
 
 const SEC_HEADERS = {
-  "User-Agent": "SignalHub AI (contact: support@yourdomain.com)",
+  "User-Agent": process.env.SEC_USER_AGENT || "SignalHub AI (contact: support@yourdomain.com)",
   "Accept-Encoding": "gzip, deflate",
-  "Host": "www.sec.gov"
+  // De Host-header is optioneel; je kunt hem laten staan of weghalen.
+  "Host": "www.sec.gov",
 };
 
 export async function fetchEdgarFilings(cik: string) {
   const url = `https://data.sec.gov/submissions/CIK${cik}.json`;
 
-  const res = await fetchSafe(
-    url,
-    {
-      method: "GET",
-      headers: SEC_HEADERS,
-    },
-    8000,
-    1
-  );
-
-  if (!res.ok) return null;
-
   try {
+    // fetchSafe gooit zelf een error als de status geen 2xx is,
+    // dus als we hier zijn is res.ok al true.
+    const res = await fetchSafe(
+      url,
+      {
+        method: "GET",
+        headers: SEC_HEADERS,
+      },
+      8000,
+      1
+    );
+
     const json = await res.json();
     return json;
-  } catch {
+  } catch (err) {
+    // Als SEC down is / rate-limit → geen crash, maar gewoon null terug
+    console.error("EDGAR fetch error:", err);
     return null;
   }
 }
