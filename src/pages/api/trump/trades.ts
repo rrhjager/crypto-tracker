@@ -28,20 +28,27 @@ type ActorConfig = {
 
 // Mapping van personen/bedrijven naar CIK + ticker
 const ACTORS: ActorConfig[] = [
-  { actor: "DJT insiders",    cik: CIK.DJT_MEDIA,  ticker: "DJT" },
-  { actor: "Dominari insiders", cik: CIK.DOMH,     ticker: "DOMH" },
-  { actor: "Hut 8 insiders",  cik: CIK.HUT,        ticker: "HUT" },
-  { actor: "Donald Trump Jr.", cik: CIK.TRUMP_JR,  ticker: "DOMH" },
-  { actor: "Eric Trump",       cik: CIK.ERIC_TRUMP, ticker: "HUT" },
-  { actor: "Lara Trump",       cik: CIK.LARA_TRUMP, ticker: "DJT" },
+  { actor: "DJT insiders",     cik: CIK.DJT_MEDIA,    ticker: "DJT" },
+  { actor: "Dominari insiders",cik: CIK.DOMH,        ticker: "DOMH" },
+  { actor: "Hut 8 insiders",   cik: CIK.HUT,         ticker: "HUT" },
+  { actor: "Donald Trump Jr.", cik: CIK.TRUMP_JR,    ticker: "DOMH" },
+  { actor: "Eric Trump",       cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
+  { actor: "Lara Trump",       cik: CIK.LARA_TRUMP,  ticker: "DJT" },
 ];
 
-// Heel simpele XML-parser met regex (geen nieuwe dependency nodig)
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+
 function firstMatch(xml: string, regex: RegExp): string | null {
   const m = xml.match(regex);
   return m && m[1] ? m[1].trim() : null;
 }
 
+/**
+ * Parse zowel non-derivative als derivative transacties uit een Form 4 XML.
+ * Simpele regex-aanpak, geen extra dependencies.
+ */
 function parseTransactionsFromXml(
   xml: string,
   baseCompany: string,
@@ -50,54 +57,93 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  const blocks = xml.split(/<nonDerivativeTransaction>/i).slice(1);
-  for (const block of blocks) {
-    const section = block.split(/<\/nonDerivativeTransaction>/i)[0] || "";
+  const nonDerivBlocks = Array.from(
+    xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)
+  );
+  const derivBlocks = Array.from(
+    xml.matchAll(/<derivativeTransaction>([\s\S]*?)<\/derivativeTransaction>/gi)
+  );
+
+  const blocks = [...nonDerivBlocks, ...derivBlocks];
+
+  // Fallback datum op basis van periodOfReport
+  const fallbackDate =
+    firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) || "";
+
+  for (const m of blocks) {
+    const section = m[1] || "";
 
     const date =
-      firstMatch(section, /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i) ||
-      firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
-      "";
+      firstMatch(
+        section,
+        /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i
+      ) || fallbackDate;
 
-    const code =
+    // A / D / G / P / S etc.
+    const acquiredDisposed =
       firstMatch(
         section,
         /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
       ) || "";
 
+    const transCode =
+      firstMatch(section, /<transactionCode>([^<]+)<\/transactionCode>/i) || "";
+
     const sharesStr =
       firstMatch(
         section,
         /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || null;
+      ) ||
+      firstMatch(
+        section,
+        /<sharesOwnedFollowingTransaction>[\s\S]*?<value>([^<]+)<\/value>/i
+      ) ||
+      null;
 
     const priceStr =
       firstMatch(
         section,
         /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || null;
+      ) ||
+      firstMatch(
+        section,
+        /<conversionOrExercisePrice>[\s\S]*?<value>([^<]+)<\/value>/i
+      ) ||
+      null;
 
-    const transDesc =
-      firstMatch(section, /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i) ||
-      "Form 4 transaction";
+    const description =
+      firstMatch(
+        section,
+        /<transactionDescription>([^<]+)<\/transactionDescription>/i
+      ) ||
+      (transCode
+        ? `Form 4 transaction (${transCode})`
+        : "Form 4 transaction");
 
     const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
     const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
     const value =
-      shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
+      shares != null && price != null
+        ? Number((shares * price).toFixed(2))
+        : null;
+
+    // Als er echt niets bruikbaars is, overslaan
+    if (!date && shares == null && price == null) continue;
 
     let type: Trade["type"] = "Other";
-    const c = code.toUpperCase();
-    if (c === "A") type = "Buy";
-    else if (c === "D") type = "Sell";
-    else if (c === "G") type = "Grant";
+    const code = (acquiredDisposed || transCode).toUpperCase();
+
+    // A / P = acquisition (buy), D / S = disposal (sell)
+    if (code === "A" || code === "P") type = "Buy";
+    else if (code === "D" || code === "S") type = "Sell";
+    else if (code === "G") type = "Grant";
 
     trades.push({
       actor,
       company: baseCompany,
       ticker,
       date,
-      transaction: transDesc,
+      transaction: description,
       shares,
       price,
       value,
@@ -162,8 +208,13 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
           ? "Hut 8 Corp"
           : "Unknown issuer");
 
-      const t = parseTransactionsFromXml(xml, companyName, config.ticker, config.actor);
-      trades.push(...t);
+      const parsed = parseTransactionsFromXml(
+        xml,
+        companyName,
+        config.ticker,
+        config.actor
+      );
+      trades.push(...parsed);
     } catch (err) {
       console.error("Error fetching Form 4 XML", xmlUrl, err);
       continue;
@@ -173,16 +224,25 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
   return trades;
 }
 
+// ─────────────────────────────────────────────────────────────
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<TradesResponse | { error: string }>
 ) {
   try {
-    const all: Trade[] = [];
+    // Parallel ophalen; één mislukte actor breekt de rest niet
+    const results = await Promise.allSettled(
+      ACTORS.map((cfg) => loadActorTrades(cfg))
+    );
 
-    for (const cfg of ACTORS) {
-      const t = await loadActorTrades(cfg);
-      all.push(...t);
+    const all: Trade[] = [];
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        all.push(...r.value);
+      } else {
+        console.error("TRUMP_TRADES_ACTOR_ERROR:", r.reason);
+      }
     }
 
     // sorteer op datum, nieuw → oud
