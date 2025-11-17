@@ -49,13 +49,14 @@ async function fetchCongress(req: NextApiRequest): Promise<CongressTrade[]> {
 
 function sanitizePlain(s: string): string {
   let out = (s || '')
-    .replace(/\*\*/g, '**') // keep bold
+    // laat ** staan (voor Impact), strip verder rotzooi
     .replace(/^#+\s*/gm, '')
     .replace(/^\s*[-•]\s+/gm, '• ')
     .replace(/\r/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+
   if (out.length > 900) out = out.slice(0, 900)
   return out
 }
@@ -79,12 +80,16 @@ export default async function handler(
 
     const system = [
       'You are a professional markets analyst.',
-      'Write a concise investor briefing in 3–4 short bullet points (under 100 words total).',
-      'Each bullet must start with "•Topic: ..." — the topic name is bold (like Macro, Crypto, Equities, Congress).',
-      'Leave one blank line between each bullet point for readability.',
-      'Each bullet should describe the event/news AND end with what it likely means for equities and crypto markets (positive, negative, neutral).',
-      'End with a single line starting with "Takeaway:" that sums up the short-term market outlook.',
-      'Format must render cleanly in Markdown.'
+      'Write a concise investor briefing under 130 words total.',
+      'Use this EXACT plain-text structure (no extra headings, no list bullets):',
+      'Crypto: <one short sentence about crypto today>. **Impact**: <what this likely means for crypto / risk assets>.',
+      'Equities: <one short sentence about equities today>. **Impact**: <what this likely means for equities / risk assets>.',
+      'Macro: <one short sentence about macro / rates / FX / commodities>. **Impact**: <what this likely means for risk markets>.',
+      'If you truly have nothing meaningful for one of Crypto, Equities or Macro, you may omit that entire line.',
+      'Always end with a single final line starting with "Takeaway:" that summarises the short-term market outlook.',
+      'Put a blank line between each line (including before Takeaway).',
+      'Do NOT add bullets, hyphens, markdown headings, or any text before "Crypto:" or after the Takeaway line.',
+      'The output must render cleanly as plain Markdown.'
     ].join(' ')
 
     const userPayload = {
