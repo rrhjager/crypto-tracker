@@ -24,6 +24,9 @@ const PUBLIC_ALLOW = [
   // Market Intel (server-side geaggregeerd)
   '/api/market/',
 
+  // ✅ Trump quotes endpoint
+  '/api/trump/',
+
   // ✅ homepage + news + scores
   '/api/news/',                   // Google/Equities/Crypto news
   '/api/indicators/score',        // per-symbool score (Top BUY/SELL)
@@ -105,7 +108,9 @@ export function middleware(req: NextRequest) {
   }
 
   // === Limiter op query-grootte (quotes/snapshot/ret-batch/crypto) ===
-  const isQuotes  = pathname.startsWith('/api/quotes')
+  const isQuotes  =
+    pathname.startsWith('/api/quotes') ||
+    pathname.startsWith('/api/trump/quotes')
   const isSnap    = pathname.startsWith('/api/indicators/snapshot-list')
   const isRet     = pathname.startsWith('/api/indicators/ret-batch')
   const isCryptoI = pathname.startsWith('/api/crypto-light/indicators')
