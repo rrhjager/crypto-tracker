@@ -119,19 +119,19 @@ export default function TrumpTradingPage() {
         />
       </Head>
 
-      <main className="min-h-screen">
+      <main className="min-h-screen text-black">
         {/* Hero */}
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-10">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500 mb-2">
+          <p className="text-xs uppercase tracking-[0.18em] text-black mb-2">
             Special topic
           </p>
           <h1 className="hero">Trump Trading</h1>
-          <p className="mt-3 max-w-2xl text-sm md:text-base text-slate-600">
+          <p className="mt-3 max-w-2xl text-sm md:text-base text-black">
             This page gives you a focused view on the “Trump trade”: which tickers are directly
             linked to Donald Trump and his family, what major trading/deal events have taken place,
             and what the news flow looks like around those names.
           </p>
-          <p className="mt-2 max-w-2xl text-sm md:text-base text-slate-600">
+          <p className="mt-2 max-w-2xl text-sm md:text-base text-black">
             Prices update in real time via a dedicated quote endpoint. Headlines are pulled from
             Google News through the existing SignalHub news infrastructure.
           </p>
@@ -155,11 +155,11 @@ export default function TrumpTradingPage() {
             <h2 className="text-lg md:text-xl font-semibold tracking-tight">
               Trump tickers (live prices)
             </h2>
-            <span className="hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+            <span className="hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full bg-slate-100 text-black border border-slate-200">
               Data via /api/trump/quotes · refreshed every 30 seconds
             </span>
           </div>
-          <p className="mt-2 text-sm text-slate-600 max-w-3xl">
+          <p className="mt-2 text-sm text-black max-w-3xl">
             These are the core tradeable instruments in the Trump ecosystem: DJT (media), DOMH
             (micro-cap financial), HUT (bitcoin mining) and BTC as the underlying crypto driver.
           </p>
@@ -174,7 +174,7 @@ export default function TrumpTradingPage() {
                 <col className="w-[18%]" />
               </colgroup>
               <thead className="bg-slate-950/70 border-b border-white/10">
-                <tr className="text-[11px] uppercase tracking-[0.16em] text-slate-400 text-left">
+                <tr className="text-[11px] uppercase tracking-[0.16em] text-slate-200 text-left">
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-2 py-2">Name</th>
                   <th className="px-2 py-2 text-right">Price</th>
@@ -200,7 +200,7 @@ export default function TrumpTradingPage() {
                   return (
                     <tr
                       key={row.sym}
-                      className="border-b border-white/5 last:border-b-0 text-[13px] text-slate-100"
+                      className="border-b border-white/5 last:border-b-0 text-[13px] text-black"
                     >
                       <td className="px-4 py-2 font-mono text-xs">{row.sym}</td>
                       <td className="px-2 py-2 truncate">
@@ -208,13 +208,13 @@ export default function TrumpTradingPage() {
                       </td>
                       <td className="px-2 py-2 text-right font-mono">
                         {price}{' '}
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-slate-600">
                           {q?.currency || row.currency}
                         </span>
                       </td>
                       <td
                         className={`px-2 py-2 text-right font-mono ${
-                          ch == null ? 'text-slate-400' : up ? 'text-emerald-400' : 'text-red-400'
+                          ch == null ? 'text-slate-600' : up ? 'text-emerald-600' : 'text-red-600'
                         }`}
                       >
                         {chText}
@@ -222,10 +222,10 @@ export default function TrumpTradingPage() {
                       <td
                         className={`px-4 py-2 text-right font-mono ${
                           chPct == null
-                            ? 'text-slate-400'
+                            ? 'text-slate-600'
                             : up
-                            ? 'text-emerald-400'
-                            : 'text-red-400'
+                            ? 'text-emerald-600'
+                            : 'text-red-600'
                         }`}
                       >
                         {pctText}
@@ -236,11 +236,11 @@ export default function TrumpTradingPage() {
               </tbody>
             </table>
 
-            <div className="px-4 py-2 border-t border-white/5 text-[11px] text-slate-500 flex items-center justify-between">
+            <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black flex items-center justify-between">
               <span>Source: Yahoo Finance via /api/trump/quotes.</span>
               {loading && <span>Loading live data…</span>}
               {!loading && error && (
-                <span className="text-rose-300">{error}</span>
+                <span className="text-red-600">{error}</span>
               )}
             </div>
           </div>
@@ -251,7 +251,7 @@ export default function TrumpTradingPage() {
           <h2 className="text-lg md:text-xl font-semibold tracking-tight">
             Trump family &amp; DJT — notable moves
           </h2>
-          <p className="mt-2 text-sm text-slate-600 max-w-3xl">
+          <p className="mt-2 text-sm text-black max-w-3xl">
             A high-level overview of key events that shaped the “Trump trade”: listings, family
             involvement in companies and disclosure patterns. This is curated context, not a
             complete trade log.
@@ -262,25 +262,25 @@ export default function TrumpTradingPage() {
               <article key={m.title} className="table-card">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                    <p className="text-xs uppercase tracking-[0.18em] text-black">
                       {m.year} · {m.type}
                     </p>
-                    <h3 className="mt-1 font-semibold text-slate-100">
+                    <h3 className="mt-1 font-semibold text-black">
                       {m.title}
                     </h3>
                   </div>
                 </div>
-                <dl className="mt-3 space-y-1 text-xs text-slate-300">
+                <dl className="mt-3 space-y-1 text-xs text-black">
                   <div>
-                    <dt className="inline text-slate-400">Actors:&nbsp;</dt>
+                    <dt className="inline text-black">Actors:&nbsp;</dt>
                     <dd className="inline">{m.actors}</dd>
                   </div>
                   <div>
-                    <dt className="inline text-slate-400">Instruments:&nbsp;</dt>
+                    <dt className="inline text-black">Instruments:&nbsp;</dt>
                     <dd className="inline">{m.instruments}</dd>
                   </div>
                 </dl>
-                <p className="mt-3 text-sm text-slate-200">{m.summary}</p>
+                <p className="mt-3 text-sm text-black">{m.summary}</p>
               </article>
             ))}
           </div>
@@ -296,15 +296,15 @@ export default function TrumpTradingPage() {
               Live Google News feed
             </span>
           </div>
-          <p className="mt-2 text-sm text-slate-600 max-w-3xl">
+          <p className="mt-2 text-sm text-black max-w-3xl">
             Curated headlines around DJT, Dominari, Hut 8 and a broader Trump search. Use this to
             connect spikes in price and volume to specific events.
           </p>
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
             <div className="table-card">
-              <h3 className="font-semibold text-slate-100">DJT news</h3>
-              <p className="mt-1 text-xs text-slate-400">
+              <h3 className="font-semibold text-black">DJT news</h3>
+              <p className="mt-1 text-xs text-black">
                 Headlines around Trump Media &amp; Technology Group (DJT).
               </p>
               <div className="mt-3">
@@ -313,24 +313,24 @@ export default function TrumpTradingPage() {
             </div>
 
             <div className="table-card">
-              <h3 className="font-semibold text-slate-100">
+              <h3 className="font-semibold text-black">
                 Dominari, Hut 8 &amp; broader Trump news
               </h3>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-black">
                 Combined view: Dominari (DOMH), Hut 8 (HUT) and a broader Trump search to catch
                 cross-ticker headlines.
               </p>
               <div className="mt-3 space-y-4">
                 <div>
-                  <p className="text-[11px] font-medium text-slate-400 mb-1">DOMH</p>
+                  <p className="text-[11px] font-medium text-black mb-1">DOMH</p>
                   <NewsFeed symbol="DOMH" name="Dominari Holdings DOMH stock" limit={3} />
                 </div>
                 <div>
-                  <p className="text-[11px] font-medium text-slate-400 mb-1">HUT</p>
+                  <p className="text-[11px] font-medium text-black mb-1">HUT</p>
                   <NewsFeed symbol="HUT" name="Hut 8 Mining HUT stock" limit={3} />
                 </div>
                 <div>
-                  <p className="text-[11px] font-medium text-slate-400 mb-1">
+                  <p className="text-[11px] font-medium text-black mb-1">
                     Broader Trump search
                   </p>
                   <NewsFeed
