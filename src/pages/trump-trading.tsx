@@ -38,6 +38,22 @@ type NewsApiResp = {
   items: NewsItem[]
 }
 
+type Trade = {
+  actor: string
+  company: string
+  ticker: string
+  date: string
+  transaction: string
+  shares: number | null
+  price: number | null
+  type: 'Buy' | 'Sell' | 'Grant' | 'Other'
+}
+
+type TradesApiResp = {
+  updatedAt: number
+  trades: Trade[]
+}
+
 const KNOWN_MOVES: Move[] = [
   {
     year: '2024',
@@ -107,7 +123,7 @@ function TrumpNewsCard({ symbol, title, description, query, limit = 6 }: TrumpNe
         if (limit) params.set('limit', String(limit))
         const qs = params.toString()
 
-        // 🌎 1) Probeer eerst de legacy /api/news/ endpoint (zelfde bron als homepage, Engels)
+        // 1) Try legacy /api/news/ endpoint (same source as homepage, English)
         const endpoints = [
           `/api/news/${encodeURIComponent(symbol)}?${qs}`,
           `/api/v1/news/${encodeURIComponent(symbol)}?${qs}`,
@@ -123,8 +139,7 @@ function TrumpNewsCard({ symbol, title, description, query, limit = 6 }: TrumpNe
             }
 
             const json: any = await res.json()
-            const items: NewsItem[] =
-              json.items || json.news || []
+            const items: NewsItem[] = json.items || json.news || []
 
             if (!cancelled) {
               setData({
@@ -215,6 +230,10 @@ export default function TrumpTradingPage() {
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
 
+  const [trades, setTrades] = useState<Trade[]>([])
+  const [tradesLoading, setTradesLoading] = useState<boolean>(true)
+  const [tradesError, setTradesError] = useState<string | null>(null)
+
   // Load realtime quotes via /api/trump/quotes
   useEffect(() => {
     let cancelled = false
@@ -242,6 +261,38 @@ export default function TrumpTradingPage() {
 
     load()
     const id = setInterval(load, 30_000) // refresh every 30 seconds
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  // Load insider / linked trades via /api/trump/trades
+  useEffect(() => {
+    let cancelled = false
+
+    const loadTrades = async () => {
+      try {
+        setTradesLoading(true)
+        setTradesError(null)
+
+        const res = await fetch('/api/trump/trades', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const json: TradesApiResp = await res.json()
+        if (!cancelled) {
+          setTrades(json.trades || [])
+        }
+      } catch (e: any) {
+        console.error('TrumpTrading trades error', e)
+        if (!cancelled) setTradesError('Failed to load trading data.')
+      } finally {
+        if (!cancelled) setTradesLoading(false)
+      }
+    }
+
+    loadTrades()
+    const id = setInterval(loadTrades, 5 * 60_000) // refresh every 5 minutes
     return () => {
       cancelled = true
       clearInterval(id)
@@ -392,7 +443,91 @@ export default function TrumpTradingPage() {
           </div>
         </section>
 
-        {/* 2. Known Trump-family & DJT moves */}
+        {/* 2. Trump-linked trading activity (live from SEC) */}
+        <section className="max-w-6xl mx-auto px-4 pb-10">
+          <h2 className="text-lg md:text-xl font-semibold tracking-tight">
+            Trump-linked trading activity (live from SEC)
+          </h2>
+          <p className="mt-2 text-sm text-black max-w-3xl">
+            Insider and company-level filings for Trump-linked names like DJT, Dominari and Hut 8.
+            This aggregates recent Form 4 ownership updates and related filings from the SEC&apos;s
+            EDGAR system into a single view.
+          </p>
+
+          {tradesLoading && !tradesError && (
+            <p className="mt-3 text-sm text-black">Loading trading data…</p>
+          )}
+          {tradesError && (
+            <p className="mt-3 text-sm text-red-600">{tradesError}</p>
+          )}
+
+          {!tradesLoading && !tradesError && trades.length === 0 && (
+            <p className="mt-3 text-sm text-black">
+              No recent Trump-linked trading filings found in the latest SEC data window.
+            </p>
+          )}
+
+          {!tradesLoading && !tradesError && trades.length > 0 && (
+            <div className="mt-4 table-card p-0 overflow-hidden">
+              <table className="w-full text-[12px] md:text-[13px]">
+                <colgroup>
+                  <col className="w-[13%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[29%]" />
+                </colgroup>
+                <thead className="bg-slate-950/70 border-b border-white/10">
+                  <tr className="text-[11px] uppercase tracking-[0.16em] text-slate-200 text-left">
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-2 py-2">Actor</th>
+                    <th className="px-2 py-2">Company</th>
+                    <th className="px-2 py-2">Ticker</th>
+                    <th className="px-2 py-2">Type</th>
+                    <th className="px-3 py-2">Filing description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.map((t) => (
+                    <tr
+                      key={`${t.date}-${t.actor}-${t.ticker}-${t.transaction}`}
+                      className="border-b border-white/5 last:border-b-0 text-black"
+                    >
+                      <td className="px-3 py-2 align-top font-mono text-[11px] whitespace-nowrap">
+                        {t.date}
+                      </td>
+                      <td className="px-2 py-2 align-top text-[12px]">
+                        {t.actor}
+                      </td>
+                      <td className="px-2 py-2 align-top text-[12px]">
+                        {t.company}
+                      </td>
+                      <td className="px-2 py-2 align-top font-mono text-[11px]">
+                        {t.ticker}
+                      </td>
+                      <td className="px-2 py-2 align-top text-[12px]">
+                        <span className="inline-flex items-center rounded-full px-2 py-[2px] text-[11px] border border-slate-300">
+                          {t.type}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-top text-[12px]">
+                        {t.transaction || 'Form 4 filing'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black">
+                Source: SEC EDGAR submissions via /api/trump/trades. Parsed for high-level insight;
+                always refer to the original Form 4 and related filings for full legal detail.
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* 3. Known Trump-family & DJT moves */}
         <section className="max-w-6xl mx-auto px-4 pb-12">
           <h2 className="text-lg md:text-xl font-semibold tracking-tight">
             Trump family &amp; DJT — notable moves
@@ -432,7 +567,7 @@ export default function TrumpTradingPage() {
           </div>
         </section>
 
-        {/* 3. Trump main news (local implementation, no shared NewsFeed) */}
+        {/* 4. Trump main news (local implementation, no shared NewsFeed) */}
         <section className="max-w-6xl mx-auto px-4 pb-16">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg md:text-xl font-semibold tracking-tight">
