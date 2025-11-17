@@ -20,16 +20,6 @@ type TradesResponse = {
   trades: Trade[];
 };
 
-type DebugSummary = {
-  actor: string;
-  cik: string;
-  ticker: string;
-  hasFilings: boolean;
-  filingsCount: number;
-  recentForms: string[];
-  primaryDocs: string[];
-};
-
 type ActorConfig = {
   actor: string;
   cik: string;
@@ -47,13 +37,14 @@ const ACTORS: ActorConfig[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────
-// Kleine XML-helper
+// Kleine XML-helpers (alleen voor Form 4)
 // ─────────────────────────────────────────────────────────────
 function firstMatch(xml: string, regex: RegExp): string | null {
   const m = xml.match(regex);
   return m && m[1] ? m[1].trim() : null;
 }
 
+// Haalt zowel non-derivative als derivative transacties uit de Form 4-XML
 function parseTransactionsFromXml(
   xml: string,
   baseCompany: string,
@@ -62,62 +53,73 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  // Form 4 XMLs gebruiken meestal <nonDerivativeTable><nonDerivativeTransaction>…</…>
-  const blocks = xml.split(/<nonDerivativeTransaction>/i).slice(1);
-  for (const block of blocks) {
-    const section = block.split(/<\/nonDerivativeTransaction>/i)[0] || "";
+  const TAGS = ["nonDerivativeTransaction", "derivativeTransaction"] as const;
 
-    const date =
-      firstMatch(section, /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i) ||
-      firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
-      "";
+  for (const tag of TAGS) {
+    const open = new RegExp(`<${tag}>`, "i");
+    const close = new RegExp(`</${tag}>`, "i");
 
-    const code =
-      firstMatch(
-        section,
-        /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || "";
+    const blocks = xml.split(open).slice(1);
+    for (const block of blocks) {
+      const section = block.split(close)[0] || "";
 
-    const sharesStr =
-      firstMatch(
-        section,
-        /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || null;
+      const date =
+        firstMatch(
+          section,
+          /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) ||
+        firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
+        "";
 
-    const priceStr =
-      firstMatch(
-        section,
-        /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || null;
+      const code =
+        firstMatch(
+          section,
+          /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || "";
 
-    const transDesc =
-      firstMatch(
-        section,
-        /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
-      ) || "Form 4 transaction";
+      const sharesStr =
+        firstMatch(
+          section,
+          /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || null;
 
-    const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
-    const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
-    const value =
-      shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
+      const priceStr =
+        firstMatch(
+          section,
+          /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || null;
 
-    let type: Trade["type"] = "Other";
-    const c = code.toUpperCase();
-    if (c === "A") type = "Buy";
-    else if (c === "D") type = "Sell";
-    else if (c === "G") type = "Grant";
+      const transDesc =
+        firstMatch(
+          section,
+          /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
+        ) || "Form 4 transaction";
 
-    trades.push({
-      actor,
-      company: baseCompany,
-      ticker,
-      date,
-      transaction: transDesc,
-      shares,
-      price,
-      value,
-      type,
-    });
+      const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
+      const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
+      const value =
+        shares != null && price != null
+          ? Number((shares * price).toFixed(2))
+          : null;
+
+      let type: Trade["type"] = "Other";
+      const c = code.toUpperCase();
+      if (c === "A" || c === "P") type = "Buy";   // A=acquired, P=open market purchase
+      else if (c === "D" || c === "S") type = "Sell"; // D=disposed, S=sale
+      else if (c === "G") type = "Grant";
+
+      trades.push({
+        actor,
+        company: baseCompany,
+        ticker,
+        date,
+        transaction: transDesc,
+        shares,
+        price,
+        value,
+        type,
+      });
+    }
   }
 
   return trades;
@@ -135,13 +137,14 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
   if (!filings?.filings?.recent) return [];
 
   const recent = filings.filings.recent;
-
   const trades: Trade[] = [];
-  const maxDocs = 8; // limiter per actor
+  const maxDocs = 10; // limiter per actor
 
   for (let i = 0; i < recent.accessionNumber.length && i < maxDocs; i++) {
     const form = recent.form[i];
-    if (form !== "4") continue; // alleen Form 4
+
+    // Alleen echte Form 4’s pakken; 13G, 8-K etc. zijn geen trade logs
+    if (form !== "4") continue;
 
     const accession = recent.accessionNumber[i];
     const primaryDoc = recent.primaryDocument[i];
@@ -177,7 +180,12 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
           ? "Hut 8 Corp"
           : "Unknown issuer");
 
-      const t = parseTransactionsFromXml(xml, companyName, config.ticker, config.actor);
+      const t = parseTransactionsFromXml(
+        xml,
+        companyName,
+        config.ticker,
+        config.actor
+      );
       trades.push(...t);
     } catch (err) {
       console.error("Error fetching Form 4 XML", xmlUrl, err);
@@ -188,76 +196,11 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
   return trades;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Handler
-// ─────────────────────────────────────────────────────────────
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<
-    TradesResponse | { error: string } | { updatedAt: number; debug: DebugSummary[] }
-  >
+  res: NextApiResponse<TradesResponse | { error: string }>
 ) {
-  const debug = req.query.debug === "1";
-
   try {
-    // 1) DEBUG-MODUS: laat zien wat we van EDGAR krijgen per actor
-    if (debug) {
-      const debugResult: DebugSummary[] = [];
-
-      for (const cfg of ACTORS) {
-        try {
-          const filings = await fetchEdgarFilings(cfg.cik);
-          const recent = filings?.filings?.recent;
-
-          if (!recent) {
-            debugResult.push({
-              actor: cfg.actor,
-              cik: cfg.cik,
-              ticker: cfg.ticker,
-              hasFilings: !!filings,
-              filingsCount: 0,
-              recentForms: [],
-              primaryDocs: [],
-            });
-            continue;
-          }
-
-          const count = recent.form.length;
-          debugResult.push({
-            actor: cfg.actor,
-            cik: cfg.cik,
-            ticker: cfg.ticker,
-            hasFilings: true,
-            filingsCount: count,
-            recentForms: recent.form.slice(0, 10),
-            primaryDocs: recent.primaryDocument.slice(0, 10),
-          });
-        } catch (e: any) {
-          console.error("DEBUG fetchEdgarFilings error:", cfg, e?.message || e);
-          debugResult.push({
-            actor: cfg.actor,
-            cik: cfg.cik,
-            ticker: cfg.ticker,
-            hasFilings: false,
-            filingsCount: 0,
-            recentForms: [],
-            primaryDocs: [],
-          });
-        }
-      }
-
-      res.setHeader(
-        "Cache-Control",
-        "public, s-maxage=60, stale-while-revalidate=30"
-      );
-
-      return res.status(200).json({
-        updatedAt: Date.now(),
-        debug: debugResult,
-      });
-    }
-
-    // 2) NORMALE MODUS: echte trades parsen
     const all: Trade[] = [];
 
     for (const cfg of ACTORS) {
@@ -279,6 +222,7 @@ export default async function handler(
     });
   } catch (err: any) {
     console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
+    // 500 laten we staan – de Trump-pagina toont dan netjes een foutmelding
     return res.status(500).json({ error: "Failed to load EDGAR trades" });
   }
 }
