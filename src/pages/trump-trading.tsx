@@ -1,7 +1,6 @@
 // src/pages/trump-trading.tsx
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
-import NewsFeed from '@/components/NewsFeed'
 
 type TrumpQuote = {
   symbol: string
@@ -23,6 +22,20 @@ type Move = {
   instruments: string
   summary: string
   type: 'Equity' | 'Crypto / mining' | 'Disclosure' | 'Deal / SPAC'
+}
+
+type NewsItem = {
+  id: string
+  title: string
+  link: string
+  source?: string
+  pubDate?: string
+}
+
+type NewsApiResp = {
+  updatedAt: number
+  query: string
+  items: NewsItem[]
 }
 
 const KNOWN_MOVES: Move[] = [
@@ -63,6 +76,111 @@ const KNOWN_MOVES: Move[] = [
     type: 'Disclosure',
   },
 ]
+
+// ─────────────────────────────────────────────────────────────
+// Local news card component for this page only
+// ─────────────────────────────────────────────────────────────
+type TrumpNewsCardProps = {
+  symbol: string
+  title: string
+  description: string
+  query: string
+  limit?: number
+}
+
+function TrumpNewsCard({ symbol, title, description, query, limit = 6 }: TrumpNewsCardProps) {
+  const [data, setData] = useState<NewsApiResp | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        setData(null)
+
+        const params = new URLSearchParams()
+        if (query) params.set('name', query)
+        if (limit) params.set('limit', String(limit))
+
+        const res = await fetch(`/api/v1/news/${encodeURIComponent(symbol)}?${params.toString()}`, {
+          cache: 'no-store',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const json: NewsApiResp = await res.json()
+        if (!cancelled) {
+          setData(json)
+        }
+      } catch (e) {
+        console.error('TrumpNewsCard error', e)
+        if (!cancelled) setError('Failed to load news.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [symbol, query, limit])
+
+  const items = data?.items ?? []
+
+  return (
+    <div className="table-card text-black">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <h3 className="font-semibold text-black">{title}</h3>
+        {data?.updatedAt && (
+          <span className="text-[11px] text-slate-600">
+            Updated {new Date(data.updatedAt).toLocaleTimeString()}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-black">{description}</p>
+
+      {loading && !error && (
+        <p className="mt-3 text-xs text-slate-600">Loading news…</p>
+      )}
+      {error && (
+        <p className="mt-3 text-xs text-red-600">{error}</p>
+      )}
+
+      {!loading && !error && items.length === 0 && (
+        <p className="mt-3 text-xs text-slate-600">No recent headlines found.</p>
+      )}
+
+      {!loading && !error && items.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {items.slice(0, limit).map((it) => (
+            <li key={it.id} className="text-xs">
+              <a
+                href={it.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium hover:underline"
+              >
+                {it.title}
+              </a>
+              <div className="text-[11px] text-slate-600">
+                {it.source || 'Google News'}
+                {it.pubDate && (
+                  <> · {new Date(it.pubDate).toLocaleString()}</>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
 
 export default function TrumpTradingPage() {
   const [quotes, setQuotes] = useState<Record<string, TrumpQuote>>({})
@@ -286,7 +404,7 @@ export default function TrumpTradingPage() {
           </div>
         </section>
 
-        {/* 3. Trump main news */}
+        {/* 3. Trump main news (local implementation, no shared NewsFeed) */}
         <section className="max-w-6xl mx-auto px-4 pb-16">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg md:text-xl font-semibold tracking-tight">
@@ -302,44 +420,36 @@ export default function TrumpTradingPage() {
           </p>
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
-            <div className="table-card">
-              <h3 className="font-semibold text-black">DJT news</h3>
-              <p className="mt-1 text-xs text-black">
-                Headlines around Trump Media &amp; Technology Group (DJT).
-              </p>
-              <div className="mt-3">
-                <NewsFeed symbol="DJT" name="Trump Media & Technology Group DJT stock" limit={6} />
-              </div>
-            </div>
+            <TrumpNewsCard
+              symbol="DJT"
+              title="DJT news"
+              description="Headlines around Trump Media & Technology Group (DJT)."
+              query="Trump Media DJT stock crypto"
+              limit={6}
+            />
 
-            <div className="table-card">
-              <h3 className="font-semibold text-black">
-                Dominari, Hut 8 &amp; broader Trump news
-              </h3>
-              <p className="mt-1 text-xs text-black">
-                Combined view: Dominari (DOMH), Hut 8 (HUT) and a broader Trump search to catch
-                cross-ticker headlines.
-              </p>
-              <div className="mt-3 space-y-4">
-                <div>
-                  <p className="text-[11px] font-medium text-black mb-1">DOMH</p>
-                  <NewsFeed symbol="DOMH" name="Dominari Holdings DOMH stock" limit={3} />
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-black mb-1">HUT</p>
-                  <NewsFeed symbol="HUT" name="Hut 8 Mining HUT stock" limit={3} />
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-black mb-1">
-                    Broader Trump search
-                  </p>
-                  <NewsFeed
-                    symbol="TRUMP-ALL"
-                    name='Donald Trump DJT DOMH "Hut 8 Mining"'
-                    limit={4}
-                  />
-                </div>
-              </div>
+            <div className="grid gap-4">
+              <TrumpNewsCard
+                symbol="DOMH"
+                title="Dominari (DOMH)"
+                description="News around Dominari Holdings (DOMH), the Trump-family micro-cap financial link."
+                query="Dominari Holdings DOMH Trump"
+                limit={3}
+              />
+              <TrumpNewsCard
+                symbol="HUT"
+                title="Hut 8 Mining (HUT)"
+                description="News around Hut 8 Mining (HUT) as a liquid proxy for Trump-linked bitcoin mining exposure."
+                query="Hut 8 Mining HUT Trump American Bitcoin Corp"
+                limit={3}
+              />
+              <TrumpNewsCard
+                symbol="TRUMP-ALL"
+                title="Broader Trump search"
+                description="Broader search capturing Donald Trump headlines relevant for DJT, DOMH and HUT."
+                query='Donald Trump DJT DOMH "Hut 8 Mining" crypto stocks'
+                limit={4}
+              />
             </div>
           </div>
         </section>
