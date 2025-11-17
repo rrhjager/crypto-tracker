@@ -181,6 +181,11 @@ export default function SiteHeader() {
             )}
           </div>
 
+          {/* Trump Trading */}
+          <Link href="/trump-trading" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>Trump Trading</span>
+          </Link>
+
           {/* ✅ NIEUW: Academy vóór About us */}
           <Link href="/academy" className="group text-white/80 hover:text-white transition">
             <span className={`transition-colors ${rainbow}`}>Academy</span>
@@ -269,6 +274,15 @@ export default function SiteHeader() {
               </Link>
             ))}
           </div>
+
+          {/* Trump Trading */}
+          <Link
+            href="/trump-trading"
+            className="group rounded-xl px-4 py-3 text-base hover:bg-white/10"
+            onClick={onMobileLinkClick}
+          >
+            <span className={rainbow}>Trump Trading</span>
+          </Link>
 
           {/* ✅ NIEUW: Academy vóór About us */}
           <Link href="/academy" className="group rounded-xl px-4 py-3 text-base hover:bg-white/10" onClick={onMobileLinkClick}>
