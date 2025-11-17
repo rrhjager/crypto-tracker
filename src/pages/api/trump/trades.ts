@@ -20,6 +20,16 @@ type TradesResponse = {
   trades: Trade[];
 };
 
+type DebugSummary = {
+  actor: string;
+  cik: string;
+  ticker: string;
+  hasFilings: boolean;
+  filingsCount: number;
+  recentForms: string[];
+  primaryDocs: string[];
+};
+
 type ActorConfig = {
   actor: string;
   cik: string;
@@ -28,27 +38,22 @@ type ActorConfig = {
 
 // Mapping van personen/bedrijven naar CIK + ticker
 const ACTORS: ActorConfig[] = [
-  { actor: "DJT insiders",     cik: CIK.DJT_MEDIA,    ticker: "DJT" },
-  { actor: "Dominari insiders",cik: CIK.DOMH,        ticker: "DOMH" },
-  { actor: "Hut 8 insiders",   cik: CIK.HUT,         ticker: "HUT" },
-  { actor: "Donald Trump Jr.", cik: CIK.TRUMP_JR,    ticker: "DOMH" },
-  { actor: "Eric Trump",       cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
-  { actor: "Lara Trump",       cik: CIK.LARA_TRUMP,  ticker: "DJT" },
+  { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,   ticker: "DJT" },
+  { actor: "Dominari insiders", cik: CIK.DOMH,        ticker: "DOMH" },
+  { actor: "Hut 8 insiders",    cik: CIK.HUT,         ticker: "HUT" },
+  { actor: "Donald Trump Jr.",  cik: CIK.TRUMP_JR,    ticker: "DOMH" },
+  { actor: "Eric Trump",        cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
+  { actor: "Lara Trump",        cik: CIK.LARA_TRUMP,  ticker: "DJT" },
 ];
 
 // ─────────────────────────────────────────────────────────────
-// Helpers
+// Kleine XML-helper
 // ─────────────────────────────────────────────────────────────
-
 function firstMatch(xml: string, regex: RegExp): string | null {
   const m = xml.match(regex);
   return m && m[1] ? m[1].trim() : null;
 }
 
-/**
- * Parse zowel non-derivative als derivative transacties uit een Form 4 XML.
- * Simpele regex-aanpak, geen extra dependencies.
- */
 function parseTransactionsFromXml(
   xml: string,
   baseCompany: string,
@@ -57,93 +62,57 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  const nonDerivBlocks = Array.from(
-    xml.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)
-  );
-  const derivBlocks = Array.from(
-    xml.matchAll(/<derivativeTransaction>([\s\S]*?)<\/derivativeTransaction>/gi)
-  );
-
-  const blocks = [...nonDerivBlocks, ...derivBlocks];
-
-  // Fallback datum op basis van periodOfReport
-  const fallbackDate =
-    firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) || "";
-
-  for (const m of blocks) {
-    const section = m[1] || "";
+  // Form 4 XMLs gebruiken meestal <nonDerivativeTable><nonDerivativeTransaction>…</…>
+  const blocks = xml.split(/<nonDerivativeTransaction>/i).slice(1);
+  for (const block of blocks) {
+    const section = block.split(/<\/nonDerivativeTransaction>/i)[0] || "";
 
     const date =
-      firstMatch(
-        section,
-        /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) || fallbackDate;
+      firstMatch(section, /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i) ||
+      firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
+      "";
 
-    // A / D / G / P / S etc.
-    const acquiredDisposed =
+    const code =
       firstMatch(
         section,
         /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
       ) || "";
 
-    const transCode =
-      firstMatch(section, /<transactionCode>([^<]+)<\/transactionCode>/i) || "";
-
     const sharesStr =
       firstMatch(
         section,
         /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) ||
-      firstMatch(
-        section,
-        /<sharesOwnedFollowingTransaction>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) ||
-      null;
+      ) || null;
 
     const priceStr =
       firstMatch(
         section,
         /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) ||
-      firstMatch(
-        section,
-        /<conversionOrExercisePrice>[\s\S]*?<value>([^<]+)<\/value>/i
-      ) ||
-      null;
+      ) || null;
 
-    const description =
+    const transDesc =
       firstMatch(
         section,
-        /<transactionDescription>([^<]+)<\/transactionDescription>/i
-      ) ||
-      (transCode
-        ? `Form 4 transaction (${transCode})`
-        : "Form 4 transaction");
+        /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
+      ) || "Form 4 transaction";
 
     const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
     const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
     const value =
-      shares != null && price != null
-        ? Number((shares * price).toFixed(2))
-        : null;
-
-    // Als er echt niets bruikbaars is, overslaan
-    if (!date && shares == null && price == null) continue;
+      shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
 
     let type: Trade["type"] = "Other";
-    const code = (acquiredDisposed || transCode).toUpperCase();
-
-    // A / P = acquisition (buy), D / S = disposal (sell)
-    if (code === "A" || code === "P") type = "Buy";
-    else if (code === "D" || code === "S") type = "Sell";
-    else if (code === "G") type = "Grant";
+    const c = code.toUpperCase();
+    if (c === "A") type = "Buy";
+    else if (c === "D") type = "Sell";
+    else if (c === "G") type = "Grant";
 
     trades.push({
       actor,
       company: baseCompany,
       ticker,
       date,
-      transaction: description,
+      transaction: transDesc,
       shares,
       price,
       value,
@@ -208,13 +177,8 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
           ? "Hut 8 Corp"
           : "Unknown issuer");
 
-      const parsed = parseTransactionsFromXml(
-        xml,
-        companyName,
-        config.ticker,
-        config.actor
-      );
-      trades.push(...parsed);
+      const t = parseTransactionsFromXml(xml, companyName, config.ticker, config.actor);
+      trades.push(...t);
     } catch (err) {
       console.error("Error fetching Form 4 XML", xmlUrl, err);
       continue;
@@ -225,24 +189,80 @@ async function loadActorTrades(config: ActorConfig): Promise<Trade[]> {
 }
 
 // ─────────────────────────────────────────────────────────────
-
+// Handler
+// ─────────────────────────────────────────────────────────────
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<TradesResponse | { error: string }>
+  res: NextApiResponse<
+    TradesResponse | { error: string } | { updatedAt: number; debug: DebugSummary[] }
+  >
 ) {
-  try {
-    // Parallel ophalen; één mislukte actor breekt de rest niet
-    const results = await Promise.allSettled(
-      ACTORS.map((cfg) => loadActorTrades(cfg))
-    );
+  const debug = req.query.debug === "1";
 
-    const all: Trade[] = [];
-    for (const r of results) {
-      if (r.status === "fulfilled") {
-        all.push(...r.value);
-      } else {
-        console.error("TRUMP_TRADES_ACTOR_ERROR:", r.reason);
+  try {
+    // 1) DEBUG-MODUS: laat zien wat we van EDGAR krijgen per actor
+    if (debug) {
+      const debugResult: DebugSummary[] = [];
+
+      for (const cfg of ACTORS) {
+        try {
+          const filings = await fetchEdgarFilings(cfg.cik);
+          const recent = filings?.filings?.recent;
+
+          if (!recent) {
+            debugResult.push({
+              actor: cfg.actor,
+              cik: cfg.cik,
+              ticker: cfg.ticker,
+              hasFilings: !!filings,
+              filingsCount: 0,
+              recentForms: [],
+              primaryDocs: [],
+            });
+            continue;
+          }
+
+          const count = recent.form.length;
+          debugResult.push({
+            actor: cfg.actor,
+            cik: cfg.cik,
+            ticker: cfg.ticker,
+            hasFilings: true,
+            filingsCount: count,
+            recentForms: recent.form.slice(0, 10),
+            primaryDocs: recent.primaryDocument.slice(0, 10),
+          });
+        } catch (e: any) {
+          console.error("DEBUG fetchEdgarFilings error:", cfg, e?.message || e);
+          debugResult.push({
+            actor: cfg.actor,
+            cik: cfg.cik,
+            ticker: cfg.ticker,
+            hasFilings: false,
+            filingsCount: 0,
+            recentForms: [],
+            primaryDocs: [],
+          });
+        }
       }
+
+      res.setHeader(
+        "Cache-Control",
+        "public, s-maxage=60, stale-while-revalidate=30"
+      );
+
+      return res.status(200).json({
+        updatedAt: Date.now(),
+        debug: debugResult,
+      });
+    }
+
+    // 2) NORMALE MODUS: echte trades parsen
+    const all: Trade[] = [];
+
+    for (const cfg of ACTORS) {
+      const t = await loadActorTrades(cfg);
+      all.push(...t);
     }
 
     // sorteer op datum, nieuw → oud
