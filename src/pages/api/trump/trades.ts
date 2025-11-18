@@ -67,7 +67,7 @@ function firstMatch(xml: string, regex: RegExp): string | null {
  *
  *    COMMON STOCK 11/14/2025 P 10,000 A $3.4144 ...
  *
- *    - Datum:  dd/dd/yyyy
+ *    - Datum:  mm/dd/yyyy
  *    - Code:   1–2 letters (P, S, M, etc.)
  *    - Shares: getal
  *    - A/D:    A of D  (Acquired / Disposed)
@@ -234,7 +234,7 @@ function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
-// ── Belangrijkste wijziging: ALLE Form-4’s in de laatste 6 maanden ophalen
+// ── Belangrijkste wijziging: ALLE Form-4’s in de laatste 12 maanden ophalen
 async function loadActorTrades(
   config: ActorConfig,
   debugCollector?: DebugActor[]
@@ -250,10 +250,10 @@ async function loadActorTrades(
   const xmlUrls: string[] = [];
   let inspected = 0;
 
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
-  const MAX_FORM4_PER_ACTOR = 50;
+  const MAX_FORM4_PER_ACTOR = 80;
   let form4Count = 0;
 
   for (let i = 0; i < recent.accessionNumber.length; i++) {
@@ -263,8 +263,8 @@ async function loadActorTrades(
     const filingDateStr = recent.filingDate?.[i];
     if (filingDateStr) {
       const dt = new Date(filingDateStr);
-      if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
-        // arrays zijn newest-first → zodra we buiten 6m vallen kunnen we stoppen
+      if (!Number.isNaN(dt.getTime()) && dt < oneYearAgo) {
+        // arrays zijn newest-first → zodra we buiten 12m vallen kunnen we stoppen
         break;
       }
     }
