@@ -40,28 +40,15 @@ type ActorConfig = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Trump universe (top 10 belangrijkste personen & bedrijven)
+// Trump-linked actors (nu 6, later uitbreidbaar naar 10+)
 // ─────────────────────────────────────────────────────────────
-
-// Extra personen & bedrijven met confirmed CIKs
 const ACTORS: ActorConfig[] = [
-  // ─── Trump bedrijven ───────────────────────────────────────
-  { actor: "TMTG (DJT Media)", cik: CIK.DJT_MEDIA, ticker: "DJT" },
-  { actor: "DWAC / SPAC insiders", cik: "0001849635", ticker: "DWAC" },
-  { actor: "Trump Org / DJT Trust", cik: "0001960155", ticker: "N/A" },
-
-  // ─── Trump familie ─────────────────────────────────────────
-  { actor: "Donald J. Trump", cik: "0001960152", ticker: "N/A" },
-  { actor: "Melania Trump", cik: "0001960153", ticker: "N/A" },
-  { actor: "Donald Trump Jr.", cik: CIK.TRUMP_JR, ticker: "N/A" },
-  { actor: "Eric Trump", cik: CIK.ERIC_TRUMP, ticker: "N/A" },
-  { actor: "Ivanka Trump", cik: "0001672491", ticker: "N/A" },
-  { actor: "Jared Kushner", cik: "0001614217", ticker: "N/A" },
-  { actor: "Lara Trump", cik: CIK.LARA_TRUMP, ticker: "N/A" },
-
-  // ─── Bestaande bedrijven die al trades gaven ───────────────
-  { actor: "Dominari insiders", cik: CIK.DOMH, ticker: "DOMH" },
-  { actor: "Hut 8 insiders", cik: CIK.HUT, ticker: "HUT" },
+  { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,   ticker: "DJT" },
+  { actor: "Dominari insiders", cik: CIK.DOMH,        ticker: "DOMH" },
+  { actor: "Hut 8 insiders",    cik: CIK.HUT,         ticker: "HUT" },
+  { actor: "Donald Trump Jr.",  cik: CIK.TRUMP_JR,    ticker: "DOMH" },
+  { actor: "Eric Trump",        cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
+  { actor: "Lara Trump",        cik: CIK.LARA_TRUMP,  ticker: "DJT" },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -73,6 +60,21 @@ function firstMatch(xml: string, regex: RegExp): string | null {
   return m && m[1] ? m[1].trim() : null;
 }
 
+/**
+ * Parser voor Form 4:
+ *
+ * 1) Eerst proberen we de "oude" XML structuur met <nonDerivativeTransaction>.
+ * 2) Als dat er niet is (xslF345X05 HTML-viewer), strippen we alle tags en
+ *    zoeken we regels die eruit zien als:
+ *
+ *    COMMON STOCK 11/14/2025 P 10,000 A $3.4144 ...
+ *
+ *    - Datum:  mm/dd/yyyy
+ *    - Code:   1–2 letters (P, S, M, etc.)
+ *    - Shares: getal
+ *    - A/D:    A of D  (Acquired / Disposed)
+ *    - Price:  optioneel, $ 3.4144 of 3.4144
+ */
 function parseTransactionsFromXml(
   xml: string,
   baseCompany: string,
@@ -81,42 +83,53 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  // ─── 1) Oude XML structuur ─────────────────────────────────
+  // ── 1) Echte XML <nonDerivativeTransaction> (oudere Form 4 layouts)
   if (/<nonDerivativeTransaction>/i.test(xml)) {
     const blocks = xml.split(/<nonDerivativeTransaction>/i).slice(1);
-
     for (const block of blocks) {
       const section = block.split(/<\/nonDerivativeTransaction>/i)[0] || "";
 
       const date =
-        firstMatch(section, /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i) ||
+        firstMatch(
+          section,
+          /<transactionDate>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) ||
         firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
         "";
 
       const adCode =
-        firstMatch(section, /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i) ||
-        "";
+        firstMatch(
+          section,
+          /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || "";
 
       const transCode =
-        firstMatch(section, /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i) ||
-        "";
+        firstMatch(
+          section,
+          /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
+        ) || "";
 
       const sharesStr =
-        firstMatch(section, /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i) ||
-        null;
+        firstMatch(
+          section,
+          /<transactionShares>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || null;
 
       const priceStr =
-        firstMatch(section, /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i) ||
-        null;
+        firstMatch(
+          section,
+          /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || null;
 
       const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
       const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
       const value =
-        shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
+        shares != null && price != null
+          ? Number((shares * price).toFixed(2))
+          : null;
 
       let type: Trade["type"] = "Other";
       const flag = adCode.toUpperCase();
-
       if (flag === "A") type = "Buy";
       else if (flag === "D") type = "Sell";
       else if (transCode.toUpperCase() === "G") type = "Grant";
@@ -139,10 +152,12 @@ function parseTransactionsFromXml(
       });
     }
 
-    if (trades.length > 0) return trades;
+    if (trades.length > 0) {
+      return trades;
+    }
   }
 
-  // ─── 2) Fallback parser voor HTML-layout ────────────────────
+  // ── 2) Fallback: nieuwe HTML / xslF345X05 layout
   const text = xml
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/tr>/gi, "\n")
@@ -152,6 +167,7 @@ function parseTransactionsFromXml(
     .replace(/[ \t]+/g, " ")
     .trim();
 
+  // COMMON STOCK 11/14/2025 P 10,000 A $ 3.4144 10,544 D
   const COMMON_ROW_REGEX =
     /COMMON STOCK\s+(\d{2}\/\d{2}\/\d{4})\s+([A-Z]{1,2})\s+([\d,]+)\s+([AD])(?:\s+\$?\s*([\d.]+))?/gi;
 
@@ -160,23 +176,28 @@ function parseTransactionsFromXml(
   while ((m = COMMON_ROW_REGEX.exec(text)) !== null) {
     const [, date, transCode, sharesStr, adFlag, priceStr] = m;
 
-    const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
+    const shares = sharesStr
+      ? Number(sharesStr.replace(/,/g, ""))
+      : null;
     const price = priceStr ? Number(priceStr) : null;
     const value =
-      shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
+      shares != null && price != null
+        ? Number((shares * price).toFixed(2))
+        : null;
 
     let type: Trade["type"] = "Other";
-    const flag = adFlag.toUpperCase();
-
+    const flag = (adFlag || "").toUpperCase();
     if (flag === "A") type = "Buy";
     else if (flag === "D") type = "Sell";
+
+    const transaction = `Form 4: ${transCode} (${flag || "-"})`;
 
     trades.push({
       actor,
       company: baseCompany,
       ticker,
       date,
-      transaction: `Form 4: ${transCode} (${flag})`,
+      transaction,
       shares,
       price,
       value,
@@ -184,12 +205,9 @@ function parseTransactionsFromXml(
     });
   }
 
-  // ─── Deduplicatie ───────────────────────────────────────────
-  const seen = new Set<string>();
-  const unique: Trade[] = [];
-
-  for (const t of trades) {
-    const key = [
+  // Duplicaten eruit (kan gebeuren bij rare HTML / voetnoten)
+  const dedupKey = (t: Trade) =>
+    [
       t.actor,
       t.company,
       t.ticker,
@@ -199,24 +217,26 @@ function parseTransactionsFromXml(
       t.price ?? "-",
     ].join("|");
 
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(t);
-    }
+  const seen = new Set<string>();
+  const unique: Trade[] = [];
+  for (const t of trades) {
+    const key = dedupKey(t);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(t);
   }
 
   return unique;
 }
 
+// Bouw SEC-URL naar de XML/HTML van een specifieke filing
 function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string {
   const cleanCik = cik.replace(/^0+/, "");
   const cleanAcc = accession.replace(/-/g, "");
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Haal ALLE Form-4’s op van laatste 12 maanden
-// ─────────────────────────────────────────────────────────────
+// ── Belangrijkste wijziging: Form-4’s in de laatste 6 maanden, max 10 per actor
 async function loadActorTrades(
   config: ActorConfig,
   debugCollector?: DebugActor[]
@@ -232,10 +252,11 @@ async function loadActorTrades(
   const xmlUrls: string[] = [];
   let inspected = 0;
 
-  const oneYearAgo = new Date();
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  const MAX_FORM4_PER_ACTOR = 80;
+  // Max 10 Form 4 per actor voor snelheid
+  const MAX_FORM4_PER_ACTOR = 10;
   let form4Count = 0;
 
   for (let i = 0; i < recent.accessionNumber.length; i++) {
@@ -245,7 +266,10 @@ async function loadActorTrades(
     const filingDateStr = recent.filingDate?.[i];
     if (filingDateStr) {
       const dt = new Date(filingDateStr);
-      if (!Number.isNaN(dt.getTime()) && dt < oneYearAgo) break;
+      if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
+        // arrays zijn newest-first → zodra we buiten 6m vallen kunnen we stoppen
+        break;
+      }
     }
 
     inspected++;
@@ -281,8 +305,13 @@ async function loadActorTrades(
       const xml = await res.text();
       const companyName =
         filings?.name ||
-        config.ticker ||
-        "Unknown issuer";
+        (config.ticker === "DJT"
+          ? "Trump Media & Technology Group"
+          : config.ticker === "DOMH"
+          ? "Oblong, Inc."
+          : config.ticker === "HUT"
+          ? "Hut 8 Corp"
+          : "Unknown issuer");
 
       const parsed = parseTransactionsFromXml(
         xml,
@@ -290,7 +319,6 @@ async function loadActorTrades(
         config.ticker,
         config.actor
       );
-
       trades.push(...parsed);
     } catch (err) {
       console.error("Error fetching Form 4 XML/HTML", xmlUrl, err);
@@ -318,12 +346,14 @@ async function loadActorTrades(
 // ─────────────────────────────────────────────────────────────
 // API handler
 // ─────────────────────────────────────────────────────────────
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<TradesResponse | { error: string }>
 ) {
   try {
-    const withDebug = req.query.debug === "1" || req.query.debug === "true";
+    const withDebug =
+      req.query.debug === "1" || req.query.debug === "true";
 
     const all: Trade[] = [];
     const debugActors: DebugActor[] = [];
@@ -333,14 +363,13 @@ export default async function handler(
       all.push(...t);
     }
 
+    // sorteer op datum, nieuw → oud (met veilige Date-parse)
     all.sort((a, b) => {
       const da = new Date(a.date).getTime();
       const db = new Date(b.date).getTime();
-
       if (Number.isNaN(da) || Number.isNaN(db)) {
         return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
       }
-
       return db - da;
     });
 
@@ -349,13 +378,15 @@ export default async function handler(
       "public, s-maxage=600, stale-while-revalidate=300"
     );
 
-    return res.status(200).json({
+    const payload: TradesResponse = {
       updatedAt: Date.now(),
       trades: all,
       ...(withDebug ? { debug: debugActors } : {}),
-    });
+    };
+
+    return res.status(200).json(payload);
   } catch (err: any) {
-    console.error("TRUMP_TRADES_API_ERROR:", err);
+    console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
     return res.status(500).json({ error: "Failed to load EDGAR trades" });
   }
 }
