@@ -41,150 +41,37 @@ type ActorConfig = {
 
 // Mapping van personen/bedrijven naar CIK + ticker
 const ACTORS: ActorConfig[] = [
-  { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,    ticker: "DJT" },
-  { actor: "Dominari insiders", cik: CIK.DOMH,         ticker: "DOMH" },
-  { actor: "Hut 8 insiders",    cik: CIK.HUT,          ticker: "HUT" },
-  { actor: "Donald Trump Jr.",  cik: CIK.TRUMP_JR,     ticker: "DOMH" },
-  { actor: "Eric Trump",        cik: CIK.ERIC_TRUMP,   ticker: "HUT" },
-  { actor: "Lara Trump",        cik: CIK.LARA_TRUMP,   ticker: "DJT" },
+  { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,   ticker: "DJT" },
+  { actor: "Dominari insiders", cik: CIK.DOMH,        ticker: "DOMH" },
+  { actor: "Hut 8 insiders",    cik: CIK.HUT,         ticker: "HUT" },
+  { actor: "Donald Trump Jr.",  cik: CIK.TRUMP_JR,    ticker: "DOMH" },
+  { actor: "Eric Trump",        cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
+  { actor: "Lara Trump",        cik: CIK.LARA_TRUMP,  ticker: "DJT" },
 ];
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-// Heel simpele XML-parser met regex (geen nieuwe dependency nodig)
 function firstMatch(xml: string, regex: RegExp): string | null {
   const m = xml.match(regex);
   return m && m[1] ? m[1].trim() : null;
 }
 
-// Alle <tr>…</tr> → rijen met plain-text cellen
-function extractTableRows(html: string): string[][] {
-  const rows: string[][] = [];
-  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  let m: RegExpExecArray | null;
-
-  while ((m = trRegex.exec(html)) !== null) {
-    const rowHtml = m[1];
-    const cells: string[] = [];
-    const tdRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
-    let c: RegExpExecArray | null;
-
-    while ((c = tdRegex.exec(rowHtml)) !== null) {
-      let text = c[1]
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      cells.push(text);
-    }
-
-    if (cells.length > 0) rows.push(cells);
-  }
-
-  return rows;
-}
-
-// HTML-Form 4 parser op basis van kolom-headers (“Title of Security”, “Transaction Date”, enz.)
-function parseHtmlForm4Table(
-  html: string,
-  baseCompany: string,
-  ticker: string,
-  actor: string
-): Trade[] {
-  const trades: Trade[] = [];
-  const rows = extractTableRows(html);
-  if (rows.length === 0) return trades;
-
-  let headerIdx = -1;
-  let titleIdx = -1;
-  let dateIdx = -1;
-  let codeIdx = -1;
-  let sharesIdx = -1;
-  let priceIdx = -1;
-  let adIdx = -1;
-
-  // Zoek header-rij met de typische Form 4-kolommen
-  for (let i = 0; i < rows.length; i++) {
-    const lower = rows[i].map((c) => c.toLowerCase());
-    const joined = lower.join(" ");
-    if (joined.includes("title of security") && joined.includes("transaction date")) {
-      headerIdx = i;
-      for (let j = 0; j < lower.length; j++) {
-        const col = lower[j];
-        if (col.includes("title of security")) titleIdx = j;
-        else if (col.includes("transaction date")) dateIdx = j;
-        else if (col.includes("transaction code")) codeIdx = j;
-        else if (
-          col.includes("amount of securities") ||
-          col.includes("number of shares") ||
-          col.includes("amount acquired") ||
-          col.includes("amount disposed")
-        )
-          sharesIdx = j;
-        else if (col.includes("price") && col.includes("share")) priceIdx = j;
-        else if (col.includes("acquired") && col.includes("disposed")) adIdx = j;
-      }
-      break;
-    }
-  }
-
-  if (headerIdx === -1 || titleIdx === -1 || dateIdx === -1) {
-    // Geen bruikbare tabel gevonden
-    return trades;
-  }
-
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i];
-    // stop als rij helemaal leeg is
-    if (row.every((c) => !c || !c.trim())) continue;
-
-    const title = row[titleIdx] || "";
-    if (!/common/i.test(title)) continue; // we willen Common Stock
-
-    const date = dateIdx >= 0 ? row[dateIdx] || "" : "";
-
-    const code = codeIdx >= 0 ? row[codeIdx] || "" : "";
-    const sharesRaw = sharesIdx >= 0 ? row[sharesIdx] || "" : "";
-    const priceRaw = priceIdx >= 0 ? row[priceIdx] || "" : "";
-    const adRaw = adIdx >= 0 ? row[adIdx] || "" : "";
-
-    const shares = sharesRaw
-      ? Number(sharesRaw.replace(/[^0-9.\-]/g, ""))
-      : null;
-    const price = priceRaw
-      ? Number(priceRaw.replace(/[^0-9.\-]/g, ""))
-      : null;
-    const value =
-      shares != null && price != null ? Number((shares * price).toFixed(2)) : null;
-
-    let type: Trade["type"] = "Other";
-    const flag = adRaw.trim().toUpperCase();
-    if (flag === "A") type = "Buy";
-    else if (flag === "D") type = "Sell";
-
-    const transactionDesc = `Form 4: ${code || "transaction"} (${flag || "-"})`;
-
-    trades.push({
-      actor,
-      company: baseCompany,
-      ticker,
-      date,
-      transaction: transactionDesc,
-      shares,
-      price,
-      value,
-      type,
-    });
-  }
-
-  return trades;
-}
-
 /**
- * Probeert eerst de “echte” XML-structuur (<nonDerivativeTransaction>).
- * Als dat niks oplevert, valt terug op HTML-tabel van xslF345X05
- * en probeert daar Common Stock-transacties uit te lezen.
+ * Parser voor Form 4:
+ *
+ * 1) Eerst proberen we de "oude" XML structuur met <nonDerivativeTransaction>.
+ * 2) Als dat er niet is (xslF345X05 HTML-viewer), strippen we alle tags en
+ *    zoeken we regels die eruit zien als:
+ *
+ *    COMMON STOCK 11/14/2025 P 10,000 A $3.4144 ...
+ *
+ *    - Datum:  dd/dd/yyyy
+ *    - Code:   1–2 letters (P, S, M, etc.)
+ *    - Shares: getal
+ *    - A/D:    A of D  (Acquired / Disposed)
+ *    - Price:  optioneel, $ 3.4144 of 3.4144
  */
 function parseTransactionsFromXml(
   xml: string,
@@ -194,7 +81,7 @@ function parseTransactionsFromXml(
 ): Trade[] {
   const trades: Trade[] = [];
 
-  // 1) Oudere Form 4-XML
+  // ── 1) Echte XML <nonDerivativeTransaction> (oudere Form 4 layouts)
   if (/<nonDerivativeTransaction>/i.test(xml)) {
     const blocks = xml.split(/<nonDerivativeTransaction>/i).slice(1);
     for (const block of blocks) {
@@ -208,10 +95,16 @@ function parseTransactionsFromXml(
         firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
         "";
 
-      const code =
+      const adCode =
         firstMatch(
           section,
           /<transactionAcquiredDisposedCode>[\s\S]*?<value>([^<]+)<\/value>/i
+        ) || "";
+
+      const transCode =
+        firstMatch(
+          section,
+          /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
         ) || "";
 
       const sharesStr =
@@ -226,12 +119,6 @@ function parseTransactionsFromXml(
           /<transactionPricePerShare>[\s\S]*?<value>([^<]+)<\/value>/i
         ) || null;
 
-      const transDesc =
-        firstMatch(
-          section,
-          /<transactionCoding>[\s\S]*?<transactionCode>([^<]+)<\/transactionCode>/i
-        ) || "Form 4 transaction";
-
       const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
       const price = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
       const value =
@@ -240,17 +127,22 @@ function parseTransactionsFromXml(
           : null;
 
       let type: Trade["type"] = "Other";
-      const c = code.toUpperCase();
-      if (c === "A") type = "Buy";
-      else if (c === "D") type = "Sell";
-      else if (c === "G") type = "Grant";
+      const flag = adCode.toUpperCase();
+      if (flag === "A") type = "Buy";
+      else if (flag === "D") type = "Sell";
+      else if (transCode.toUpperCase() === "G") type = "Grant";
+
+      const transaction =
+        transCode || adCode
+          ? `Form 4: ${transCode || adCode} (${flag || "-"})`
+          : "Form 4 transaction";
 
       trades.push({
         actor,
         company: baseCompany,
         ticker,
         date,
-        transaction: transDesc,
+        transaction,
         shares,
         price,
         value,
@@ -258,11 +150,90 @@ function parseTransactionsFromXml(
       });
     }
 
-    if (trades.length > 0) return trades;
+    if (trades.length > 0) {
+      return trades;
+    }
   }
 
-  // 2) Nieuwe HTML-Form 4 viewer (xslF345X05/rdgdoc.xml)
-  return parseHtmlForm4Table(xml, baseCompany, ticker, actor);
+  // ── 2) Fallback: nieuwe HTML / xslF345X05 layout
+  // Maak platte tekst: nieuwe regels rond <tr>/<br> zodat regels logisch worden.
+  const text = xml
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+
+  // Zo ziet een regel er ongeveer uit:
+  // COMMON STOCK 11/14/2025 P 10,000 A $ 3.4144 10,544 D
+  //
+  // We pakken:
+  //   1: datum
+  //   2: trans-code (P, S, M, …)
+  //   3: aantal shares
+  //   4: A/D (acquired/disposed)
+  //   5: prijs (optioneel)
+  const COMMON_ROW_REGEX =
+    /COMMON STOCK\s+(\d{2}\/\d{2}\/\d{4})\s+([A-Z]{1,2})\s+([\d,]+)\s+([AD])(?:\s+\$?\s*([\d.]+))?/gi;
+
+  let m: RegExpExecArray | null;
+
+  while ((m = COMMON_ROW_REGEX.exec(text)) !== null) {
+    const [, date, transCode, sharesStr, adFlag, priceStr] = m;
+
+    const shares = sharesStr
+      ? Number(sharesStr.replace(/,/g, ""))
+      : null;
+    const price = priceStr ? Number(priceStr) : null;
+    const value =
+      shares != null && price != null
+        ? Number((shares * price).toFixed(2))
+        : null;
+
+    let type: Trade["type"] = "Other";
+    const flag = (adFlag || "").toUpperCase();
+    if (flag === "A") type = "Buy";
+    else if (flag === "D") type = "Sell";
+
+    const transaction = `Form 4: ${transCode} (${flag || "-"})`;
+
+    trades.push({
+      actor,
+      company: baseCompany,
+      ticker,
+      date,
+      transaction,
+      shares,
+      price,
+      value,
+      type,
+    });
+  }
+
+  // Eventuele dubbele regels (kan gebeuren bij voetnoten) eruit filteren
+  const dedupKey = (t: Trade) =>
+    [
+      t.actor,
+      t.company,
+      t.ticker,
+      t.date,
+      t.transaction,
+      t.shares ?? "-",
+      t.price ?? "-",
+    ].join("|");
+
+  const seen = new Set<string>();
+  const unique: Trade[] = [];
+  for (const t of trades) {
+    const key = dedupKey(t);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(t);
+  }
+
+  return unique;
 }
 
 // Bouw SEC-URL naar de XML/HTML van een specifieke filing
@@ -331,13 +302,13 @@ async function loadActorTrades(
           ? "Hut 8 Corp"
           : "Unknown issuer");
 
-      const t = parseTransactionsFromXml(
+      const parsed = parseTransactionsFromXml(
         xml,
         companyName,
         config.ticker,
         config.actor
       );
-      trades.push(...t);
+      trades.push(...parsed);
     } catch (err) {
       console.error("Error fetching Form 4 XML/HTML", xmlUrl, err);
       continue;
