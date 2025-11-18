@@ -156,7 +156,6 @@ function parseTransactionsFromXml(
   }
 
   // ── 2) Fallback: nieuwe HTML / xslF345X05 layout
-  // Maak platte tekst: nieuwe regels rond <tr>/<br> zodat regels logisch worden.
   const text = xml
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/tr>/gi, "\n")
@@ -166,15 +165,7 @@ function parseTransactionsFromXml(
     .replace(/[ \t]+/g, " ")
     .trim();
 
-  // Zo ziet een regel er ongeveer uit:
   // COMMON STOCK 11/14/2025 P 10,000 A $ 3.4144 10,544 D
-  //
-  // We pakken:
-  //   1: datum
-  //   2: trans-code (P, S, M, …)
-  //   3: aantal shares
-  //   4: A/D (acquired/disposed)
-  //   5: prijs (optioneel)
   const COMMON_ROW_REGEX =
     /COMMON STOCK\s+(\d{2}\/\d{2}\/\d{4})\s+([A-Z]{1,2})\s+([\d,]+)\s+([AD])(?:\s+\$?\s*([\d.]+))?/gi;
 
@@ -212,7 +203,7 @@ function parseTransactionsFromXml(
     });
   }
 
-  // Eventuele dubbele regels (kan gebeuren bij voetnoten) eruit filteren
+  // Duplicaten eruit (kan gebeuren bij rare HTML / voetnoten)
   const dedupKey = (t: Trade) =>
     [
       t.actor,
@@ -243,6 +234,7 @@ function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
+// ── Belangrijkste wijziging: ALLE Form-4’s in de laatste 6 maanden ophalen
 async function loadActorTrades(
   config: ActorConfig,
   debugCollector?: DebugActor[]
@@ -258,12 +250,28 @@ async function loadActorTrades(
   const xmlUrls: string[] = [];
   let inspected = 0;
 
-  const maxDocs = 10; // limiter per actor
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  for (let i = 0; i < recent.accessionNumber.length && i < maxDocs; i++) {
+  const MAX_FORM4_PER_ACTOR = 50;
+  let form4Count = 0;
+
+  for (let i = 0; i < recent.accessionNumber.length; i++) {
     const form = recent.form[i];
-    if (form !== "4") continue; // alleen Form 4
+    if (form !== "4") continue;
+
+    const filingDateStr = recent.filingDate?.[i];
+    if (filingDateStr) {
+      const dt = new Date(filingDateStr);
+      if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
+        // arrays zijn newest-first → zodra we buiten 6m vallen kunnen we stoppen
+        break;
+      }
+    }
+
     inspected++;
+    form4Count++;
+    if (form4Count > MAX_FORM4_PER_ACTOR) break;
 
     const accession = recent.accessionNumber[i];
     const primaryDoc = recent.primaryDocument[i];
@@ -352,8 +360,15 @@ export default async function handler(
       all.push(...t);
     }
 
-    // sorteer op datum, nieuw → oud
-    all.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    // sorteer op datum, nieuw → oud (met veilige Date-parse)
+    all.sort((a, b) => {
+      const da = new Date(a.date).getTime();
+      const db = new Date(b.date).getTime();
+      if (Number.isNaN(da) || Number.isNaN(db)) {
+        return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+      }
+      return db - da;
+    });
 
     res.setHeader(
       "Cache-Control",
