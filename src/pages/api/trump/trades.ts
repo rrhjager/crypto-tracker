@@ -40,12 +40,13 @@ type ActorConfig = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Trump-linked actors (nu 6, later uitbreidbaar naar 10+)
+// Trump-linked actors (stabiele set die we zeker weten werkt)
 // ─────────────────────────────────────────────────────────────
 const ACTORS: ActorConfig[] = [
   { actor: "DJT insiders",      cik: CIK.DJT_MEDIA,   ticker: "DJT" },
   { actor: "Dominari insiders", cik: CIK.DOMH,        ticker: "DOMH" },
   { actor: "Hut 8 insiders",    cik: CIK.HUT,         ticker: "HUT" },
+
   { actor: "Donald Trump Jr.",  cik: CIK.TRUMP_JR,    ticker: "DOMH" },
   { actor: "Eric Trump",        cik: CIK.ERIC_TRUMP,  ticker: "HUT" },
   { actor: "Lara Trump",        cik: CIK.LARA_TRUMP,  ticker: "DJT" },
@@ -236,7 +237,7 @@ function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
-// ── Belangrijkste wijziging: Form-4’s in de laatste 6 maanden, max 10 per actor
+// ── Alle Form-4’s in de laatste 12 maanden ophalen
 async function loadActorTrades(
   config: ActorConfig,
   debugCollector?: DebugActor[]
@@ -252,11 +253,10 @@ async function loadActorTrades(
   const xmlUrls: string[] = [];
   let inspected = 0;
 
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
-  // Max 10 Form 4 per actor voor snelheid
-  const MAX_FORM4_PER_ACTOR = 10;
+  const MAX_FORM4_PER_ACTOR = 80;
   let form4Count = 0;
 
   for (let i = 0; i < recent.accessionNumber.length; i++) {
@@ -266,8 +266,8 @@ async function loadActorTrades(
     const filingDateStr = recent.filingDate?.[i];
     if (filingDateStr) {
       const dt = new Date(filingDateStr);
-      if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
-        // arrays zijn newest-first → zodra we buiten 6m vallen kunnen we stoppen
+      if (!Number.isNaN(dt.getTime()) && dt < oneYearAgo) {
+        // arrays zijn newest-first → zodra we buiten 12m vallen kunnen we stoppen
         break;
       }
     }
