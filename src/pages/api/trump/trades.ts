@@ -82,7 +82,7 @@ function guessCompanyName(ticker: string, fallback?: string | null): string {
     case "HUT":
       return "Hut 8 Corp";
     case "DWAC":
-      return "Digital World Acquisition Corp.";
+      return "Trump Media & Technology Group Corp.";
     case "QXO":
       return "QXO, Inc.";
     default:
@@ -197,7 +197,6 @@ function parseTransactionsFromXml(
     .replace(/[ \t]+/g, " ")
     .trim();
 
-  // COMMON STOCK 11/14/2025 P 10,000 A $ 3.4144 10,544 D
   const COMMON_ROW_REGEX =
     /COMMON STOCK\s+(\d{2}\/\d{2}\/\d{4})\s+([A-Z]{1,2})\s+([\d,]+)\s+([AD])(?:\s+\$?\s*([\d.]+))?/gi;
 
@@ -235,7 +234,7 @@ function parseTransactionsFromXml(
     });
   }
 
-  // Duplicaten eruit (kan gebeuren bij rare HTML / voetnoten)
+  // Duplicaten eruit
   const dedupKey = (t: Trade) =>
     [
       t.actor,
@@ -257,6 +256,74 @@ function parseTransactionsFromXml(
   }
 
   return unique;
+}
+
+/**
+ * Parser voor 13G/13D/3/5 disclosures:
+ * - haalt datum uit <periodOfReport> als die er is
+ * - probeert aantal aandelen te vinden uit teksten zoals:
+ *   "AMOUNT BENEFICIALLY OWNED BY EACH REPORTING PERSON  6,000,000"
+ *   "SHARES BENEFICIALLY OWNED ..." of "SOLE VOTING POWER ..."
+ */
+function parseDisclosureFromXml(
+  xml: string,
+  baseCompany: string,
+  ticker: string,
+  actor: string,
+  form: string,
+  fallbackDate: string
+): Trade[] {
+  const trades: Trade[] = [];
+
+  const date =
+    firstMatch(xml, /<periodOfReport>([^<]+)<\/periodOfReport>/i) ||
+    fallbackDate ||
+    "";
+
+  const text = xml
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+
+  let shares: number | null = null;
+
+  const patterns: RegExp[] = [
+    /AMOUNT BENEFICIALLY OWNED BY EACH REPORTING PERSON[^0-9]*([\d,]+)/i,
+    /SHARES BENEFICIALLY OWNED[^0-9]*([\d,]+)/i,
+    /SOLE VOTING POWER[^0-9]*([\d,]+)/i,
+    /SOLE DISPOSITIVE POWER[^0-9]*([\d,]+)/i,
+  ];
+
+  for (const r of patterns) {
+    const m = text.match(r);
+    if (m && m[1]) {
+      const n = Number(m[1].replace(/,/g, "").trim());
+      if (!Number.isNaN(n)) {
+        shares = n;
+        break;
+      }
+    }
+  }
+
+  const transaction = `Disclosure filing: ${form}`;
+
+  trades.push({
+    actor,
+    company: baseCompany,
+    ticker,
+    date,
+    transaction,
+    shares,
+    price: null,
+    value: null,
+    type: "Other",
+  });
+
+  return trades;
 }
 
 // Bouw SEC-URL naar de XML/HTML van een specifieke filing
@@ -319,39 +386,112 @@ async function loadActorTrades(
       formUpper.startsWith("SC 13G") ||
       formUpper.startsWith("SC 13D");
 
-    // Alleen Form 4 + disclosure events
     if (!isForm4 && !isDisclosure) continue;
 
     inspected++;
 
     const accession = recent.accessionNumber[i];
     const primaryDoc = recent.primaryDocument[i] || "";
+    const companyName = guessCompanyName(config.ticker, filings?.name);
 
-    // ── Disclosure: snelle, metadata-only regel (geen fetch)
+    // ── Disclosures: nu mét fetch + parse (shares waar mogelijk)
     if (isDisclosure) {
       if (disclosureCount >= MAX_DISCLOSURES_PER_ACTOR) {
         continue;
       }
       disclosureCount++;
 
-      const date = filingDateStr || "";
-      const companyName = guessCompanyName(config.ticker, filings?.name);
-
       forms.push(form);
       primaryDocs.push(primaryDoc);
-      xmlUrls.push(""); // geen doc fetch voor disclosures
 
-      trades.push({
-        actor: config.actor,
-        company: companyName,
-        ticker: config.ticker,
-        date,
-        transaction: `Disclosure filing: ${form}`,
-        shares: null,
-        price: null,
-        value: null,
-        type: "Other",
-      });
+      if (!primaryDoc) {
+        xmlUrls.push("");
+        trades.push({
+          actor: config.actor,
+          company: companyName,
+          ticker: config.ticker,
+          date: filingDateStr || "",
+          transaction: `Disclosure filing: ${form}`,
+          shares: null,
+          price: null,
+          value: null,
+          type: "Other",
+        });
+        continue;
+      }
+
+      const xmlUrl = buildXmlUrl(config.cik, accession, primaryDoc);
+      xmlUrls.push(xmlUrl);
+
+      try {
+        const res = await fetchSafe(
+          xmlUrl,
+          {
+            method: "GET",
+            headers: {
+              "User-Agent":
+                process.env.SEC_USER_AGENT ||
+                "SignalHub AI (contact: support@signalhub.tech)",
+              "Accept-Encoding": "gzip, deflate",
+            },
+          },
+          7000,
+          0
+        );
+        if (!res.ok) {
+          trades.push({
+            actor: config.actor,
+            company: companyName,
+            ticker: config.ticker,
+            date: filingDateStr || "",
+            transaction: `Disclosure filing: ${form}`,
+            shares: null,
+            price: null,
+            value: null,
+            type: "Other",
+          });
+          continue;
+        }
+
+        const xml = await res.text();
+        const parsedDisclosures = parseDisclosureFromXml(
+          xml,
+          companyName,
+          config.ticker,
+          config.actor,
+          form,
+          filingDateStr || ""
+        );
+
+        if (parsedDisclosures.length > 0) {
+          trades.push(...parsedDisclosures);
+        } else {
+          trades.push({
+            actor: config.actor,
+            company: companyName,
+            ticker: config.ticker,
+            date: filingDateStr || "",
+            transaction: `Disclosure filing: ${form}`,
+            shares: null,
+            price: null,
+            value: null,
+            type: "Other",
+          });
+        }
+      } catch (err) {
+        console.error("Error fetching disclosure doc", xmlUrl, err);
+        trades.push({
+          actor: config.actor,
+          company: companyName,
+          ticker: config.ticker,
+          date: filingDateStr || "",
+          transaction: `Disclosure filing: ${form}`,
+          shares: null,
+          price: null,
+          value: null,
+          type: "Other",
+        });
+      }
 
       continue;
     }
@@ -385,7 +525,6 @@ async function loadActorTrades(
       if (!res.ok) continue;
 
       const xml = await res.text();
-      const companyName = guessCompanyName(config.ticker, filings?.name);
 
       const parsed = parseTransactionsFromXml(
         xml,
