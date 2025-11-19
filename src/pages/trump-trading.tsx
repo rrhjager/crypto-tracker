@@ -497,12 +497,34 @@ export default function TrumpTradingPage() {
                 <tbody>
                   {trades.map((t) => {
                     const key = `${t.date}-${t.actor}-${t.ticker}-${t.transaction}`
-                    const valueText =
-                      t.value != null ? `$${t.value.toLocaleString('en-US')}` : '—'
-                    const sharesText =
-                      t.shares != null ? t.shares.toLocaleString('en-US') : '—'
-                    const priceText =
-                      t.price != null ? `$${t.price.toFixed(2)}` : '—'
+
+                    // Disclosure = anything where transaction starts with "Disclosure filing"
+                    const isDisclosure = t.transaction.startsWith('Disclosure filing')
+
+                    // Replace null values with classified notice ONLY for disclosures
+                    const sharesText = isDisclosure
+                      ? (t.shares == null
+                          ? 'Classified (not publicly disclosed)'
+                          : t.shares.toLocaleString('en-US'))
+                      : (t.shares == null
+                          ? '—'
+                          : t.shares.toLocaleString('en-US'))
+
+                    const priceText = isDisclosure
+                      ? (t.price == null
+                          ? 'Classified (not publicly disclosed)'
+                          : `$${t.price.toFixed(2)}`)
+                      : (t.price == null
+                          ? '—'
+                          : `$${t.price.toFixed(2)}`)
+
+                    const valueText = isDisclosure
+                      ? (t.value == null
+                          ? 'Classified (not publicly disclosed)'
+                          : `$${t.value.toLocaleString('en-US')}`)
+                      : (t.value == null
+                          ? '—'
+                          : `$${t.value.toLocaleString('en-US')}`)
 
                     const typeColor =
                       t.type === 'Buy'
