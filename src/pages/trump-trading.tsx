@@ -15,15 +15,6 @@ type QuotesResp = {
   quotes: Record<string, TrumpQuote>
 }
 
-type Move = {
-  year: string
-  title: string
-  actors: string
-  instruments: string
-  summary: string
-  type: 'Equity' | 'Crypto / mining' | 'Disclosure' | 'Deal / SPAC'
-}
-
 type NewsItem = {
   id: string
   title: string
@@ -55,45 +46,6 @@ type TradesApiResp = {
   trades: Trade[]
 }
 
-const KNOWN_MOVES: Move[] = [
-  {
-    year: '2024',
-    title: 'DJT listing on NASDAQ',
-    actors: 'Donald J. Trump',
-    instruments: 'DJT (Trump Media & Technology Group)',
-    summary:
-      'Truth Social parent TMTG lists via SPAC. Trump retains a majority economic stake through a trust, making DJT the main listed “Trump asset”. Price highly sensitive to political headlines and legal developments.',
-    type: 'Equity',
-  },
-  {
-    year: '2024',
-    title: 'Trump family enters Dominari Holdings',
-    actors: 'Donald Trump Jr., Eric Trump',
-    instruments: 'DOMH (Dominari Holdings)',
-    summary:
-      'Trump Jr. and Eric Trump join Dominari, a small-cap financial/brokerage play. Shares rally sharply around the announcement period, with volumes well above historical averages.',
-    type: 'Equity',
-  },
-  {
-    year: '2024',
-    title: 'Trump-linked mining via American Bitcoin Corp',
-    actors: 'Eric Trump',
-    instruments: 'Private company + listed miner HUT',
-    summary:
-      'Eric Trump takes a strategic role at American Bitcoin Corp. The story creates a “mining trade” via public names like Hut 8 Mining (HUT), which already had existing exposure to bitcoin mining economics.',
-    type: 'Crypto / mining',
-  },
-  {
-    year: '2017–now',
-    title: 'Disclosure portfolio in OGE filings',
-    actors: 'Donald J. Trump',
-    instruments: 'Municipal bonds, broad ETFs, individual stocks',
-    summary:
-      'Annual OGE Form 278e filings show a mix of muni bonds, ETFs and various investments. The disclosures reflect asset mix and size ranges, not trade-by-trade activity, so they are useful for understanding exposure but not for timing trades.',
-    type: 'Disclosure',
-  },
-]
-
 // ─────────────────────────────────────────────────────────────
 // Local news card component for this page only
 // ─────────────────────────────────────────────────────────────
@@ -124,7 +76,6 @@ function TrumpNewsCard({ symbol, title, description, query, limit = 6 }: TrumpNe
         if (limit) params.set('limit', String(limit))
         const qs = params.toString()
 
-        // 1) Try legacy /api/news/ endpoint (same source as homepage, English)
         const endpoints = [
           `/api/news/${encodeURIComponent(symbol)}?${qs}`,
           `/api/v1/news/${encodeURIComponent(symbol)}?${qs}`,
@@ -324,28 +275,6 @@ export default function TrumpTradingPage() {
             Special topic
           </p>
           <h1 className="hero">Trump Trading</h1>
-          <p className="mt-3 max-w-2xl text-sm md:text-base text-black">
-            This page gives you a focused view on the “Trump trade”: which tickers are directly
-            linked to Donald Trump and his family, what insider filings hit the tape, and how the
-            news flow looks around those names.
-          </p>
-          <p className="mt-2 max-w-2xl text-sm md:text-base text-black">
-            Prices update in real time via a dedicated quote endpoint. Headlines are pulled from
-            Google News through the existing SignalHub news infrastructure. Insider activity is
-            derived from SEC Form 4 filings and similar ownership updates.
-          </p>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className="badge bg-blue-50 text-blue-700 ring-1 ring-blue-200">
-              Trump tickers
-            </span>
-            <span className="badge bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
-              Insider &amp; family trading
-            </span>
-            <span className="badge bg-amber-50 text-amber-700 ring-1 ring-amber-200">
-              Trump news flow
-            </span>
-          </div>
         </section>
 
         {/* 1. Trump tickers (realtime) */}
@@ -358,10 +287,6 @@ export default function TrumpTradingPage() {
               Data via /api/trump/quotes · refreshed every 30 seconds
             </span>
           </div>
-          <p className="mt-2 text-sm text-black max-w-3xl">
-            These are the core tradeable instruments in the Trump ecosystem: DJT (media), DOMH
-            (micro-cap financial), HUT (bitcoin mining) and BTC as the underlying crypto driver.
-          </p>
 
           <div className="mt-4 table-card p-0 overflow-hidden">
             <table className="w-full text-[13px]">
@@ -445,16 +370,11 @@ export default function TrumpTradingPage() {
           </div>
         </section>
 
-        {/* 2. Trump-linked trading activity (live from SEC) */}
+        {/* 2. Trump-linked trading activity */}
         <section className="max-w-6xl mx-auto px-4 pb-10">
           <h2 className="text-lg md:text-xl font-semibold tracking-tight">
-            Trump-linked trading activity (live from SEC)
+            Trump-linked trading activity
           </h2>
-          <p className="mt-2 text-sm text-black max-w-3xl">
-            Insider and company-level filings for Trump-linked names like DJT, Dominari and Hut 8.
-            This aggregates recent Form 4 ownership updates and related filings from the SEC&apos;s
-            EDGAR system into a single view: who bought or sold, how much, and at what price.
-          </p>
 
           {tradesLoading && !tradesError && (
             <p className="mt-3 text-sm text-black">Loading trading data…</p>
@@ -498,10 +418,8 @@ export default function TrumpTradingPage() {
                   {trades.map((t) => {
                     const key = `${t.date}-${t.actor}-${t.ticker}-${t.transaction}`
 
-                    // Disclosure = anything where transaction starts with "Disclosure filing"
                     const isDisclosure = t.transaction.startsWith('Disclosure filing')
 
-                    // Replace null values with classified notice ONLY for disclosures
                     const sharesText = isDisclosure
                       ? (t.shares == null
                           ? 'Classified (not publicly disclosed)'
@@ -580,60 +498,13 @@ export default function TrumpTradingPage() {
           )}
         </section>
 
-        {/* 3. Known Trump-family & DJT moves */}
-        <section className="max-w-6xl mx-auto px-4 pb-12">
-          <h2 className="text-lg md:text-xl font-semibold tracking-tight">
-            Trump family &amp; DJT — notable moves
-          </h2>
-          <p className="mt-2 text-sm text-black max-w-3xl">
-            A high-level overview of key events that shaped the “Trump trade”: listings, family
-            involvement in companies and disclosure patterns. This is curated context, not a
-            complete trade log.
-          </p>
-
-          <div className="mt-6 grid gap-6 md:grid-cols-2">
-            {KNOWN_MOVES.map((m) => (
-              <article key={m.title} className="table-card">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-black">
-                      {m.year} · {m.type}
-                    </p>
-                    <h3 className="mt-1 font-semibold text-black">
-                      {m.title}
-                    </h3>
-                  </div>
-                </div>
-                <dl className="mt-3 space-y-1 text-xs text-black">
-                  <div>
-                    <dt className="inline text-black">Actors:&nbsp;</dt>
-                    <dd className="inline">{m.actors}</dd>
-                  </div>
-                  <div>
-                    <dt className="inline text-black">Instruments:&nbsp;</dt>
-                    <dd className="inline">{m.instruments}</dd>
-                  </div>
-                </dl>
-                <p className="mt-3 text-sm text-black">{m.summary}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        {/* 4. Trump main news (local implementation, no shared NewsFeed) */}
+        {/* 3. Trump main news (local implementation, no shared NewsFeed) */}
         <section className="max-w-6xl mx-auto px-4 pb-16">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-lg md:text-xl font-semibold tracking-tight">
               Trump main news
             </h2>
-          <span className="badge bg-red-50 text-red-700 ring-1 ring-red-200">
-              Live Google News feed
-            </span>
           </div>
-          <p className="mt-2 text-sm text-black max-w-3xl">
-            Curated headlines around DJT, Dominari, Hut 8 and a broader Trump search. Use this to
-            connect spikes in price and volume to specific events.
-          </p>
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
             <TrumpNewsCard
