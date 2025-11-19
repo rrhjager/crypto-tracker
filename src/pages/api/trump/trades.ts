@@ -39,21 +39,21 @@ type ActorConfig = {
   ticker: string;
 };
 
-// Trump-linked actors & bedrijven (minstens de 10 belangrijkste + trusts/SPAC)
+// Trump-linked actors & bedrijven
 const ACTORS: ActorConfig[] = [
-  { actor: "DJT Media insiders",      cik: CIK.DJT_MEDIA,            ticker: "DJT"  },
-  { actor: "Dominari insiders",       cik: CIK.DOMH,                 ticker: "DOMH" },
-  { actor: "Hut 8 insiders",          cik: CIK.HUT,                  ticker: "HUT"  },
-  { actor: "DWAC SPAC insiders",      cik: CIK.DWAC,                 ticker: "DWAC" },
+  { actor: "DJT Media insiders",     cik: CIK.DJT_MEDIA,           ticker: "DJT"  },
+  { actor: "Dominari insiders",      cik: CIK.DOMH,                ticker: "DOMH" },
+  { actor: "Hut 8 insiders",         cik: CIK.HUT,                 ticker: "HUT"  },
+  { actor: "DWAC SPAC insiders",     cik: CIK.DWAC,                ticker: "DWAC" },
 
-  { actor: "Donald J. Trump",         cik: CIK.TRUMP_DJT,            ticker: "DJT"  },
-  { actor: "Melania Trump",           cik: CIK.MELANIA_TRUMP,        ticker: "DJT"  },
-  { actor: "Donald Trump Jr.",        cik: CIK.TRUMP_JR,             ticker: "DOMH" },
-  { actor: "Eric Trump",              cik: CIK.ERIC_TRUMP,           ticker: "HUT"  },
-  { actor: "Ivanka Trump",            cik: CIK.IVANKA_TRUMP,         ticker: "DJT"  },
-  { actor: "Jared Kushner",           cik: CIK.JARED_KUSHNER,        ticker: "QXO"  },
-  { actor: "Lara Trump",              cik: CIK.LARA_TRUMP,           ticker: "DJT"  },
-  { actor: "DJT Revocable Trust",     cik: CIK.DJT_REVOCABLE_TRUST,  ticker: "DJT"  },
+  { actor: "Donald J. Trump",        cik: CIK.TRUMP_DJT,           ticker: "DJT"  },
+  { actor: "Melania Trump",          cik: CIK.MELANIA_TRUMP,       ticker: "DJT"  },
+  { actor: "Donald Trump Jr.",       cik: CIK.TRUMP_JR,            ticker: "DOMH" },
+  { actor: "Eric Trump",             cik: CIK.ERIC_TRUMP,          ticker: "HUT"  },
+  { actor: "Ivanka Trump",           cik: CIK.IVANKA_TRUMP,        ticker: "DJT"  },
+  { actor: "Jared Kushner",          cik: CIK.JARED_KUSHNER,       ticker: "QXO"  },
+  { actor: "Lara Trump",             cik: CIK.LARA_TRUMP,          ticker: "DJT"  },
+  { actor: "DJT Revocable Trust",    cik: CIK.DJT_REVOCABLE_TRUST, ticker: "DJT"  },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -305,21 +305,17 @@ async function loadActorTrades(
 
     if (filingDateStr) {
       const dt = new Date(filingDateStr);
-      if (!Number.isNaN(dt.getTime())) {
-        if (dt < sixMonthsAgo) {
-          // newest-first; zodra we buiten 6 maanden vallen, klaar
-          break;
-        }
+      if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
+        // newest-first; zodra we buiten 6 maanden vallen, klaar
+        break;
       }
     }
 
-    // Form-4 → echte trades, met shares/price/value
+    // Form-4 → echte trades
     if (form === "4") {
       inspected++;
       form4Count++;
-      if (form4Count > MAX_FORM4_PER_ACTOR) {
-        continue;
-      }
+      if (form4Count > MAX_FORM4_PER_ACTOR) continue;
 
       const accession = recent.accessionNumber[i];
       const primaryDoc = recent.primaryDocument[i];
@@ -363,12 +359,10 @@ async function loadActorTrades(
       continue;
     }
 
-    // Disclosure events (13D/13G/425/424B3) → alleen metadata
+    // Disclosure events (13D/13G/425/424B3)
     if (isDisclosureForm(form)) {
       disclosureCount++;
-      if (disclosureCount > MAX_DISCLOSURES_PER_ACTOR) {
-        continue;
-      }
+      if (disclosureCount > MAX_DISCLOSURES_PER_ACTOR) continue;
 
       inspected++;
 
@@ -382,12 +376,7 @@ async function loadActorTrades(
       primaryDocs.push(primaryDoc);
       xmlUrls.push(xmlUrl);
 
-      // Gebruik filingDate; als die leeg is, periodOfReport fallback ophalen uit XML
-      // (maar alleen als echt nodig)
-      if (!filingDate) {
-        filingDate = filingDateStr || "";
-      }
-
+      // Gebruik filingDate direct (geen extra fetch)
       trades.push({
         actor: config.actor,
         company: companyName,
@@ -403,7 +392,7 @@ async function loadActorTrades(
       continue;
     }
 
-    // Andere forms negeren
+    // andere forms negeren
   }
 
   if (debugCollector) {
@@ -444,4 +433,29 @@ export default async function handler(
     }
 
     // sorteer op datum, nieuw → oud (met veilige Date-parse)
-    all.sort((a, b
+    all.sort((a, b) => {
+      const da = new Date(a.date).getTime();
+      const db = new Date(b.date).getTime();
+      if (Number.isNaN(da) || Number.isNaN(db)) {
+        return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+      }
+      return db - da;
+    });
+
+    res.setHeader(
+      "Cache-Control",
+      "public, s-maxage=600, stale-while-revalidate=300"
+    );
+
+    const payload: TradesResponse = {
+      updatedAt: Date.now(),
+      trades: all,
+      ...(withDebug ? { debug: debugActors } : {}),
+    };
+
+    return res.status(200).json(payload);
+  } catch (err: any) {
+    console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load EDGAR trades" });
+  }
+}
