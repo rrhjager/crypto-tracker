@@ -39,21 +39,28 @@ type ActorConfig = {
   ticker: string;
 };
 
-// Trump-linked actors & bedrijven
-const ACTORS: ActorConfig[] = [
-  { actor: "DJT Media insiders",     cik: CIK.DJT_MEDIA,           ticker: "DJT"  },
-  { actor: "Dominari insiders",      cik: CIK.DOMH,                ticker: "DOMH" },
-  { actor: "Hut 8 insiders",         cik: CIK.HUT,                 ticker: "HUT"  },
-  { actor: "DWAC SPAC insiders",     cik: CIK.DWAC,                ticker: "DWAC" },
+// ─────────────────────────────────────────────────────────────
+// Actors: bedrijven + personen + trust
+// ─────────────────────────────────────────────────────────────
 
-  { actor: "Donald J. Trump",        cik: CIK.TRUMP_DJT,           ticker: "DJT"  },
-  { actor: "Melania Trump",          cik: CIK.MELANIA_TRUMP,       ticker: "DJT"  },
-  { actor: "Donald Trump Jr.",       cik: CIK.TRUMP_JR,            ticker: "DOMH" },
-  { actor: "Eric Trump",             cik: CIK.ERIC_TRUMP,          ticker: "HUT"  },
-  { actor: "Ivanka Trump",           cik: CIK.IVANKA_TRUMP,        ticker: "DJT"  },
-  { actor: "Jared Kushner",          cik: CIK.JARED_KUSHNER,       ticker: "QXO"  },
-  { actor: "Lara Trump",             cik: CIK.LARA_TRUMP,          ticker: "DJT"  },
-  { actor: "DJT Revocable Trust",    cik: CIK.DJT_REVOCABLE_TRUST, ticker: "DJT"  },
+const ACTORS: ActorConfig[] = [
+  // bedrijven
+  { actor: "DJT Media insiders",   cik: CIK.DJT_MEDIA,   ticker: "DJT" },
+  { actor: "Dominari insiders",    cik: CIK.DOMH,        ticker: "DOMH" },
+  { actor: "Hut 8 insiders",       cik: CIK.HUT,         ticker: "HUT" },
+  { actor: "DWAC SPAC insiders",   cik: CIK.DWAC,        ticker: "DWAC" },
+
+  // personen
+  { actor: "Donald J. Trump",      cik: CIK.DONALD_TRUMP,    ticker: "DJT" },
+  { actor: "Melania Trump",        cik: CIK.MELANIA_TRUMP,   ticker: "DJT" },
+  { actor: "Donald Trump Jr.",     cik: CIK.TRUMP_JR,        ticker: "DOMH" },
+  { actor: "Eric Trump",           cik: CIK.ERIC_TRUMP,      ticker: "HUT" },
+  { actor: "Ivanka Trump",         cik: CIK.IVANKA_TRUMP,    ticker: "DJT" },
+  { actor: "Jared Kushner",        cik: CIK.JARED_KUSHNER,   ticker: "QXO" },
+  { actor: "Lara Trump",           cik: CIK.LARA_TRUMP,      ticker: "DJT" },
+
+  // trust
+  { actor: "DJT Revocable Trust",  cik: CIK.DJT_TRUST,       ticker: "DJT" },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -63,6 +70,24 @@ const ACTORS: ActorConfig[] = [
 function firstMatch(xml: string, regex: RegExp): string | null {
   const m = xml.match(regex);
   return m && m[1] ? m[1].trim() : null;
+}
+
+function guessCompanyName(ticker: string, fallback?: string | null): string {
+  if (fallback) return fallback;
+  switch (ticker) {
+    case "DJT":
+      return "Trump Media & Technology Group";
+    case "DOMH":
+      return "Oblong, Inc.";
+    case "HUT":
+      return "Hut 8 Corp";
+    case "DWAC":
+      return "Digital World Acquisition Corp.";
+    case "QXO":
+      return "QXO, Inc.";
+    default:
+      return "Unknown issuer";
+  }
 }
 
 /**
@@ -181,7 +206,9 @@ function parseTransactionsFromXml(
   while ((m = COMMON_ROW_REGEX.exec(text)) !== null) {
     const [, date, transCode, sharesStr, adFlag, priceStr] = m;
 
-    const shares = sharesStr ? Number(sharesStr.replace(/,/g, "")) : null;
+    const shares = sharesStr
+      ? Number(sharesStr.replace(/,/g, ""))
+      : null;
     const price = priceStr ? Number(priceStr) : null;
     const value =
       shares != null && price != null
@@ -233,32 +260,19 @@ function parseTransactionsFromXml(
 }
 
 // Bouw SEC-URL naar de XML/HTML van een specifieke filing
-function buildXmlUrl(cik: string, accession: string, primaryDoc: string): string {
+function buildXmlUrl(
+  cik: string,
+  accession: string,
+  primaryDoc: string
+): string {
   const cleanCik = cik.replace(/^0+/, "");
   const cleanAcc = accession.replace(/-/g, "");
   return `https://www.sec.gov/Archives/edgar/data/${cleanCik}/${cleanAcc}/${primaryDoc}`;
 }
 
 // ─────────────────────────────────────────────────────────────
-// EDGAR loader – Form 4 + disclosure events (6 maanden window)
+// Form-4 + disclosure events (laatste 6 maanden)
 // ─────────────────────────────────────────────────────────────
-
-const DISCLOSURE_PREFIXES = [
-  "SC 13D",
-  "SC 13D/A",
-  "SC 13G",
-  "SC 13G/A",
-  "SCHEDULE 13D",
-  "SCHEDULE 13D/A",
-  "SCHEDULE 13G",
-  "SCHEDULE 13G/A",
-  "425",
-  "424B3",
-];
-
-function isDisclosureForm(form: string): boolean {
-  return DISCLOSURE_PREFIXES.some((p) => form.startsWith(p));
-}
 
 async function loadActorTrades(
   config: ActorConfig,
@@ -283,106 +297,56 @@ async function loadActorTrades(
   let form4Count = 0;
   let disclosureCount = 0;
 
-  const filingsCount = recent.accessionNumber.length;
-  const companyName =
-    filings?.name ||
-    (config.ticker === "DJT"
-      ? "Trump Media & Technology Group"
-      : config.ticker === "DOMH"
-      ? "Oblong, Inc."
-      : config.ticker === "HUT"
-      ? "Hut 8 Corp"
-      : config.ticker === "DWAC"
-      ? "Digital World Acquisition Corp."
-      : config.ticker === "QXO"
-      ? "QXO, Inc."
-      : "Unknown issuer");
+  for (let i = 0; i < recent.accessionNumber.length; i++) {
+    const form = recent.form[i] || "";
+    const formUpper = form.toUpperCase();
 
-  for (let i = 0; i < filingsCount; i++) {
-    const form = recent.form[i];
     const filingDateStr = recent.filingDate?.[i];
-    let filingDate = filingDateStr || "";
-
     if (filingDateStr) {
       const dt = new Date(filingDateStr);
       if (!Number.isNaN(dt.getTime()) && dt < sixMonthsAgo) {
-        // newest-first; zodra we buiten 6 maanden vallen, klaar
+        // arrays zijn newest-first → zodra we buiten 6m vallen kunnen we breken
         break;
       }
     }
 
-    // Form-4 → echte trades
-    if (form === "4") {
-      inspected++;
-      form4Count++;
-      if (form4Count > MAX_FORM4_PER_ACTOR) continue;
+    const isForm4 = form === "4";
+    const isDisclosure =
+      formUpper.includes("13G") ||
+      formUpper.includes("13D") ||
+      formUpper === "3" ||
+      formUpper === "5" ||
+      formUpper.startsWith("SC 13G") ||
+      formUpper.startsWith("SC 13D");
 
-      const accession = recent.accessionNumber[i];
-      const primaryDoc = recent.primaryDocument[i];
-      if (!primaryDoc) continue;
+    // Alleen Form 4 + disclosure events
+    if (!isForm4 && !isDisclosure) continue;
 
-      const xmlUrl = buildXmlUrl(config.cik, accession, primaryDoc);
-      forms.push(form);
-      primaryDocs.push(primaryDoc);
-      xmlUrls.push(xmlUrl);
+    inspected++;
 
-      try {
-        const res = await fetchSafe(
-          xmlUrl,
-          {
-            method: "GET",
-            headers: {
-              "User-Agent":
-                process.env.SEC_USER_AGENT ||
-                "SignalHub AI (contact: support@signalhub.tech)",
-              "Accept-Encoding": "gzip, deflate",
-            },
-          },
-          8000,
-          0
-        );
-        if (!res.ok) continue;
+    const accession = recent.accessionNumber[i];
+    const primaryDoc = recent.primaryDocument[i] || "";
 
-        const xml = await res.text();
-        const parsed = parseTransactionsFromXml(
-          xml,
-          companyName,
-          config.ticker,
-          config.actor
-        );
-        trades.push(...parsed);
-      } catch (err) {
-        console.error("Error fetching Form 4 XML/HTML", xmlUrl, err);
+    // ── Disclosure: snelle, metadata-only regel (geen fetch)
+    if (isDisclosure) {
+      if (disclosureCount >= MAX_DISCLOSURES_PER_ACTOR) {
         continue;
       }
-
-      continue;
-    }
-
-    // Disclosure events (13D/13G/425/424B3)
-    if (isDisclosureForm(form)) {
       disclosureCount++;
-      if (disclosureCount > MAX_DISCLOSURES_PER_ACTOR) continue;
 
-      inspected++;
-
-      const accession = recent.accessionNumber[i];
-      const primaryDoc = recent.primaryDocument[i] || "";
-      const xmlUrl = primaryDoc
-        ? buildXmlUrl(config.cik, accession, primaryDoc)
-        : "";
+      const date = filingDateStr || "";
+      const companyName = guessCompanyName(config.ticker, filings?.name);
 
       forms.push(form);
       primaryDocs.push(primaryDoc);
-      xmlUrls.push(xmlUrl);
+      xmlUrls.push(""); // geen doc fetch voor disclosures
 
-      // Gebruik filingDate direct (geen extra fetch)
       trades.push({
         actor: config.actor,
         company: companyName,
         ticker: config.ticker,
-        date: filingDate,
-        transaction: `${form} disclosure filing`,
+        date,
+        transaction: `Disclosure filing: ${form}`,
         shares: null,
         price: null,
         value: null,
@@ -392,7 +356,48 @@ async function loadActorTrades(
       continue;
     }
 
-    // andere forms negeren
+    // ── Form 4: volledige parse (shares / price / value)
+    form4Count++;
+    if (form4Count > MAX_FORM4_PER_ACTOR) break;
+
+    if (!primaryDoc) continue;
+
+    const xmlUrl = buildXmlUrl(config.cik, accession, primaryDoc);
+    forms.push(form);
+    primaryDocs.push(primaryDoc);
+    xmlUrls.push(xmlUrl);
+
+    try {
+      const res = await fetchSafe(
+        xmlUrl,
+        {
+          method: "GET",
+          headers: {
+            "User-Agent":
+              process.env.SEC_USER_AGENT ||
+              "SignalHub AI (contact: support@signalhub.tech)",
+            "Accept-Encoding": "gzip, deflate",
+          },
+        },
+        8000,
+        0
+      );
+      if (!res.ok) continue;
+
+      const xml = await res.text();
+      const companyName = guessCompanyName(config.ticker, filings?.name);
+
+      const parsed = parseTransactionsFromXml(
+        xml,
+        companyName,
+        config.ticker,
+        config.actor
+      );
+      trades.push(...parsed);
+    } catch (err) {
+      console.error("Error fetching Form 4 XML/HTML", xmlUrl, err);
+      continue;
+    }
   }
 
   if (debugCollector) {
@@ -400,7 +405,7 @@ async function loadActorTrades(
       actor: config.actor,
       cik: config.cik,
       ticker: config.ticker,
-      filingsCount,
+      filingsCount: recent.accessionNumber.length,
       inspected,
       forms,
       primaryDocs,
@@ -428,7 +433,10 @@ export default async function handler(
     const debugActors: DebugActor[] = [];
 
     for (const cfg of ACTORS) {
-      const t = await loadActorTrades(cfg, withDebug ? debugActors : undefined);
+      const t = await loadActorTrades(
+        cfg,
+        withDebug ? debugActors : undefined
+      );
       all.push(...t);
     }
 
@@ -456,6 +464,8 @@ export default async function handler(
     return res.status(200).json(payload);
   } catch (err: any) {
     console.error("TRUMP_TRADES_API_ERROR:", err?.message || err);
-    return res.status(500).json({ error: "Failed to load EDGAR trades" });
+    return res
+      .status(500)
+      .json({ error: "Failed to load EDGAR trades" });
   }
 }
