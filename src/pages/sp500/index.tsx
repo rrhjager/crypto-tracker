@@ -1,4 +1,3 @@
-// src/pages/sp500/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
@@ -172,7 +171,11 @@ export default function Sp500Page() {
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
                         <td className="px-2 py-3">
                           <div className="flex items-center gap-1.5">
-                            <Link href={`/sp500/${encodeURIComponent(row.symbol)}`} className="font-medium text-gray-900 hover:underline truncate">
+                            {/* ENIGE AANPASSING: dark:text-slate-100 toegevoegd */}
+                            <Link
+                              href={`/sp500/${encodeURIComponent(row.symbol)}`}
+                              className="font-medium text-gray-900 dark:text-slate-100 hover:underline truncate"
+                            >
                               {row.name}
                             </Link>
                             <span className="text-gray-500 shrink-0">({row.symbol})</span>
