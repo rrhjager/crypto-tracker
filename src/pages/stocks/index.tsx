@@ -1,4 +1,3 @@
-// src/pages/stocks/index.tsx
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
@@ -38,7 +37,6 @@ const statusFromScore = (score?: number): Advice => {
   return s >= 66 ? 'BUY' : s <= 33 ? 'SELL' : 'HOLD'
 }
 
-// batching helpers (zelfde beleid als SP500/NASDAQ)
 const CHUNK = 50
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
 function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for (let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
@@ -57,7 +55,6 @@ async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promi
 export default function AEXIndex() {
   const symbols = useMemo(() => AEX.map(x => x.symbol), [])
 
-  // 1) Snapshot (batches, vervangt quotes + ret-batch + oude snapshot-list)
   const [items, setItems] = useState<SnapItem[]>([])
   const [snapErr, setSnapErr] = useState<string | null>(null)
 
@@ -79,28 +76,25 @@ export default function AEXIndex() {
       } catch (e:any) {
         if (!aborted) setSnapErr(String(e?.message || e))
       } finally {
-        if (!aborted) timer = setTimeout(load, 30000) // 30s refresh
+        if (!aborted) timer = setTimeout(load, 30000)
       }
     }
     load()
     return () => { aborted = true; if (timer) clearTimeout(timer) }
   }, [symbols])
 
-  // Indexeren per symbool
   const bySym = useMemo(() => {
     const m: Record<string, SnapItem> = {}
     for (const it of items) if (it?.symbol) m[it.symbol] = it
     return m
   }, [items])
 
-  // Hydration-safe klokje
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
     const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
     upd(); const id = setInterval(upd, 1000); return () => clearInterval(id)
   }, [])
 
-  // Samenvatting
   const summary = useMemo(() => {
     const withScore = AEX.map(a => ({ sym: a.symbol, s: Number(bySym[a.symbol]?.score) }))
       .filter(x => Number.isFinite(x.s))
@@ -122,7 +116,6 @@ export default function AEXIndex() {
     return { counts: { buy, hold, sell, total: totalWithScore }, avgScore, breadthPct, topGainers, topLosers }
   }, [bySym])
 
-  // Heatmap dataset (zelfde als SP500)
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
   const heatmapData = useMemo(() => {
     const rows = AEX.map(a => {
@@ -146,7 +139,7 @@ export default function AEXIndex() {
           {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {snapErr}</div>}
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-            {/* Lijst */}
+
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-[13px]">
                 <colgroup>
@@ -173,12 +166,17 @@ export default function AEXIndex() {
                         <td className="px-3 py-3 text-gray-500">{i+1}</td>
                         <td className="px-2 py-3">
                           <div className="flex items-center gap-1.5">
-                            <Link href={`/stocks/${encodeURIComponent(row.symbol)}`} className="font-medium text-gray-900 hover:underline truncate">
+                            {/* ONLY CHANGE HERE */}
+                            <Link
+                              href={`/stocks/${encodeURIComponent(row.symbol)}`}
+                              className="font-medium text-gray-900 dark:text-slate-100 hover:underline truncate"
+                            >
                               {row.name}
                             </Link>
                             <span className="text-gray-500 shrink-0">({row.symbol})</span>
                           </div>
                         </td>
+
                         <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{price}</td>
                         <td className={`px-3 py-3 whitespace-nowrap ${pctCls(pct)}`}>
                           {Number.isFinite(chg as number) && Number.isFinite(pct as number)
@@ -207,7 +205,6 @@ export default function AEXIndex() {
               </table>
             </div>
 
-            {/* Rechterkolom */}
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -276,7 +273,6 @@ export default function AEXIndex() {
                 </div>
               </div>
 
-              {/* Heatmap (zelfde opbouw als SP500) */}
               <div className="table-card p-4">
                 <div className="flex items-center justify-between">
                   <div className="font-semibold text-gray-900">Heatmap</div>
@@ -311,6 +307,7 @@ export default function AEXIndex() {
                 </div>
               </div>
             </aside>
+
           </div>
         </section>
       </main>
