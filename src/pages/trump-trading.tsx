@@ -360,8 +360,8 @@ export default function TrumpTradingPage() {
               </tbody>
             </table>
 
-            <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black flex items-center justify-between">
-              <span>Source: Yahoo Finance via /api/trump/quotes.</span>
+            {/* Footer zonder bronregel, maar mét loading/error */}
+            <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black flex items-center justify-end gap-3">
               {loading && <span>Loading live data…</span>}
               {!loading && error && (
                 <span className="text-red-600">{error}</span>
@@ -489,11 +489,7 @@ export default function TrumpTradingPage() {
                   })}
                 </tbody>
               </table>
-
-              <div className="px-4 py-2 border-t border-white/5 text-[11px] text-black">
-                Source: SEC EDGAR submissions via /api/trump/trades. Parsed for high-level insight;
-                always refer to the original Form 4 and related filings for full legal detail.
-              </div>
+              {/* Footer met bronregel is verwijderd zoals gevraagd */}
             </div>
           )}
         </section>
