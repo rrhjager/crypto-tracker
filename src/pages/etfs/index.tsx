@@ -32,6 +32,8 @@ function fmtPrice(v: number | null | undefined, ccy = 'USD') {
 const pctCls = (p?: number | null) =>
   Number(p) > 0 ? 'text-green-600' : Number(p) < 0 ? 'text-red-600' : 'text-gray-500'
 
+type Advice = 'BUY' | 'HOLD' | 'SELL'
+
 const statusFromScore = (score?: number): Advice => {
   const s = Number(score)
   if (!Number.isFinite(s)) return 'HOLD'
@@ -174,8 +176,8 @@ export default function ETFsIndex() {
             {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr className="text-left text-gray-500">
+                <thead className="bg-gray-50 dark:bg-slate-900/60">
+                  <tr className="text-left text-gray-500 dark:text-slate-400">
                     <th className="px-4 py-3 w-10">#</th>
                     <th className="px-3 py-3">ETF</th>
                     <th className="px-3 py-3">Prijs</th>
@@ -185,7 +187,7 @@ export default function ETFsIndex() {
                     <th className="px-3 py-3 text-right">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-slate-800/80">
                   {ETFS.map((row, i) => {
                     const it = bySym[row.symbol]
                     const price = fmtPrice(it?.price, 'USD')
@@ -196,17 +198,20 @@ export default function ETFsIndex() {
                     const score = Number(it?.score)
 
                     return (
-                      <tr key={row.symbol} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-gray-500">{i+1}</td>
+                      <tr key={row.symbol} className="hover:bg-gray-50 dark:hover:bg-slate-800/60">
+                        <td className="px-4 py-3 text-gray-500 dark:text-slate-400">{i+1}</td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
-                            <Link href={`/etfs/${encodeURIComponent(row.symbol)}`} className="font-medium text-gray-900 hover:underline">
+                            <Link
+                              href={`/etfs/${encodeURIComponent(row.symbol)}`}
+                              className="font-medium text-gray-900 dark:text-slate-100 hover:underline"
+                            >
                               {row.name}
                             </Link>
-                            <span className="text-gray-500">({row.symbol})</span>
+                            <span className="text-gray-500 dark:text-slate-400">({row.symbol})</span>
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-gray-900">{price}</td>
+                        <td className="px-3 py-3 text-gray-900 dark:text-slate-100">{price}</td>
                         <td className={`px-3 py-3 ${pctCls(pct)}`}>
                           {Number.isFinite(chg as number) && Number.isFinite(pct as number)
                             ? `${chg! >= 0 ? '+' : ''}${num(chg, 2)} (${pct! >= 0 ? '+' : ''}${num(pct, 2)}%)`
@@ -236,63 +241,75 @@ export default function ETFsIndex() {
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="font-semibold text-gray-900">Dagelijkse samenvatting</div>
-                  <div className="text-xs text-gray-500">Stand: <span suppressHydrationWarning>{timeStr}</span></div>
+                  <div className="font-semibold text-gray-900 dark:text-slate-100">Dagelijkse samenvatting</div>
+                  <div className="text-xs text-gray-500 dark:text-slate-400">
+                    Stand: <span suppressHydrationWarning>{timeStr}</span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mb-3">
                   <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">BUY</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">BUY</div>
                     <div className="text-lg font-bold text-green-700">
                       {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.buy / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">{summary.counts.buy}/{summary.counts.total}</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">
+                      {summary.counts.buy}/{summary.counts.total}
+                    </div>
                   </div>
                   <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">HOLD</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">HOLD</div>
                     <div className="text-lg font-bold text-amber-700">
                       {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.hold / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">{summary.counts.hold}/{summary.counts.total}</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">
+                      {summary.counts.hold}/{summary.counts.total}
+                    </div>
                   </div>
                   <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
-                    <div className="text-xs text-gray-600">SELL</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">SELL</div>
                     <div className="text-lg font-bold text-red-700">
                       {(() => { const t = summary.counts.total || 0; return t ? Math.round((summary.counts.sell / t) * 100) : 0 })()}%
                     </div>
-                    <div className="text-xs text-gray-600">{summary.counts.sell}/{summary.counts.total}</div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">
+                      {summary.counts.sell}/{summary.counts.total}
+                    </div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 mb-3">
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600">Breadth (24h groen)</div>
-                    <div className="text-xl font-bold text-gray-900">{summary.breadthPct}%</div>
+                  <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
+                    <div className="text-xs text-gray-600 dark:text-slate-400">Breadth (24h groen)</div>
+                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">
+                      {summary.breadthPct}%
+                    </div>
                   </div>
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600">Gem. score</div>
-                    <div className="text-xl font-bold text-gray-900">{summary.avgScore}</div>
+                  <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
+                    <div className="text-xs text-gray-600 dark:text-slate-400">Gem. score</div>
+                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">
+                      {summary.avgScore}
+                    </div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600 mb-1">Top stijgers (24h)</div>
+                  <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
+                    <div className="text-xs text-gray-600 dark:text-slate-400 mb-1">Top stijgers (24h)</div>
                     <ul className="space-y-1 text-sm">
                       {summary.topGainers.map((g, i) => (
                         <li key={`g${i}`} className="flex justify-between">
-                          <span className="text-gray-800">{g.symbol}</span>
+                          <span className="text-gray-800 dark:text-slate-100">{g.symbol}</span>
                           <span className="text-green-600">+{num(g.pct, 2)}%</span>
                         </li>
                       ))}
                     </ul>
                   </div>
-                  <div className="rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs text-gray-600 mb-1">Top dalers (24h)</div>
+                  <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
+                    <div className="text-xs text-gray-600 dark:text-slate-400 mb-1">Top dalers (24h)</div>
                     <ul className="space-y-1 text-sm">
                       {summary.topLosers.map((l, i) => (
                         <li key={`l${i}`} className="flex justify-between">
-                          <span className="text-gray-800">{l.symbol}</span>
+                          <span className="text-gray-800 dark:text-slate-100">{l.symbol}</span>
                           <span className="text-red-600">{num(l.pct, 2)}%</span>
                         </li>
                       ))}
@@ -304,32 +321,48 @@ export default function ETFsIndex() {
               {/* Heatmap */}
               <div className="table-card p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-semibold text-gray-900">Heatmap</div>
+                  <div className="font-semibold text-gray-900 dark:text-slate-100">Heatmap</div>
                   <div className="flex gap-1">
                     <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='ALL'
-                        ? 'bg-gray-200 text-gray-900 border-gray-300'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                      className={`px-2.5 py-1 rounded-full text-xs border ${
+                        filter==='ALL'
+                          ? 'bg-gray-200 text-gray-900 border-gray-300 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-800'
+                      }`}
                       onClick={() => setFilter('ALL')}
-                    >All</button>
+                    >
+                      All
+                    </button>
                     <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='BUY'
-                        ? 'bg-green-600 text-white border-green-600'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                      className={`px-2.5 py-1 rounded-full text-xs border ${
+                        filter==='BUY'
+                          ? 'bg-green-600 text-white border-green-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-800'
+                      }`}
                       onClick={() => setFilter('BUY')}
-                    >Buy</button>
+                    >
+                      Buy
+                    </button>
                     <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='HOLD'
-                        ? 'bg-amber-500 text-white border-amber-500'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                      className={`px-2.5 py-1 rounded-full text-xs border ${
+                        filter==='HOLD'
+                          ? 'bg-amber-500 text-white border-amber-500'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-800'
+                      }`}
                       onClick={() => setFilter('HOLD')}
-                    >Hold</button>
+                    >
+                      Hold
+                    </button>
                     <button
-                      className={`px-2.5 py-1 rounded-full text-xs border ${filter==='SELL'
-                        ? 'bg-red-600 text-white border-red-600'
-                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                      className={`px-2.5 py-1 rounded-full text-xs border ${
+                        filter==='SELL'
+                          ? 'bg-red-600 text-white border-red-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-800'
+                      }`}
                       onClick={() => setFilter('SELL')}
-                    >Sell</button>
+                    >
+                      Sell
+                    </button>
                   </div>
                 </div>
 
