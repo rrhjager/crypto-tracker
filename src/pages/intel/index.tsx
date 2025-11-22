@@ -47,10 +47,27 @@ function inferSide(txt?: string | null, apiSide?: string | null): 'BUY' | 'SELL'
 }
 
 function SideBadge({ side }: { side: 'BUY' | 'SELL' | '—' }) {
-  const base = 'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium'
-  if (side === 'BUY') return <span className={`${base} bg-green-100 text-green-700`}>Buy</span>
-  if (side === 'SELL') return <span className={`${base} bg-red-100 text-red-700`}>Sell</span>
-  return <span className={`${base} bg-gray-100 text-gray-600`}>—</span>
+  const base =
+    'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border'
+  if (side === 'BUY') {
+    return (
+      <span className={`${base} bg-green-100 text-green-700 border-green-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-500`}>
+        Buy
+      </span>
+    )
+  }
+  if (side === 'SELL') {
+    return (
+      <span className={`${base} bg-red-100 text-red-700 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-500`}>
+        Sell
+      </span>
+    )
+  }
+  return (
+    <span className={`${base} bg-gray-100 text-gray-600 border-gray-300 dark:bg-slate-900/60 dark:text-slate-200 dark:border-slate-500`}>
+      —
+    </span>
+  )
 }
 
 /** Parse NL korte maand (bv. "18 sep 2025") → time value (ms) of NaN */
@@ -127,17 +144,21 @@ export default function MarketIntel() {
   return (
     <>
       <Head><title>Congress Trading — SignalHub</title></Head>
-      <main className="min-h-screen">
+      <main className="min-h-screen text-gray-900 dark:text-slate-100">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">Congress Trading</h1>
-          {err && <div className="mt-2 text-sm text-red-600">Fout bij laden: {err}</div>}
+          {err && (
+            <div className="mt-2 text-sm text-red-600">
+              Fout bij laden: {err}
+            </div>
+          )}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           <div className="table-card p-0 overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr className="text-left text-gray-500">
+              <thead className="bg-gray-50 dark:bg-slate-950/70 border-b border-gray-200 dark:border-white/10">
+                <tr className="text-left text-gray-500 dark:text-slate-200">
                   <th className="px-4 py-3 w-[160px]">Published</th>
                   <th className="px-4 py-3 w-[220px]">Persoon</th>
                   <th className="px-4 py-3">Ticker</th>
@@ -146,23 +167,33 @@ export default function MarketIntel() {
                   <th className="px-4 py-3 w-[110px]">Prijs</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-white/5">
                 {loading && (
-                  <tr><td className="px-4 py-3 text-gray-500" colSpan={6}>Laden…</td></tr>
+                  <tr>
+                    <td className="px-4 py-3 text-gray-500 dark:text-slate-400" colSpan={6}>
+                      Laden…
+                    </td>
+                  </tr>
                 )}
                 {!loading && sorted.length === 0 && (
-                  <tr><td className="px-4 py-3 text-gray-500" colSpan={6}>Geen data gevonden.</td></tr>
+                  <tr>
+                    <td className="px-4 py-3 text-gray-500 dark:text-slate-400" colSpan={6}>
+                      Geen data gevonden.
+                    </td>
+                  </tr>
                 )}
-                {sorted.map(({ r, hasDate, isRecent }, i) => {
+                {sorted.map(({ r, isRecent }, i) => {
                   const { company, symbol } = splitIssuer(r.ticker)
                   const tvUrl = tradingViewUrl(symbol)
                   const side: 'BUY' | 'SELL' | '—' = inferSide(r.ticker, r.side ?? null)
 
-                  // Render published: "< 2 days ago" voor alles dat <2 dagen oud is of geen datum heeft
                   const publishedDisplay = isRecent ? '< 2 days ago' : (r.publishedLabel || '—')
 
                   return (
-                    <tr key={i} className="hover:bg-gray-50">
+                    <tr
+                      key={i}
+                      className="hover:bg-gray-50 dark:hover:bg-slate-900/40"
+                    >
                       <td className="px-4 py-3">{publishedDisplay}</td>
                       <td className="px-4 py-3">{r.person || '—'}</td>
                       <td className="px-4 py-3">
@@ -172,16 +203,26 @@ export default function MarketIntel() {
                               href={tvUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-gray-900 hover:underline"
+                              className="text-gray-900 hover:underline dark:text-slate-100"
                               title={`Open ${symbol} op TradingView`}
                             >
                               <div>{company}</div>
-                              {symbol && <div className="text-[11px] text-gray-500 mt-0.5">{symbol}</div>}
+                              {symbol && (
+                                <div className="text-[11px] text-gray-500 dark:text-slate-300 mt-0.5">
+                                  {symbol}
+                                </div>
+                              )}
                             </a>
                           ) : (
                             <>
-                              <div className="text-gray-900">{company}</div>
-                              {symbol && <div className="text-[11px] text-gray-500 mt-0.5">{symbol}</div>}
+                              <div className="text-gray-900 dark:text-slate-100">
+                                {company}
+                              </div>
+                              {symbol && (
+                                <div className="text-[11px] text-gray-500 dark:text-slate-300 mt-0.5">
+                                  {symbol}
+                                </div>
+                              )}
                             </>
                           )}
                         </div>
