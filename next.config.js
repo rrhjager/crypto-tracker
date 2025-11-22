@@ -1,10 +1,15 @@
-// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+
+  // Zorg dat /index (als iemand dat intypt of ergens een oude link is)
+  // gewoon naar de SSR-homepage op / gaat, niet meer naar /app.
   async rewrites() {
-    return [{ source: '/index', destination: '/app' }]
+    return [
+      { source: '/index', destination: '/' },
+    ]
   },
+
   async headers() {
     const cacheHeaders = [
       { key: 'Cache-Control', value: 'public, s-maxage=300, stale-while-revalidate=86400' },
@@ -22,4 +27,5 @@ const nextConfig = {
     ]
   },
 }
+
 module.exports = nextConfig

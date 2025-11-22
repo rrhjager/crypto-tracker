@@ -1,5 +1,6 @@
 // src/pages/index.tsx
 import Head from 'next/head'
+import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
@@ -1132,7 +1133,7 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
-export async function getStaticProps() {
+export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
   try {
     const base =
       BASE_URL ||
@@ -1146,8 +1147,8 @@ export async function getStaticProps() {
     const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
     const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
 
-    return { props: { snapshot, briefing }, revalidate: 300 }
+    return { props: { snapshot, briefing } }
   } catch {
-    return { props: { snapshot: null, briefing: null }, revalidate: 300 }
+    return { props: { snapshot: null, briefing: null } }
   }
 }
