@@ -51,17 +51,21 @@ export default function SectorPerformance() {
   return (
     <>
       <Head><title>Sector performance — SignalHub</title></Head>
-      <main className="min-h-screen">
+      <main className="min-h-screen text-gray-900 dark:text-slate-100">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">Sector performance</h1>
-          {err && <div className="mt-2 text-sm text-red-600">Fout bij laden: {err}</div>}
+          {err && (
+            <div className="mt-2 text-sm text-red-600 dark:text-red-400">
+              Fout bij laden: {err}
+            </div>
+          )}
         </section>
 
         <section className="max-w-6xl mx-auto px-4 pb-16">
           <div className="table-card p-0 overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr className="text-left text-gray-500">
+              <thead className="bg-gray-50 dark:bg-slate-950/70 border-b border-gray-200 dark:border-white/10">
+                <tr className="text-left text-gray-500 dark:text-slate-200">
                   <th className="px-4 py-3">Sector</th>
                   <th className="px-4 py-3 w-[80px]">ETF</th>
                   <th className="px-4 py-3 w-[90px]">Close</th>
@@ -73,32 +77,110 @@ export default function SectorPerformance() {
                   <th className="px-4 py-3 w-[90px]">1Y</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-white/5">
                 {loading && (
-                  <tr><td className="px-4 py-3 text-gray-500" colSpan={9}>Laden…</td></tr>
+                  <tr>
+                    <td
+                      className="px-4 py-3 text-gray-500 dark:text-slate-400"
+                      colSpan={9}
+                    >
+                      Laden…
+                    </td>
+                  </tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td className="px-4 py-3 text-gray-500" colSpan={9}>Geen data gevonden.</td></tr>
+                  <tr>
+                    <td
+                      className="px-4 py-3 text-gray-500 dark:text-slate-400"
+                      colSpan={9}
+                    >
+                      Geen data gevonden.
+                    </td>
+                  </tr>
                 )}
                 {rows.map((r, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
+                  <tr
+                    key={i}
+                    className="hover:bg-gray-50 dark:hover:bg-slate-900/40"
+                  >
                     <td className="px-4 py-3">{r.sector}</td>
                     <td className="px-4 py-3">
                       <a
                         href={`https://www.tradingview.com/symbols/${r.code}/`}
-                        target="_blank" rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline dark:text-blue-400"
                       >
                         {r.code}
                       </a>
                     </td>
                     <td className="px-4 py-3">{fmtPrice(r.close)}</td>
-                    <td className={`px-4 py-3 ${Number(r.d1) > 0 ? 'text-emerald-600' : Number(r.d1) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.d1)}</td>
-                    <td className={`px-4 py-3 ${Number(r.w1) > 0 ? 'text-emerald-600' : Number(r.w1) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.w1)}</td>
-                    <td className={`px-4 py-3 ${Number(r.m1) > 0 ? 'text-emerald-600' : Number(r.m1) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.m1)}</td>
-                    <td className={`px-4 py-3 ${Number(r.m3) > 0 ? 'text-emerald-600' : Number(r.m3) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.m3)}</td>
-                    <td className={`px-4 py-3 ${Number(r.ytd) > 0 ? 'text-emerald-600' : Number(r.ytd) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.ytd)}</td>
-                    <td className={`px-4 py-3 ${Number(r.y1) > 0 ? 'text-emerald-600' : Number(r.y1) < 0 ? 'text-red-600' : ''}`}>{fmtPct(r.y1)}</td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.d1) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.d1) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.d1)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.w1) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.w1) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.w1)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.m1) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.m1) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.m1)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.m3) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.m3) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.m3)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.ytd) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.ytd) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.ytd)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 ${
+                        Number(r.y1) > 0
+                          ? 'text-emerald-600'
+                          : Number(r.y1) < 0
+                          ? 'text-red-600'
+                          : ''
+                      }`}
+                    >
+                      {fmtPct(r.y1)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
