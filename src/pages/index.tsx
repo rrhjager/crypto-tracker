@@ -508,9 +508,14 @@ export default function Homepage(props: HomeProps) {
     } catch { return null }
   }
 
-  // Bereken tops/bottoms per markt op basis van exacte scores (ALTIJD draaien)
+  // Bereken tops/bottoms per markt op basis van exacte scores
   useEffect(() => {
     let aborted = false
+
+    // ⛔ Skip zware client-run ALLEEN als SSR/ISR-snapshot ook écht equities bevat
+    if (props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length) {
+      return () => { aborted = true }
+    }
 
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
@@ -576,7 +581,7 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    // ⛔ Als SSR snapshot al crypto lijsten heeft, niets client-side doen
+    // ⛔ Als SSR/ISR snapshot al crypto lijsten heeft, niets client-side doen
     if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
       setLoadingCoin(false)
       return
@@ -1128,23 +1133,11 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
-export const getServerSideProps: GetServerSideProps<HomeProps> = async (context) => {
+export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
   try {
-    // Origin zo robuust mogelijk bepalen
-    let base = BASE_URL
-    if (!base) {
-      const req = context.req as any
-      const proto =
-        (req?.headers['x-forwarded-proto'] as string) ||
-        (req?.headers['x-forwarded-protocol'] as string) ||
-        'https'
-      const host =
-        (req?.headers['x-forwarded-host'] as string) ||
-        req?.headers.host ||
-        (process.env.VERCEL_URL ? process.env.VERCEL_URL : 'localhost:3000')
-
-      base = `${proto}://${host}`.replace(/\/$/, '')
-    }
+    const base =
+      BASE_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
     const [resSnap, resBrief] = await Promise.all([
       fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
