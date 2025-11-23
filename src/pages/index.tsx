@@ -1133,11 +1133,23 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
-export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
+export const getServerSideProps: GetServerSideProps<HomeProps> = async (context) => {
   try {
-    const base =
-      BASE_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+    // Origin zo robuust mogelijk bepalen
+    let base = BASE_URL
+    if (!base) {
+      const req = context.req as any
+      const proto =
+        (req?.headers['x-forwarded-proto'] as string) ||
+        (req?.headers['x-forwarded-protocol'] as string) ||
+        'https'
+      const host =
+        (req?.headers['x-forwarded-host'] as string) ||
+        req?.headers.host ||
+        (process.env.VERCEL_URL ? process.env.VERCEL_URL : 'localhost:3000')
+
+      base = `${proto}://${host}`.replace(/\/$/, '')
+    }
 
     const [resSnap, resBrief] = await Promise.all([
       fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
