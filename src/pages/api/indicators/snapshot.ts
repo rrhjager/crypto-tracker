@@ -30,13 +30,16 @@ type SnapResp = {
   score?: number
 }
 
-type ApiResp = { items: SnapResp[] } & {
-  _debug?: {
-    requestedSymbols: string[]
-    itemCount: number
-    symbolsWithScore: string[]
-    symbolsWithoutScore: string[]
-  }
+type DebugInfo = {
+  requestedSymbols: string[]
+  itemCount: number
+  symbolsWithScore: string[]
+  symbolsWithoutScore: string[]
+}
+
+type ApiResp = {
+  items: SnapResp[]
+  _debug?: DebugInfo
 }
 
 function normCloses(ohlc: any): number[] {
@@ -116,7 +119,7 @@ function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
   return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
 }
 
-// score helpers (zelfde weging)
+// score helpers (zelfde weging als eerder)
 const adv = (v: number | null, lo: number, hi: number): Advice =>
   v == null ? 'HOLD' : (v < lo ? 'SELL' : v > hi ? 'BUY' : 'HOLD')
 
@@ -124,11 +127,7 @@ const scoreFrom = (ma: Advice, macd: Advice, rsi: Advice, vol: Advice) => {
   const pts = (s: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
   const n = (p: number) => (p + 2) / 4
   const W_MA = .40, W_MACD = .30, W_RSI = .20, W_VOL = .10
-  const agg =
-    W_MA * n(pts(ma)) +
-    W_MACD * n(pts(macd)) +
-    W_RSI * n(pts(rsi)) +
-    W_VOL * n(pts(vol))
+  const agg = W_MA * n(pts(ma)) + W_MACD * n(pts(macd)) + W_RSI * n(pts(rsi)) + W_VOL * n(pts(vol))
   return Math.round(Math.max(0, Math.min(1, agg)) * 100)
 }
 
@@ -149,8 +148,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
 
   const volume = vols.length ? vols[vols.length - 1] : null
   const last20 = vols.slice(-20)
-  const avg20d =
-    last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
+  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
   const ratio =
     typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
       ? volume / avg20d
@@ -159,31 +157,20 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   // prijs/dag
   const last = closes.length ? closes[closes.length - 1] : null
   const prev = closes.length > 1 ? closes[closes.length - 2] : null
-  const change = last != null && prev != null ? last - prev : null
-  const changePct =
-    change != null && prev ? (change / prev) * 100 : null
+  const change = (last != null && prev != null) ? last - prev : null
+  const changePct = (change != null && prev) ? (change / prev * 100) : null
 
-  // ✨ 7/30 bars terug (praktisch ≈ 7/30 dagen trading)
+  // ✨ 7/30 bars terug (≈ 7/30 trading days)
   const pctFromBars = (n: number) =>
-    closes.length > n
-      ? ((closes[closes.length - 1] /
-          closes[closes.length - 1 - n]) -
-          1) * 100
-      : null
+    closes.length > n ? ((closes[closes.length - 1] / closes[closes.length - 1 - n]) - 1) * 100 : null
   const ret7Pct = pctFromBars(7)
   const ret30Pct = pctFromBars(30)
 
   // score
-  const macdStatus: Advice =
-    macd != null && signal != null
-      ? macd > signal
-        ? 'BUY'
-        : macd < signal
-        ? 'SELL'
-        : 'HOLD'
-      : 'HOLD'
-  const rsiStatus: Advice =
-    rsi == null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
+  const macdStatus: Advice = (macd != null && signal != null)
+    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
+    : 'HOLD'
+  const rsiStatus: Advice = rsi == null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
   const volStatus: Advice = adv(ratio, 0.8, 1.2)
   const score = scoreFrom(maStatus ?? 'HOLD', macdStatus, rsiStatus, volStatus)
 
@@ -207,8 +194,6 @@ export default async function handler(
   res: NextApiResponse<ApiResp | { error: string }>
 ) {
   try {
-    const debug = String(req.query.debug || '0') === '1'
-
     const listRaw = (req.query.symbols ?? req.query.symbol ?? '').toString().trim()
     if (!listRaw) return res.status(400).json({ error: 'Missing symbol(s)' })
 
@@ -217,72 +202,56 @@ export default async function handler(
       .map(s => s.trim().toUpperCase())
       .filter(Boolean)
 
-    if (symbols.length === 0) {
-      return res.status(400).json({ error: 'No valid symbols' })
-    }
+    if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
     const items = await Promise.all(
       symbols.map(async (sym) => {
         const key = `ind:snapshot:${sym}:${RANGE}`
         const snapKey = `ind:snap:all:${sym}`
-        const data = await kvRefreshIfStale<SnapResp>(
-          key,
-          TTL_SEC,
-          REVALIDATE_SEC,
-          async () => {
-            const v = await computeOne(sym)
-            try {
-              await kvSetJSON(
-                snapKey,
-                { updatedAt: Date.now(), value: v },
-                TTL_SEC
-              )
-            } catch {}
-            return v
-          }
-        )
-        return (
-          data ?? {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-          }
-        )
+        const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
+          const v = await computeOne(sym)
+          try {
+            await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
+          } catch {}
+          return v
+        })
+        // fallback als er echt niets terugkomt uit KV/computeOne
+        return data ?? {
+          symbol: sym,
+          ma: { ma50: null, ma200: null },
+          rsi: null,
+          macd: { macd: null, signal: null, hist: null },
+          volume: { volume: null, avg20d: null, ratio: null },
+        }
       })
     )
 
-    // Kleine toevoeging: laat CDN kort cachen en revalidatie toelaten
-    res.setHeader(
-      'Cache-Control',
-      'public, s-maxage=60, stale-while-revalidate=300'
-    )
-
-    if (!debug) {
-      return res.status(200).json({ items })
-    }
-
-    // 🔍 Debug-informatie erbij
+    // Debug-info: welke symbols hebben wél / geen score?
     const symbolsWithScore = items
-      .filter(i => typeof i.score === 'number' && Number.isFinite(i.score as number))
-      .map(i => i.symbol)
+      .filter(it => typeof it.score === 'number' && Number.isFinite(it.score))
+      .map(it => it.symbol)
 
     const symbolsWithoutScore = items
-      .filter(i => !(typeof i.score === 'number' && Number.isFinite(i.score as number)))
-      .map(i => i.symbol)
+      .filter(it => !(typeof it.score === 'number' && Number.isFinite(it.score)))
+      .map(it => it.symbol)
 
-    const payload: ApiResp = {
-      items,
-      _debug: {
-        requestedSymbols: symbols,
-        itemCount: items.length,
-        symbolsWithScore,
-        symbolsWithoutScore,
-      },
+    const debug: DebugInfo = {
+      requestedSymbols: symbols,
+      itemCount: items.length,
+      symbolsWithScore,
+      symbolsWithoutScore,
     }
 
-    return res.status(200).json(payload)
+    // Eventueel ook in logs (handig in development / server logs)
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.log('[snapshot-debug]', debug)
+    }
+
+    // Kleine toevoeging: laat CDN kort cachen en revalidatie toelaten
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+
+    return res.status(200).json({ items, _debug: debug })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
   }
