@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { mutate } from 'swr'
-import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
@@ -117,9 +116,15 @@ const toBinancePair = (symbol: string) => {
   return `${s}USDT`
 }
 
-/* ---------------- constituents per markt ---------------- */
+/* ---------------- constituents per markt (curated voor homepage!) ---------------- */
 const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
-  'AEX': [],
+  'AEX': [
+    { symbol: 'AD.AS',      name: 'Ahold Delhaize' },
+    { symbol: 'ASML.AS',    name: 'ASML Holding' },
+    { symbol: 'PHIA.AS',    name: 'Philips' },
+    { symbol: 'SHELL.AS',   name: 'Shell' },
+    { symbol: 'UNA.AS',     name: 'Unilever' },
+  ],
   'S&P 500': [
     { symbol: 'AAPL',  name: 'Apple' },
     { symbol: 'MSFT',  name: 'Microsoft' },
@@ -178,25 +183,8 @@ const STATIC_CONS: Record<MarketLabel, { symbol: string; name: string }[]> = {
   ],
 }
 
-/* ===== gebruik volledige lijsten per markt (fallback naar STATIC_CONS) ===== */
+/* ===== gebruik ALLEEN de curated lijst voor de homepage ===== */
 function constituentsForMarket(label: MarketLabel) {
-  if (label === 'AEX') return AEX.map(x => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'S&P 500' && Array.isArray(SP500) && SP500.length)
-    return SP500.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'NASDAQ' && Array.isArray(NASDAQ) && NASDAQ.length)
-    return NASDAQ.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'Dow Jones' && Array.isArray(DOWJONES) && DOWJONES.length)
-    return DOWJONES.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'DAX' && Array.isArray(DAX_FULL) && DAX_FULL.length)
-    return DAX_FULL.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'FTSE 100' && Array.isArray(FTSE100) && FTSE100.length)
-    return FTSE100.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'Nikkei 225' && Array.isArray(NIKKEI225) && NIKKEI225.length)
-    return NIKKEI225.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'Hang Seng' && Array.isArray(HANGSENG) && HANGSENG.length)
-    return HANGSENG.map((x: any) => ({ symbol: x.symbol, name: x.name }))
-  if (label === 'Sensex' && Array.isArray(SENSEX) && SENSEX.length)
-    return SENSEX.map((x: any) => ({ symbol: x.symbol, name: x.name }))
   return STATIC_CONS[label] || []
 }
 
@@ -482,12 +470,12 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     EQUITIES — Exacte scores (zelfde endpoint als aandeel-pagina)
+     EQUITIES — Exacte scores
      ======================= */
 
   const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
 
-  // cache helpers voor individuele scores
+  // cache helpers voor individuele scores (client fallback)
   const getScoreCache = (sym: string): number | null => {
     const j = getCache<{ score: number }>(`score:${sym}`)
     return (j && Number.isFinite(j.score)) ? j.score : null
@@ -508,9 +496,15 @@ export default function Homepage(props: HomeProps) {
     } catch { return null }
   }
 
-  // Bereken tops/bottoms per markt op basis van exacte scores
+  // Client-fallback only: als SSR niets heeft, dan pas lokaal rekenen
   useEffect(() => {
     let aborted = false
+
+    // ✅ Als SSR al topBuy/topSell heeft gezet, niks meer client-side doen
+    if (props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length) {
+      setLoadingEq(false)
+      return () => { aborted = true }
+    }
 
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
@@ -576,7 +570,7 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    // ⛔ Als SSR snapshot al crypto lijsten heeft, niets client-side doen
+    // ⛔ Als SSR/ISR snapshot al crypto lijsten heeft, niets client-side doen
     if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
       setLoadingCoin(false)
       return
@@ -699,7 +693,7 @@ export default function Homepage(props: HomeProps) {
           { title: 'MACD signals explained simply', href: '/academy' },
           { title: 'Position sizing 101', href: '/academy' },
           { title: 'Support & resistance basics', href: '/academy' },
-          { title: 'Trend vs mean reversion', href: '/academy' },
+          { title: 'Trend vs. mean reversion', href: '/academy' },
           { title: 'Risk management checklists', href: '/academy' },
           { title: 'How to read volume properly', href: '/academy' },
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
@@ -922,7 +916,7 @@ export default function Homepage(props: HomeProps) {
               ) : topBuy.map((r)=>(
                 <li key={`bb-${r.market}-${r.symbol}`}>
                   <Row
-                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -948,7 +942,7 @@ export default function Homepage(props: HomeProps) {
               ) : topSell.map((r)=>(
                 <li key={`bs-${r.market}-${r.symbol}`}>
                   <Row
-                    href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                    href={equityHref(r.symbol)}
                     left={
                       <div className="min-w-0">
                         <div className="text-white/60 text-[11px] mb-0.5">{r.market}</div>
@@ -1128,6 +1122,11 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
+/* ========= SSR: haal snapshot + briefing + equities-top op ========= */
+
+type SnapItem = { symbol: string; score?: number | null }
+type SnapshotApiResp = { items?: SnapItem[] }
+
 export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
   try {
     const base =
@@ -1139,8 +1138,82 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
       fetch(`${base}/api/home/briefing`, { cache: 'no-store' }),
     ])
 
-    const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
+    const snapshotRaw = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
     const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
+
+    // === NIEUW: equities-top server-side via /api/indicators/snapshot ===
+    let topBuy: ScoredEq[] = snapshotRaw?.topBuy ?? []
+    let topSell: ScoredEq[] = snapshotRaw?.topSell ?? []
+
+    try {
+      const markets = STATIC_CONS
+      const allSymbols = Array.from(
+        new Set(
+          Object.values(markets)
+            .flat()
+            .map(c => c.symbol.toUpperCase())
+        )
+      )
+      if (allSymbols.length) {
+        const eqRes = await fetch(
+          `${base}/api/indicators/snapshot?symbols=${encodeURIComponent(allSymbols.join(','))}`,
+          { cache: 'no-store' }
+        )
+        if (eqRes.ok) {
+          const eqJson = await eqRes.json() as SnapshotApiResp
+          const map = new Map<string, SnapItem>(
+            (eqJson.items || []).map(it => [it.symbol.toUpperCase(), it])
+          )
+
+          const outBuy: ScoredEq[] = []
+          const outSell: ScoredEq[] = []
+
+          (Object.entries(markets) as [MarketLabel, {symbol:string;name:string}[]][])
+            .forEach(([market, list]) => {
+              const rows: ScoredEq[] = []
+              for (const c of list) {
+                const snap = map.get(c.symbol.toUpperCase())
+                const s = snap?.score
+                if (typeof s === 'number' && Number.isFinite(s)) {
+                  const sc = Math.round(s)
+                  rows.push({
+                    symbol: c.symbol,
+                    name: c.name,
+                    market,
+                    score: sc,
+                    signal: statusFromScore(sc),
+                  })
+                }
+              }
+              if (rows.length) {
+                rows.sort((a,b)=>b.score-a.score)
+                const best = rows[0]
+                const worst = rows[rows.length-1]
+                if (best) outBuy.push(best)
+                if (worst) outSell.push(worst)
+              }
+            })
+
+          if (outBuy.length && outSell.length) {
+            topBuy = outBuy
+            topSell = outSell
+          }
+        }
+      }
+    } catch {
+      // bij fout: val gewoon terug op snapshotRaw/topBuy/topSell of leeg
+    }
+
+    const snapshot: HomeSnapshot = {
+      newsCrypto: snapshotRaw?.newsCrypto ?? [],
+      newsEq: snapshotRaw?.newsEq ?? [],
+      academy: snapshotRaw?.academy ?? [],
+      congress: snapshotRaw?.congress ?? [],
+      coinTopBuy: snapshotRaw?.coinTopBuy ?? [],
+      coinTopSell: snapshotRaw?.coinTopSell ?? [],
+      topBuy,
+      topSell,
+    }
 
     return { props: { snapshot, briefing } }
   } catch {
