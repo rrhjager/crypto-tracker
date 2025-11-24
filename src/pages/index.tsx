@@ -508,7 +508,7 @@ export default function Homepage(props: HomeProps) {
     } catch { return null }
   }
 
-  // Bereken tops/bottoms per markt op basis van exacte scores
+  // Bereken tops/bottoms per markt op basis van exacte scores (client fallback / refresh)
   useEffect(() => {
     let aborted = false
 
@@ -1128,19 +1128,165 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
+/* =========
+   SSR: equities + crypto
+   ========= */
 export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
   try {
     const base =
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
+    // zelfde minuut-tag als client
+    const minuteTag = Math.floor(Date.now() / 60_000)
+
+    // basis snapshot + briefing (nieuws, academy, congress, etc.)
     const [resSnap, resBrief] = await Promise.all([
       fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
       fetch(`${base}/api/home/briefing`, { cache: 'no-store' }),
     ])
 
-    const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
+    const snapBase = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
     const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
+
+    /* =======================
+       EQUITIES — SSR via /api/indicators/score/:symbol
+       ======================= */
+
+    const MARKET_ORDER: MarketLabel[] = [
+      'AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex'
+    ]
+
+    const ssrTopBuy: ScoredEq[] = []
+    const ssrTopSell: ScoredEq[] = []
+
+    type ScoreApiResp = { score?: number | null }
+
+    async function fetchStrictScoreSSR(sym: string): Promise<number | null> {
+      try {
+        const url = `${base}/api/indicators/score/${encodeURIComponent(sym)}?v=${minuteTag}`
+        const r = await fetch(url, { cache: 'no-store' })
+        if (!r.ok) return null
+        const j = await r.json() as ScoreApiResp
+        if (typeof j.score === 'number' && Number.isFinite(j.score)) {
+          return Math.round(j.score)
+        }
+        return null
+      } catch {
+        return null
+      }
+    }
+
+    for (const market of MARKET_ORDER) {
+      const cons = constituentsForMarket(market)
+      if (!cons.length) continue
+
+      const scored = await pool(cons, 6, async (c) => {
+        const s = await fetchStrictScoreSSR(c.symbol)
+        return { ...c, score: s as number | null }
+      })
+
+      const rows: ScoredEq[] = scored
+        .filter(r => typeof r.score === 'number' && Number.isFinite(r.score))
+        .map(r => ({
+          symbol: r.symbol,
+          name:   r.name,
+          market,
+          score:  r.score as number,
+          signal: statusFromScore(r.score as number),
+        }))
+
+      if (rows.length) {
+        const sorted = [...rows].sort((a, b) => b.score - a.score)
+        const best = sorted[0]
+        const worst = sorted[sorted.length - 1]
+        if (best)  ssrTopBuy.push(best)
+        if (worst) ssrTopSell.push(worst)
+      }
+    }
+
+    /* =======================
+       CRYPTO — SSR via /api/crypto-light/indicators
+       ======================= */
+
+    type CryptoBatchResp = { results?: IndResp[] }
+
+    const PAIR_OVERRIDES: Record<string, string> = { 'MKR-USD': 'MKRUSDT', 'VET-USD': 'VETUSDT' }
+
+    const pairsSSR = COINS.map(c => {
+      const ov = PAIR_OVERRIDES[c.symbol]
+      if (ov) return { c, pair: ov }
+      const baseSym = c.symbol.replace('-USD', '')
+      const p1 = toBinancePair(baseSym)
+      if (p1) return { c, pair: p1 }
+      const p2 = toBinancePair(c.symbol)
+      return { c, pair: p2 || '' }
+    }).filter(x => !!x.pair) as { c:{symbol:string;name:string}; pair:string }[]
+
+    const allPairs = pairsSSR.map(p => p.pair)
+    const batches: string[][] = []
+    for (let i = 0; i < allPairs.length; i += CRYPTO_BATCH) {
+      batches.push(allPairs.slice(i, i + CRYPTO_BATCH))
+    }
+
+    const scoreMap = new Map<string, number>()
+
+    await Promise.all(
+      batches.map(async (chunk) => {
+        if (!chunk.length) return
+        const url = `${base}/api/crypto-light/indicators?symbols=${encodeURIComponent(chunk.join(','))}&v=${minuteTag}`
+        try {
+          const r = await fetch(url, { cache: 'no-store' })
+          if (!r.ok) return
+          const j = await r.json() as CryptoBatchResp
+          for (const ind of j.results || []) {
+            const { score } = computeScoreStatus({
+              ma: ind.ma,
+              rsi: ind.rsi,
+              macd: ind.macd,
+              volume: ind.volume,
+            } as any)
+            if (typeof score === 'number' && Number.isFinite(score)) {
+              scoreMap.set(ind.symbol, Math.round(score))
+            }
+          }
+        } catch {
+          // negeren; we houden gewoon minder coins over
+        }
+      })
+    )
+
+    const cryptoRows = pairsSSR
+      .map(({ c, pair }) => {
+        const s = scoreMap.get(pair)
+        return typeof s === 'number'
+          ? { symbol: c.symbol, name: c.name, score: s }
+          : null
+      })
+      .filter(Boolean) as { symbol: string; name: string; score: number }[]
+
+    const sortedDesc = [...cryptoRows].sort((a, b) => b.score - a.score)
+    const sortedAsc  = [...cryptoRows].sort((a, b) => a.score - b.score)
+
+    const ssrCoinTopBuy: ScoredCoin[]  =
+      sortedDesc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+    const ssrCoinTopSell: ScoredCoin[] =
+      sortedAsc.slice(0, 5).map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+    /* =======================
+       Definitieve snapshot die naar de pagina gaat
+       ======================= */
+
+    const snapshot: HomeSnapshot = {
+      newsCrypto:  snapBase?.newsCrypto  ?? [],
+      newsEq:      snapBase?.newsEq      ?? [],
+      academy:     snapBase?.academy     ?? [],
+      congress:    snapBase?.congress    ?? [],
+      topBuy:      ssrTopBuy,
+      topSell:     ssrTopSell,
+      coinTopBuy:  ssrCoinTopBuy,
+      coinTopSell: ssrCoinTopSell,
+    }
 
     return { props: { snapshot, briefing } }
   } catch {
