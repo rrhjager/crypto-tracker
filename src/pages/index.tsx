@@ -512,11 +512,6 @@ export default function Homepage(props: HomeProps) {
   useEffect(() => {
     let aborted = false
 
-    // ⛔ Skip zware client-run ALLEEN als SSR/ISR-snapshot ook écht equities bevat
-    if (props.snapshot?.topBuy?.length && props.snapshot?.topSell?.length) {
-      return () => { aborted = true }
-    }
-
     if (!topBuy.length || !topSell.length) setLoadingEq(true)
 
     ;(async () => {
@@ -581,7 +576,7 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    // ⛔ Als SSR/ISR snapshot al crypto lijsten heeft, niets client-side doen
+    // ⛔ Als SSR snapshot al crypto lijsten heeft, niets client-side doen
     if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
       setLoadingCoin(false)
       return
@@ -704,7 +699,7 @@ export default function Homepage(props: HomeProps) {
           { title: 'MACD signals explained simply', href: '/academy' },
           { title: 'Position sizing 101', href: '/academy' },
           { title: 'Support & resistance basics', href: '/academy' },
-          { title: 'Trend vs. mean reversion', href: '/academy' },
+          { title: 'Trend vs mean reversion', href: '/academy' },
           { title: 'Risk management checklists', href: '/academy' },
           { title: 'How to read volume properly', href: '/academy' },
           { title: 'Backtesting pitfalls to avoid', href: '/academy' },
