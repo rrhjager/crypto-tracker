@@ -1133,6 +1133,7 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
+    // 1) Basis snapshot + briefing (zoals je al had)
     const [resSnap, resBrief] = await Promise.all([
       fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
       fetch(`${base}/api/home/briefing`, { cache: 'no-store' }),
@@ -1141,58 +1142,66 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
     const snapshotRaw = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
     const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
 
-    // === NIEUW: equities-top server-side via /api/indicators/snapshot ===
+    // 2) Startpunt: neem topBuy/topSell uit snapshot als fallback
     let topBuy: ScoredEq[] = snapshotRaw?.topBuy ?? []
     let topSell: ScoredEq[] = snapshotRaw?.topSell ?? []
 
+    // 3) Probeer equities-top server-side via /api/indicators/snapshot
     try {
       const markets = STATIC_CONS
+
       const allSymbols = Array.from(
         new Set(
-          Object.values(markets)
+          (Object.values(markets) as { symbol: string; name: string }[][])
             .flat()
             .map(c => c.symbol.toUpperCase())
         )
       )
-      if (allSymbols.length) {
-        const eqRes = await fetch(
-          `${base}/api/indicators/snapshot?symbols=${encodeURIComponent(allSymbols.join(','))}`,
-          { cache: 'no-store' }
-        )
+
+      if (allSymbols.length > 0) {
+        const url = `${base}/api/indicators/snapshot?symbols=${encodeURIComponent(
+          allSymbols.join(',')
+        )}`
+
+        const eqRes = await fetch(url, { cache: 'no-store' })
         if (eqRes.ok) {
           const eqJson = await eqRes.json() as SnapshotApiResp
-          const map = new Map<string, SnapItem>(
-            (eqJson.items || []).map(it => [it.symbol.toUpperCase(), it])
-          )
+          const map = new Map<string, SnapItem>()
+
+          for (const it of eqJson.items ?? []) {
+            map.set(it.symbol.toUpperCase(), it)
+          }
 
           const outBuy: ScoredEq[] = []
           const outSell: ScoredEq[] = []
 
-          (Object.entries(markets) as [MarketLabel, {symbol:string;name:string}[]][])
-            .forEach(([market, list]) => {
-              const rows: ScoredEq[] = []
-              for (const c of list) {
-                const snap = map.get(c.symbol.toUpperCase())
-                const s = snap?.score
-                if (typeof s === 'number' && Number.isFinite(s)) {
-                  const sc = Math.round(s)
-                  rows.push({
-                    symbol: c.symbol,
-                    name: c.name,
-                    market,
-                    score: sc,
-                    signal: statusFromScore(sc),
-                  })
-                }
+          ;(Object.keys(markets) as MarketLabel[]).forEach((market) => {
+            const list = markets[market] || []
+            const rows: ScoredEq[] = []
+
+            for (const c of list) {
+              const snap = map.get(c.symbol.toUpperCase())
+              const rawScore = snap?.score
+              if (typeof rawScore === 'number' && Number.isFinite(rawScore)) {
+                const s = Math.round(rawScore)
+                rows.push({
+                  symbol: c.symbol,
+                  name: c.name,
+                  market,
+                  score: s,
+                  signal: statusFromScore(s),
+                })
               }
-              if (rows.length) {
-                rows.sort((a,b)=>b.score-a.score)
-                const best = rows[0]
-                const worst = rows[rows.length-1]
-                if (best) outBuy.push(best)
-                if (worst) outSell.push(worst)
-              }
-            })
+            }
+
+            if (rows.length > 0) {
+              rows.sort((a, b) => b.score - a.score)
+              const best = rows[0]
+              const worst = rows[rows.length - 1]
+              if (best) outBuy.push(best)
+              if (worst) outSell.push(worst)
+            }
+          })
 
           if (outBuy.length && outSell.length) {
             topBuy = outBuy
@@ -1200,10 +1209,12 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
           }
         }
       }
-    } catch {
-      // bij fout: val gewoon terug op snapshotRaw/topBuy/topSell of leeg
+    } catch (e) {
+      // Fout bij equities SSR? => val terug op snapshotRaw / client-fallback
+      console.error('SSR equities top failed:', e)
     }
 
+    // 4) Definite snapshot props voor de pagina
     const snapshot: HomeSnapshot = {
       newsCrypto: snapshotRaw?.newsCrypto ?? [],
       newsEq: snapshotRaw?.newsEq ?? [],
