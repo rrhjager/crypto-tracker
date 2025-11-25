@@ -1,7 +1,7 @@
 // src/pages/api/indicators/snapshot-list.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getYahooDailyOHLC, type YahooRange } from '@/lib/providers/quote'
-import { kvGetJSON, kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
+import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 import { macd as macdCalc } from '@/lib/ta-light'   // ✅ gebruik juiste MACD-helper
 
 import { AEX } from '@/lib/aex'
@@ -29,7 +29,6 @@ export const config = { runtime: 'nodejs' }
 
 const EDGE_MAX_AGE = 30
 const KV_TTL_SEC = 600
-const KV_REVALIDATE_SEC = 120
 const RANGE: YahooRange = '1y'
 
 /* ---------- helpers ---------- */
@@ -119,78 +118,7 @@ const listForMarket = (mkt?: string) => {
   return arr.map((x: any) => ({ symbol: x.symbol, name: x.name }))
 }
 
-/* ---------- KV → SnapItem ---------- */
-type KVShape = {
-  symbol: string
-  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?: number | null
-  macd?: { macd: number | null; signal: number | null; hist: number | null }
-  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  score?: number | null
-}
-
-function toSnapFromKV(sym: string, v?: KVShape | null): SnapItem | null {
-  if (!v) return null
-  const ma50 = v.ma?.ma50 ?? null
-  const ma200 = v.ma?.ma200 ?? null
-  const maS =
-    ma50 != null && ma200 != null
-      ? ma50 > ma200
-        ? 'BUY'
-        : ma50 < ma200
-        ? 'SELL'
-        : 'HOLD'
-      : v.ma?.status ?? 'HOLD'
-
-  const rsiVal = typeof v.rsi === 'number' ? v.rsi : null
-  const rsiS = adv(rsiVal, 30, 70)
-
-  const m = v.macd ?? { macd: null, signal: null, hist: null }
-  const macdS =
-    m.macd != null && m.signal != null
-      ? m.macd > m.signal
-        ? 'BUY'
-        : m.macd < m.signal
-        ? 'SELL'
-        : 'HOLD'
-      : 'HOLD'
-
-  const vol = v.volume ?? { volume: null, avg20d: null, ratio: null }
-  const ratio = vol.ratio ?? null
-  const volS =
-    ratio == null
-      ? 'HOLD'
-      : ratio > 1.3
-      ? 'BUY'
-      : ratio < 0.7
-      ? 'SELL'
-      : 'HOLD'
-
-  const score = Number.isFinite(v.score as number)
-    ? Math.round(Number(v.score))
-    : scoreFrom(maS, macdS, rsiS, volS)
-
-  return {
-    symbol: sym,
-    ma: { ma50, ma200, status: maS },
-    rsi: { period: 14, rsi: rsiVal, status: rsiS },
-    macd: {
-      macd: m.macd ?? null,
-      signal: m.signal ?? null,
-      hist: m.hist ?? null,
-      status: macdS,
-    },
-    volume: {
-      volume: vol.volume ?? null,
-      avg20d: vol.avg20d ?? null,
-      ratio,
-      status: volS,
-    },
-    score,
-  }
-}
-
-/* ---------- compute + KV ---------- */
+/* ---------- compute ---------- */
 async function computeOne(symbol: string): Promise<SnapItem> {
   const o = await getYahooDailyOHLC(symbol, RANGE)
   const cs = closes(o)
@@ -258,7 +186,10 @@ async function computeOne(symbol: string): Promise<SnapItem> {
 }
 
 /* ---------- handler ---------- */
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Resp | { error: string }>
+) {
   res.setHeader(
     'Cache-Control',
     `public, s-maxage=${EDGE_MAX_AGE}, stale-while-revalidate=300`
@@ -267,10 +198,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     const rawSyms = String(req.query.symbols || '').trim()
     const market = String(req.query.market || '').trim()
+
     let symbols: string[] = []
 
     if (rawSyms) {
-      symbols = rawSyms.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      symbols = rawSyms
+        .split(',')
+        .map(s => s.trim().toUpperCase())
+        .filter(Boolean)
     } else if (market) {
       symbols = listForMarket(market).map(x => x.symbol.toUpperCase())
     } else {
@@ -279,56 +214,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .json({ error: 'Provide ?symbols=A,B or ?market=AEX|DAX|...' })
     }
 
+    if (!symbols.length) {
+      return res.status(200).json({ items: [], updatedAt: Date.now() })
+    }
+
     if (symbols.length > 60) symbols = symbols.slice(0, 60)
 
-    const items: SnapItem[] = []
-    let newestUpdatedAt = 0
+    // Eén KV-key voor de hele lijst, in plaats van per symbool
+    const keyId = symbols.join(',')
+    const kvKey = `ind:snap:list:${RANGE}:${keyId}`
 
-    const misses: string[] = []
-    for (const sym of symbols) {
-      const key = `ind:snap:all:${sym}`
-      const cached = await kvGetJSON<{ updatedAt?: number; value?: KVShape }>(key).catch(() => null)
-      const mapped = toSnapFromKV(sym, cached?.value)
-      if (mapped) {
-        items.push(mapped)
-        if (cached?.updatedAt && cached.updatedAt > newestUpdatedAt)
-          newestUpdatedAt = cached.updatedAt
-      } else {
-        misses.push(sym)
+    try {
+      const cached = await kvGetJSON<Resp>(kvKey)
+      if (cached && Array.isArray(cached.items) && cached.items.length) {
+        return res.status(200).json(cached)
       }
+    } catch {
+      // KV is optioneel; bij fouten gewoon door naar verse build
     }
 
-    if (misses.length) {
-      const CONC = Math.min(6, Math.max(1, 24 / Math.max(1, misses.length)))
-      let i = 0
-      const workers = new Array(Math.min(CONC, misses.length)).fill(0).map(async () => {
-        while (true) {
-          const idx = i++
-          if (idx >= misses.length) break
-          const sym = misses[idx]
-          const key = `snap:${sym}`
-          const cached = await kvRefreshIfStale<SnapItem>(
-            key,
-            KV_TTL_SEC,
-            KV_REVALIDATE_SEC,
-            () => computeOne(sym)
-          )
-          const value = cached ?? (await computeOne(sym))
-          items.push(value)
-          try {
-            await kvSetJSON(key, value, KV_TTL_SEC)
-          } catch {}
-        }
-      })
-      await Promise.all(workers)
-    }
+    const items: SnapItem[] = []
 
-    const order = new Map(symbols.map((s, i) => [s, i]))
+    // Beperk parallellisme om Yahoo/API niet te overbelasten
+    const CONC = Math.min(6, Math.max(1, 24 / Math.max(1, symbols.length)))
+    let i = 0
+    const workers = new Array(Math.min(CONC, symbols.length)).fill(0).map(async () => {
+      while (true) {
+        const idx = i++
+        if (idx >= symbols.length) break
+        const sym = symbols[idx]
+        const snap = await computeOne(sym)
+        items.push(snap)
+      }
+    })
+    await Promise.all(workers)
+
+    const order = new Map(symbols.map((s, idx) => [s, idx]))
     items.sort((a, b) => (order.get(a.symbol) ?? 0) - (order.get(b.symbol) ?? 0))
 
-    return res
-      .status(200)
-      .json({ items, updatedAt: newestUpdatedAt || Date.now() })
+    const updatedAt = Date.now()
+    try {
+      await kvSetJSON(kvKey, { items, updatedAt }, KV_TTL_SEC)
+    } catch {
+      // cache mislukken mag, response blijft bruikbaar
+    }
+
+    return res.status(200).json({ items, updatedAt })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
   }
