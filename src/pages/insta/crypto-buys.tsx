@@ -2,6 +2,7 @@
 import type { GetServerSideProps, NextPage } from 'next'
 import Head from 'next/head'
 import type { ReactElement } from 'react'
+import { useEffect } from 'react'
 
 type Coin = {
   symbol: string
@@ -20,25 +21,38 @@ type Props = {
 }
 
 const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
+  // 🔥 Hard-kill cookie banners (en evt. globale header) alleen op deze pagina
+  useEffect(() => {
+    const hideAnnoyingStuff = () => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>('div,section,aside,footer')
+      )
+
+      for (const el of candidates) {
+        const text = (el.textContent || '').toLowerCase()
+
+        // alles met "cookie" in de tekst verbergen
+        if (text.includes('cookie')) {
+          el.style.setProperty('display', 'none', 'important')
+        }
+      }
+    }
+
+    hideAnnoyingStuff()
+    const id = window.setInterval(hideAnnoyingStuff, 500)
+
+    return () => {
+      window.clearInterval(id)
+    }
+  }, [])
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
       <Head>
         <title>Top 5 Crypto BUY Signals – Signalhub</title>
         <meta name="robots" content="noindex" />
-
-        {/* Verberg globale header + cookie banners, maar toon onze eigen header wel */}
+        {/* Extra safety: verberg cookie-achtige elementen via CSS */}
         <style>{`
-          /* alle headers (globale site-header) verbergen */
-          header {
-            display: none !important;
-          }
-
-          /* insta-header op deze pagina juist wél tonen */
-          .insta-header {
-            display: block !important;
-          }
-
-          /* cookie banners verbergen */
           div[id*="cookie"],
           div[id*="Cookie"],
           div[class*="cookie"],
@@ -49,7 +63,7 @@ const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
       </Head>
 
       <div className="w-[1080px] max-w-full px-8 py-10">
-        <header className="insta-header mb-8">
+        <header className="mb-8">
           <h1 className="text-4xl font-bold tracking-tight">
             Top 5 Crypto BUY Signals
           </h1>
