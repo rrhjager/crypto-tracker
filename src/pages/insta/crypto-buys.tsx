@@ -1,7 +1,6 @@
 // src/pages/insta/crypto-buys.tsx
 import type { GetServerSideProps, NextPage } from 'next'
 import Head from 'next/head'
-import type { ReactElement } from 'react'
 
 type Coin = {
   symbol: string
@@ -113,11 +112,6 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
       asOf,
     },
   }
-}
-
-// 🔽 Dit zorgt ervoor dat deze pagina GEEN globale layout gebruikt
-;(CryptoBuysInsta as any).getLayout = function getLayout(page: ReactElement) {
-  return page
 }
 
 export default CryptoBuysInsta
