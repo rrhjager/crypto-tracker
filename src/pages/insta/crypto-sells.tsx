@@ -1,6 +1,7 @@
 // src/pages/insta/crypto-sells.tsx
 import type { GetServerSideProps, NextPage } from 'next'
 import Head from 'next/head'
+import type { ReactElement } from 'react'
 
 type Coin = {
   symbol: string
@@ -114,7 +115,9 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   }
 }
 
-export default CryptoSellsInsta
+// 🔽 Geen globale layout / header / footer / consent op deze pagina
+;(CryptoSellsInsta as any).getLayout = function getLayout(page: ReactElement) {
+  return page
+}
 
-(CryptoSellsInsta as any).getLayout = (page: React.ReactElement) => page
 export default CryptoSellsInsta
