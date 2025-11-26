@@ -25,6 +25,15 @@ const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
       <Head>
         <title>Top 5 Crypto BUY Signals – Signalhub</title>
         <meta name="robots" content="noindex" />
+        {/* Verberg cookie banners alleen op deze pagina */}
+        <style>{`
+          div[id*="cookie"],
+          div[id*="Cookie"],
+          div[class*="cookie"],
+          div[class*="Cookie"] {
+            display: none !important;
+          }
+        `}</style>
       </Head>
 
       <div className="w-[1080px] max-w-full px-8 py-10">
