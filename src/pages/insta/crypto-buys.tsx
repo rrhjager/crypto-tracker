@@ -25,8 +25,20 @@ const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
       <Head>
         <title>Top 5 Crypto BUY Signals – Signalhub</title>
         <meta name="robots" content="noindex" />
-        {/* Verberg cookie banners alleen op deze pagina */}
+
+        {/* Verberg globale header + cookie banners, maar toon onze eigen header wel */}
         <style>{`
+          /* alle headers (globale site-header) verbergen */
+          header {
+            display: none !important;
+          }
+
+          /* insta-header op deze pagina juist wél tonen */
+          .insta-header {
+            display: block !important;
+          }
+
+          /* cookie banners verbergen */
           div[id*="cookie"],
           div[id*="Cookie"],
           div[class*="cookie"],
@@ -37,7 +49,7 @@ const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
       </Head>
 
       <div className="w-[1080px] max-w-full px-8 py-10">
-        <header className="mb-8">
+        <header className="insta-header mb-8">
           <h1 className="text-4xl font-bold tracking-tight">
             Top 5 Crypto BUY Signals
           </h1>
