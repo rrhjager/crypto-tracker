@@ -1,6 +1,7 @@
 // src/pages/insta/crypto-buys.tsx
 import type { GetServerSideProps, NextPage } from 'next'
 import Head from 'next/head'
+import type { ReactElement } from 'react'
 
 type Coin = {
   symbol: string
@@ -78,7 +79,6 @@ const CryptoBuysInsta: NextPage<Props> = ({ coins, asOf }) => {
 }
 
 export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
-  // Bepaal de base URL (werkt lokaal en in productie)
   const host = ctx.req.headers.host
   const isVercel = !!process.env.VERCEL_URL
   const protocol = isVercel ? 'https' : 'http'
@@ -96,7 +96,6 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
       coins = (snapshot.coinTopBuy || []).slice(0, 5)
     }
   } catch (e) {
-    // swallow, we tonen dan gewoon een lege lijst
     coins = []
   }
 
@@ -114,6 +113,11 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
       asOf,
     },
   }
+}
+
+// 🔽 Dit zorgt ervoor dat deze pagina GEEN globale layout gebruikt
+;(CryptoBuysInsta as any).getLayout = function getLayout(page: ReactElement) {
+  return page
 }
 
 export default CryptoBuysInsta
