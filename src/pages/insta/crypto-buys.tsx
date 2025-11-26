@@ -115,3 +115,6 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
 }
 
 export default CryptoBuysInsta
+
+(CryptoBuysInsta as any).getLayout = (page: React.ReactElement) => page
+export default CryptoBuysInsta
