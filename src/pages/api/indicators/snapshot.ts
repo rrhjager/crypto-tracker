@@ -1,279 +1,416 @@
-// src/pages/api/indicators/snapshot.ts
+// src/pages/api/home/snapshot.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
-import { getYahooDailyOHLC } from '@/lib/providers/quote'
+import { computeScoreStatus } from '@/lib/taScore'
+import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
-export const config = { runtime: 'nodejs' }
+import { AEX } from '@/lib/aex'
+import { SP500 } from '@/lib/sp500'
+import { NASDAQ } from '@/lib/nasdaq'
+import { DOWJONES } from '@/lib/dowjones'
+import { DAX as DAX_FULL } from '@/lib/dax'
+import { FTSE100 } from '@/lib/ftse100'
+import { NIKKEI225 } from '@/lib/nikkei225'
+import { HANGSENG } from '@/lib/hangseng'
+import { SENSEX } from '@/lib/sensex'
 
-const TTL_SEC = 300
-const REVALIDATE_SEC = 20
-const RANGE: '1y' | '2y' = '1y'
-
-type Bar = { close?: number; volume?: number }
+// === Types ===
 type Advice = 'BUY' | 'SELL' | 'HOLD'
+type NewsItem = { title: string; url: string; source?: string; published?: string; image?: string | null }
+type MarketLabel =
+  | 'AEX' | 'S&P 500' | 'NASDAQ' | 'Dow Jones'
+  | 'DAX' | 'FTSE 100' | 'Nikkei 225' | 'Hang Seng' | 'Sensex'
 
-type SnapResp = {
-  symbol: string
-  // prijs & dag
-  price?: number | null
-  change?: number | null
-  changePct?: number | null
-  // ✨ 7/30 "dagen" (bars) performance
-  ret7Pct?: number | null
-  ret30Pct?: number | null
-  // indicatoren
-  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?: number | null
-  macd?: { macd: number | null; signal: number | null; hist: number | null }
-  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
-  // samengestelde score
-  score?: number
+type ScoredEq   = { symbol: string; name: string; market: MarketLabel; score: number }
+type ScoredCoin = { symbol: string; name: string; score: number }
+
+type Snapshot = {
+  newsCrypto: NewsItem[]
+  newsEq: NewsItem[]
+  academy: { title: string; href: string }[]
+  congress: any[]
+  topBuy: (ScoredEq & { signal: Advice })[]
+  topSell: (ScoredEq & { signal: Advice })[]
+  coinTopBuy: (ScoredCoin & { signal: Advice })[]
+  coinTopSell: (ScoredCoin & { signal: Advice })[]
 }
 
-type DebugInfo = {
-  requestedSymbols: string[]
-  itemCount: number
-  symbolsWithScore: string[]
-  symbolsWithoutScore: string[]
+const TTL_SEC = 300 // KV TTL (5 min)
+const localeQS = 'hl=en-US&gl=US&ceid=US:en'
+const BASE_ENV = process.env.NEXT_PUBLIC_BASE_URL || '' // fallback naar request-origin
+
+function statusFromScore(score: number): Advice {
+  if (score >= 66) return 'BUY'
+  if (score <= 33) return 'SELL'
+  return 'HOLD'
 }
 
-type ApiResp = {
-  items: SnapResp[]
-  _debug?: DebugInfo
-}
-
-function normCloses(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.close === 'number' ? b.close : null))
-      .filter((n): n is number => typeof n === 'number')
-  }
-  if (ohlc && Array.isArray(ohlc.closes)) {
-    return (ohlc.closes as any[]).filter((n): n is number => typeof n === 'number')
-  }
-  return []
-}
-
-function normVolumes(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.volume === 'number' ? b.volume : null))
-      .filter((n): n is number => typeof n === 'number')
-  }
-  if (ohlc && Array.isArray(ohlc.volumes)) {
-    return (ohlc.volumes as any[]).filter((n): n is number => typeof n === 'number')
-  }
-  return []
-}
-
-const sma = (arr: number[], p: number): number | null => {
-  if (!Array.isArray(arr) || arr.length < p) return null
-  const s = arr.slice(-p)
-  return s.reduce((a, b) => a + b, 0) / p
-}
-
-function rsiWilder(closes: number[], period = 14): number | null {
-  if (closes.length < period + 1) return null
-  let gains = 0, losses = 0
-  for (let i = 1; i <= period; i++) {
-    const d = closes[i] - closes[i - 1]
-    if (d >= 0) gains += d
-    else losses -= d
-  }
-  let avgGain = gains / period
-  let avgLoss = losses / period
-  for (let i = period + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1]
-    const g = d > 0 ? d : 0
-    const l = d < 0 ? -d : 0
-    avgGain = (avgGain * (period - 1) + g) / period
-    avgLoss = (avgLoss * (period - 1) + l) / period
-  }
-  if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  const v = 100 - 100 / (1 + rs)
-  return Number.isFinite(v) ? v : null
-}
-
-function emaLast(arr: number[], period: number): number | null {
-  if (arr.length < period) return null
-  const k = 2 / (period + 1)
-  let ema = arr.slice(0, period).reduce((a, b) => a + b, 0) / period
-  for (let i = period; i < arr.length; i++) ema = arr[i] * k + ema * (1 - k)
-  return ema
-}
-
-function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
-  if (arr.length < slow + signal) return { macd: null, signal: null, hist: null }
-  const series: number[] = []
-  for (let i = slow; i <= arr.length; i++) {
-    const slice = arr.slice(0, i)
-    const f = emaLast(slice, fast)
-    const s = emaLast(slice, slow)
-    if (f != null && s != null) series.push(f - s)
-  }
-  if (series.length < signal) return { macd: null, signal: null, hist: null }
-  const m = series[series.length - 1]
-  const sig = emaLast(series, signal)
-  const h = sig != null ? m - sig : null
-  return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
-}
-
-// score helpers (zelfde weging als eerder)
-const adv = (v: number | null, lo: number, hi: number): Advice =>
-  v == null ? 'HOLD' : (v < lo ? 'SELL' : v > hi ? 'BUY' : 'HOLD')
-
-const scoreFrom = (ma: Advice, macd: Advice, rsi: Advice, vol: Advice) => {
-  const pts = (s: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
-  const n = (p: number) => (p + 2) / 4
-  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const agg = W_MA * n(pts(ma)) + W_MACD * n(pts(macd)) + W_RSI * n(pts(rsi)) + W_VOL * n(pts(vol))
-  return Math.round(Math.max(0, Math.min(1, agg)) * 100)
-}
-
-async function computeOne(symbol: string): Promise<SnapResp> {
-  const ohlc = await getYahooDailyOHLC(symbol, RANGE)
-  const closes = normCloses(ohlc)
-  const vols = normVolumes(ohlc)
-
-  const ma50 = sma(closes, 50)
-  const ma200 = sma(closes, 200)
-  const maStatus: Advice | undefined =
-    typeof ma50 === 'number' && typeof ma200 === 'number'
-      ? (ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD')
-      : undefined
-
-  const rsi = rsiWilder(closes, 14)
-  const { macd, signal, hist } = macdLast(closes, 12, 26, 9)
-
-  const volume = vols.length ? vols[vols.length - 1] : null
-  const last20 = vols.slice(-20)
-  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
-  const ratio =
-    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
-      ? volume / avg20d
-      : null
-
-  // prijs/dag
-  const last = closes.length ? closes[closes.length - 1] : null
-  const prev = closes.length > 1 ? closes[closes.length - 2] : null
-  const change = (last != null && prev != null) ? last - prev : null
-  const changePct = (change != null && prev) ? (change / prev * 100) : null
-
-  // ✨ 7/30 bars terug (≈ 7/30 trading days)
-  const pctFromBars = (n: number) =>
-    closes.length > n ? ((closes[closes.length - 1] / closes[closes.length - 1 - n]) - 1) * 100 : null
-  const ret7Pct = pctFromBars(7)
-  const ret30Pct = pctFromBars(30)
-
-  // score
-  const macdStatus: Advice = (macd != null && signal != null)
-    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
-    : 'HOLD'
-  const rsiStatus: Advice = rsi == null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
-  const volStatus: Advice = adv(ratio, 0.8, 1.2)
-  const score = scoreFrom(maStatus ?? 'HOLD', macdStatus, rsiStatus, volStatus)
-
-  return {
-    symbol,
-    price: last ?? null,
-    change,
-    changePct,
-    ret7Pct,
-    ret30Pct,
-    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
-    rsi: rsi ?? null,
-    macd: { macd: macd ?? null, signal: signal ?? null, hist: hist ?? null },
-    volume: { volume: volume ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null },
-    score,
-  }
-}
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<ApiResp | { error: string }>
-) {
+async function fetchJSON<T>(url: string): Promise<T | null> {
   try {
-    const listRaw = (req.query.symbols ?? req.query.symbol ?? '').toString().trim()
-    if (!listRaw) return res.status(400).json({ error: 'Missing symbol(s)' })
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) return null
+    return (await r.json()) as T
+  } catch {
+    return null
+  }
+}
 
-    // symboollijst normaliseren + dedupen
-    const symbols = Array.from(
-      new Set(
-        listRaw
-          .split(',')
-          .map(s => s.trim().toUpperCase())
-          .filter(Boolean),
+function marketList(label: MarketLabel) {
+  if (label === 'AEX') return AEX
+  if (label === 'S&P 500') return SP500
+  if (label === 'NASDAQ') return NASDAQ
+  if (label === 'Dow Jones') return DOWJONES
+  if (label === 'DAX') return DAX_FULL
+  if (label === 'FTSE 100') return FTSE100
+  if (label === 'Nikkei 225') return NIKKEI225
+  if (label === 'Hang Seng') return HANGSENG
+  if (label === 'Sensex') return SENSEX
+  return []
+}
+
+// ======================
+// Warmup helpers
+// ======================
+type MarketKey = 'AEX' | 'SP500' | 'NASDAQ' | 'DOWJONES' | 'DAX' | 'FTSE100' | 'NIKKEI225' | 'HANGSENG' | 'SENSEX'
+const MARKET_SYMBOLS: Record<MarketKey, string[]> = {
+  AEX: AEX.map(x => x.symbol),
+  SP500: SP500.map(x => x.symbol),
+  NASDAQ: NASDAQ.map(x => x.symbol),
+  DOWJONES: DOWJONES.map(x => x.symbol),
+  DAX: DAX_FULL.map(x => x.symbol),
+  FTSE100: FTSE100.map(x => x.symbol),
+  NIKKEI225: NIKKEI225.map(x => x.symbol),
+  HANGSENG: HANGSENG.map(x => x.symbol),
+  SENSEX: SENSEX.map(x => x.symbol),
+}
+
+const CHUNK = 50
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+async function pool<T, R>(arr: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  await Promise.all(
+    new Array(n).fill(0).map(async () => {
+      while (i < arr.length) {
+        const idx = i++
+        out[idx] = await fn(arr[idx], idx)
+      }
+    }),
+  )
+  return out
+}
+
+function getOrigin(req: NextApiRequest) {
+  const proto = (req.headers['x-forwarded-proto'] as string) || 'https'
+  const host = (req.headers['x-forwarded-host'] as string) || req.headers.host || 'localhost:3000'
+  return `${proto}://${host}`
+}
+
+async function warmMarkets(origin: string, keys: MarketKey[]) {
+  const results: Array<{ market: MarketKey; warmed: number }> = []
+  for (const key of keys) {
+    const symbols = MARKET_SYMBOLS[key] || []
+    if (!symbols.length) {
+      results.push({ market: key, warmed: 0 })
+      continue
+    }
+    const groups = chunk(symbols, CHUNK)
+    const parts = await pool(groups, 3, async (group, gi) => {
+      if (gi) await sleep(80)
+      const url = `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
+      const r = await fetch(url, { cache: 'no-store' })
+      if (!r.ok) throw new Error(`snapshot warm ${key}[${gi}] HTTP ${r.status}`)
+      const j = (await r.json()) as { items?: any[] }
+      return j.items?.length || 0
+    })
+    results.push({ market: key, warmed: parts.reduce((a, b) => a + Number(b || 0), 0) })
+  }
+  return results
+}
+
+// Klein in-memory cache per lambda/process (extra snel)
+let CACHE: { ts: number; data: Snapshot } | null = null
+const MEM_TTL_MS = 60 * 1000 // 1 minuut
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    const origin = BASE_ENV || getOrigin(req)
+
+    // --------- Warmup modus (manual/cron) ----------
+    // /api/home/snapshot?warm=1&markets=ALL&token=...
+    const warm = String(req.query.warm || '0') === '1'
+    if (warm) {
+      const q = String(req.query.markets || 'ALL').toUpperCase()
+      const keys: MarketKey[] =
+        q === 'ALL'
+          ? (Object.keys(MARKET_SYMBOLS) as MarketKey[])
+          : q
+              .split(',')
+              .map(s => s.trim())
+              .filter((m): m is MarketKey => m in MARKET_SYMBOLS)
+
+      if (process.env.WARMUP_TOKEN) {
+        const token = (req.query.token as string) || (req.headers['x-warmup-token'] as string)
+        if (token !== process.env.WARMUP_TOKEN) {
+          return res.status(401).json({ error: 'Unauthorized' })
+        }
+      }
+
+      const warmed = await warmMarkets(origin, keys)
+      res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=180')
+      return res.status(200).json({ warmed, when: new Date().toISOString() })
+    }
+    // --------- Einde warmup ----------
+
+    // 1) In-memory cache
+    if (CACHE && Date.now() - CACHE.ts < MEM_TTL_MS) {
+      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
+      return res.status(200).json(CACHE.data)
+    }
+
+    // 2) KV cache + auto warmup check
+    const kvKey = 'home:snapshot:v1'
+    const cached = await kvGetJSON<Snapshot>(kvKey)
+
+    // ➜ Alleen direct teruggeven als er ÉCHT equities in zitten
+    if (cached && cached.topBuy?.length && cached.topSell?.length) {
+      CACHE = { ts: Date.now(), data: cached }
+      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
+      return res.status(200).json(cached)
+    }
+
+    // ➜ AUTO WARMUP: als cache leeg of zonder equities is, eerst alle markten voorverwarmen
+    try {
+      await warmMarkets(origin, Object.keys(MARKET_SYMBOLS) as MarketKey[])
+    } catch (e) {
+      if (process.env.NODE_ENV !== 'production') {
+        // eslint-disable-next-line no-console
+        console.error('[home-snapshot] auto warmup failed:', e)
+      }
+      // we gaan alsnog verder; worst case rekenen we alles vers
+    }
+
+    // 3) Verse build (nieuw snapshot)
+    const v = Math.floor(Date.now() / 60_000)
+
+    // ---- News (crypto + equities) ----
+    const [newsCryptoResp, newsEqResp] = await Promise.all([
+      fetchJSON<any>(
+        `${origin}/api/news/google?q=${encodeURIComponent(
+          'crypto OR bitcoin OR ethereum OR blockchain',
+        )}&${localeQS}&v=${v}`,
       ),
-    )
+      fetchJSON<any>(
+        `${origin}/api/news/google?q=${encodeURIComponent(
+          'equities OR stocks OR stock market OR aandelen OR beurs',
+        )}&${localeQS}&v=${v}`,
+      ),
+    ])
 
-    if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
+    const newsCrypto: NewsItem[] = (newsCryptoResp?.items || []).slice(0, 6).map((x: any) => ({
+      title: x.title || '',
+      url: x.link,
+      source: x.source || '',
+      published: x.pubDate || '',
+      image: null,
+    }))
+    const newsEq: NewsItem[] = (newsEqResp?.items || []).slice(0, 6).map((x: any) => ({
+      title: x.title || '',
+      url: x.link,
+      source: x.source || '',
+      published: x.pubDate || '',
+      image: null,
+    }))
 
-    const items = await Promise.all(
-      symbols.map(async (sym) => {
-        const key = `ind:snapshot:${sym}:${RANGE}`
-        const snapKey = `ind:snap:all:${sym}`
+    // ---- Academy ----
+    const academyResp = await fetchJSON<any>(`${origin}/api/academy/list?v=${v}`)
+    const academy: { title: string; href: string }[] =
+      Array.isArray(academyResp?.items) ? academyResp.items.slice(0, 8) : []
 
-        try {
-          const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-            const v = await computeOne(sym)
-            try {
-              await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
-            } catch {}
-            return v
-          })
-
-          // fallback als er echt niets terugkomt uit KV/computeOne
-          return data ?? {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-          }
-        } catch (err) {
-          // Defensief: één kapotte ticker mag de hele batch niet slopen
-          if (process.env.NODE_ENV !== 'production') {
-            // eslint-disable-next-line no-console
-            console.error('[snapshot-error]', sym, err)
-          }
-          return {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-          }
+    // ---- Congress ----
+    const congressResp = await fetchJSON<any>(`${origin}/api/market/congress?limit=30&v=${v}`)
+    const congressRaw: any[] = Array.isArray(congressResp?.items) ? congressResp.items : []
+    const congress = congressRaw
+      .map(x => {
+        const dateISO =
+          (typeof x.publishedISO === 'string' && x.publishedISO) ||
+          (typeof x.tradedISO === 'string' && x.tradedISO) ||
+          (typeof x.published === 'string' && x.published) ||
+          (typeof x.traded === 'string' && x.traded) ||
+          ''
+        return {
+          person: x.person || '',
+          ticker: (x.ticker || '').toUpperCase(),
+          side: String(x.side || '—').toUpperCase(),
+          amount: x.amount || '',
+          price: x.price ?? null,
+          date: dateISO,
+          url: x.url || '',
         }
       })
+      .filter(t => t.date && !Number.isNaN(Date.parse(t.date)))
+      .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))
+      .slice(0, 30)
+
+    // ---- Equities top BUY/SELL per markt ----
+    const MARKETS: MarketLabel[] = [
+      'AEX',
+      'S&P 500',
+      'NASDAQ',
+      'Dow Jones',
+      'DAX',
+      'FTSE 100',
+      'Nikkei 225',
+      'Hang Seng',
+      'Sensex',
+    ]
+
+    const topBuy: (ScoredEq & { signal: Advice })[] = []
+    const topSell: (ScoredEq & { signal: Advice })[] = []
+
+    for (const label of MARKETS) {
+      const list = marketList(label)
+      if (!Array.isArray(list) || list.length === 0) continue
+
+      const symbols = list.map((x: any) => x.symbol).slice(0, 60)
+      if (!symbols.length) continue
+
+      const snapResp = await fetchJSON<{ items?: { symbol: string; score?: number | null }[] }>(
+        `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(symbols.join(','))}`,
+      )
+
+      const rawRows = (snapResp?.items || []) as { symbol: string; score?: number | null }[]
+
+      const rows: (ScoredEq & { signal: Advice })[] = rawRows
+        .map(row => {
+          const found = list.find((x: any) => x.symbol === row.symbol)
+          const scoreRaw = row.score
+          if (typeof scoreRaw !== 'number' || !Number.isFinite(scoreRaw)) return null
+          const s = Math.round(scoreRaw)
+          return {
+            symbol: row.symbol,
+            name: found?.name || row.symbol,
+            market: label,
+            score: s,
+            signal: statusFromScore(s),
+          }
+        })
+        .filter(Boolean) as any[]
+
+      if (rows.length) {
+        const best = [...rows].sort((a, b) => b.score - a.score)[0]
+        const worst = [...rows].sort((a, b) => a.score - b.score)[0]
+        if (best) topBuy.push(best)
+        if (worst) topSell.push(worst)
+      }
+    }
+
+    // ---- Crypto universe (zelfde lijst als homepage) ----
+    const COINS: { symbol: string; name: string }[] = [
+      { symbol: 'BTC-USD', name: 'Bitcoin' },
+      { symbol: 'ETH-USD', name: 'Ethereum' },
+      { symbol: 'BNB-USD', name: 'BNB' },
+      { symbol: 'SOL-USD', name: 'Solana' },
+      { symbol: 'XRP-USD', name: 'XRP' },
+      { symbol: 'ADA-USD', name: 'Cardano' },
+      { symbol: 'DOGE-USD', name: 'Dogecoin' },
+      { symbol: 'TON-USD', name: 'Toncoin' },
+      { symbol: 'TRX-USD', name: 'TRON' },
+      { symbol: 'AVAX-USD', name: 'Avalanche' },
+      { symbol: 'DOT-USD', name: 'Polkadot' },
+      { symbol: 'LINK-USD', name: 'Chainlink' },
+      { symbol: 'BCH-USD', name: 'Bitcoin Cash' },
+      { symbol: 'LTC-USD', name: 'Litecoin' },
+      { symbol: 'MATIC-USD', name: 'Polygon' },
+      { symbol: 'XLM-USD', name: 'Stellar' },
+      { symbol: 'NEAR-USD', name: 'NEAR' },
+      { symbol: 'ICP-USD', name: 'Internet Computer' },
+      { symbol: 'ETC-USD', name: 'Ethereum Classic' },
+      { symbol: 'FIL-USD', name: 'Filecoin' },
+      { symbol: 'XMR-USD', name: 'Monero' },
+      { symbol: 'APT-USD', name: 'Aptos' },
+      { symbol: 'ARB-USD', name: 'Arbitrum' },
+      { symbol: 'OP-USD', name: 'Optimism' },
+      { symbol: 'SUI-USD', name: 'Sui' },
+      { symbol: 'HBAR-USD', name: 'Hedera' },
+      { symbol: 'ALGO-USD', name: 'Algorand' },
+      { symbol: 'VET-USD', name: 'VeChain' },
+      { symbol: 'EGLD-USD', name: 'MultiversX' },
+      { symbol: 'AAVE-USD', name: 'Aave' },
+      { symbol: 'INJ-USD', name: 'Injective' },
+      { symbol: 'MKR-USD', name: 'Maker' },
+      { symbol: 'RUNE-USD', name: 'THORChain' },
+      { symbol: 'IMX-USD', name: 'Immutable' },
+      { symbol: 'FLOW-USD', name: 'Flow' },
+      { symbol: 'SAND-USD', name: 'The Sandbox' },
+      { symbol: 'MANA-USD', name: 'Decentraland' },
+      { symbol: 'AXS-USD', name: 'Axie Infinity' },
+      { symbol: 'QNT-USD', name: 'Quant' },
+      { symbol: 'GRT-USD', name: 'The Graph' },
+      { symbol: 'CHZ-USD', name: 'Chiliz' },
+      { symbol: 'CRV-USD', name: 'Curve DAO' },
+      { symbol: 'ENJ-USD', name: 'Enjin Coin' },
+      { symbol: 'FTM-USD', name: 'Fantom' },
+      { symbol: 'XTZ-USD', name: 'Tezos' },
+      { symbol: 'LDO-USD', name: 'Lido DAO' },
+      { symbol: 'SNX-USD', name: 'Synthetix' },
+      { symbol: 'STX-USD', name: 'Stacks' },
+      { symbol: 'AR-USD', name: 'Arweave' },
+      { symbol: 'GMX-USD', name: 'GMX' },
+    ]
+
+    const pairs = COINS.map(c => ({ c, pair: c.symbol.replace('-USD', '') + 'USDT' }))
+    const cryptoResp = await fetchJSON<any>(
+      `${origin}/api/crypto-light/indicators?symbols=${encodeURIComponent(
+        pairs.map(p => p.pair).join(','),
+      )}`,
     )
 
-    // Debug-info: welke symbols hebben wél / geen score?
-    const symbolsWithScore = items
-      .filter(it => typeof it.score === 'number' && Number.isFinite(it.score))
-      .map(it => it.symbol)
+    const cryptoRows: { symbol: string; name: string; score: number }[] = (cryptoResp?.results || [])
+      .map((row: any) => {
+        const found = pairs.find(p => p.pair === row.symbol)
+        const { score } = computeScoreStatus(row as any)
+        if (typeof score !== 'number' || !Number.isFinite(score)) return null
+        return {
+          symbol: found?.c.symbol || row.symbol,
+          name: found?.c.name || row.symbol,
+          score: Math.round(score),
+        }
+      })
+      .filter(Boolean) as any[]
 
-    const symbolsWithoutScore = items
-      .filter(it => !(typeof it.score === 'number' && Number.isFinite(it.score)))
-      .map(it => it.symbol)
+    const coinTopBuy: (ScoredCoin & { signal: Advice })[] = [...cryptoRows]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map(r => ({ ...r, signal: statusFromScore(r.score) }))
 
-    const debug: DebugInfo = {
-      requestedSymbols: symbols,
-      itemCount: items.length,
-      symbolsWithScore,
-      symbolsWithoutScore,
+    const coinTopSell: (ScoredCoin & { signal: Advice })[] = [...cryptoRows]
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 5)
+      .map(r => ({ ...r, signal: statusFromScore(r.score) }))
+
+    const data: Snapshot = {
+      newsCrypto,
+      newsEq,
+      academy,
+      congress,
+      topBuy,
+      topSell,
+      coinTopBuy,
+      coinTopSell,
     }
 
-    if (process.env.NODE_ENV !== 'production') {
-      // eslint-disable-next-line no-console
-      console.log('[snapshot-debug]', debug)
-    }
+    // 4) Set KV + korte in-memory cache
+    await kvSetJSON(kvKey, data, TTL_SEC)
+    CACHE = { ts: Date.now(), data }
 
-    // Korte CDN-cache met stale-while-revalidate
-    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
-
-    return res.status(200).json({ items, _debug: debug })
-  } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
+    return res.status(200).json(data)
+  } catch (err: any) {
+    return res.status(500).json({ error: String(err?.message || err) })
   }
 }
