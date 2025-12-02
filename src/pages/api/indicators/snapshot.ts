@@ -126,7 +126,7 @@ const adv = (v: number | null, lo: number, hi: number): Advice =>
 const scoreFrom = (ma: Advice, macd: Advice, rsi: Advice, vol: Advice) => {
   const pts = (s: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
   const n = (p: number) => (p + 2) / 4
-  const W_MA = .40, W_MACD = .30, W_RSI = .20, W_VOL = .10
+  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
   const agg = W_MA * n(pts(ma)) + W_MACD * n(pts(macd)) + W_RSI * n(pts(rsi)) + W_VOL * n(pts(vol))
   return Math.round(Math.max(0, Math.min(1, agg)) * 100)
 }
