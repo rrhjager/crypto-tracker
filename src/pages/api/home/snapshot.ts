@@ -263,22 +263,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const list = marketList(label)
       if (!Array.isArray(list) || list.length === 0) continue
 
-      // Gebruik snapshot-list endpoint (KV-backed, zuinig)
+      // Gebruik nu de KV-backed /api/indicators/snapshot endpoint
       const symbols = list.map((x: any) => x.symbol).slice(0, 60)
       if (!symbols.length) continue
 
-      const snapList = await fetchJSON<any>(
-        `${origin}/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbols.join(','))}`,
+      const snapResp = await fetchJSON<{ items?: { symbol: string; score?: number | null }[] }>(
+        `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(symbols.join(','))}`,
       )
 
-      const rawRows = (snapList?.results || snapList?.items || []) as any[]
+      const rawRows = (snapResp?.items || []) as { symbol: string; score?: number | null }[]
 
       const rows: (ScoredEq & { signal: Advice })[] = rawRows
         .map(row => {
           const found = list.find((x: any) => x.symbol === row.symbol)
-          const { score } = computeScoreStatus(row as any)
-          if (typeof score !== 'number' || !Number.isFinite(score)) return null
-          const s = Math.round(score)
+          const scoreRaw = row.score
+          if (typeof scoreRaw !== 'number' || !Number.isFinite(scoreRaw)) return null
+          const s = Math.round(scoreRaw)
           return {
             symbol: row.symbol,
             name: found?.name || row.symbol,
