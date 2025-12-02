@@ -172,8 +172,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json(CACHE.data)
     }
 
-    // 2) KV cache
-    const kvKey = 'home:snapshot:v1'
+    // 2) KV cache  🚨 v2 zodat equities-snapshot niet vast hangt op oude lege data
+    const kvKey = 'home:snapshot:v2'
     const cached = await kvGetJSON<Snapshot>(kvKey)
     if (cached) {
       CACHE = { ts: Date.now(), data: cached }
