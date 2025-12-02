@@ -197,10 +197,15 @@ export default async function handler(
     const listRaw = (req.query.symbols ?? req.query.symbol ?? '').toString().trim()
     if (!listRaw) return res.status(400).json({ error: 'Missing symbol(s)' })
 
-    const symbols = listRaw
-      .split(',')
-      .map(s => s.trim().toUpperCase())
-      .filter(Boolean)
+    // symboollijst normaliseren + dedupen
+    const symbols = Array.from(
+      new Set(
+        listRaw
+          .split(',')
+          .map(s => s.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    )
 
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
@@ -208,20 +213,37 @@ export default async function handler(
       symbols.map(async (sym) => {
         const key = `ind:snapshot:${sym}:${RANGE}`
         const snapKey = `ind:snap:all:${sym}`
-        const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-          const v = await computeOne(sym)
-          try {
-            await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
-          } catch {}
-          return v
-        })
-        // fallback als er echt niets terugkomt uit KV/computeOne
-        return data ?? {
-          symbol: sym,
-          ma: { ma50: null, ma200: null },
-          rsi: null,
-          macd: { macd: null, signal: null, hist: null },
-          volume: { volume: null, avg20d: null, ratio: null },
+
+        try {
+          const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
+            const v = await computeOne(sym)
+            try {
+              await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
+            } catch {}
+            return v
+          })
+
+          // fallback als er echt niets terugkomt uit KV/computeOne
+          return data ?? {
+            symbol: sym,
+            ma: { ma50: null, ma200: null },
+            rsi: null,
+            macd: { macd: null, signal: null, hist: null },
+            volume: { volume: null, avg20d: null, ratio: null },
+          }
+        } catch (err) {
+          // Defensief: één kapotte ticker mag de hele batch niet slopen
+          if (process.env.NODE_ENV !== 'production') {
+            // eslint-disable-next-line no-console
+            console.error('[snapshot-error]', sym, err)
+          }
+          return {
+            symbol: sym,
+            ma: { ma50: null, ma200: null },
+            rsi: null,
+            macd: { macd: null, signal: null, hist: null },
+            volume: { volume: null, avg20d: null, ratio: null },
+          }
         }
       })
     )
@@ -242,13 +264,12 @@ export default async function handler(
       symbolsWithoutScore,
     }
 
-    // Eventueel ook in logs (handig in development / server logs)
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
       console.log('[snapshot-debug]', debug)
     }
 
-    // Kleine toevoeging: laat CDN kort cachen en revalidatie toelaten
+    // Korte CDN-cache met stale-while-revalidate
     res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
 
     return res.status(200).json({ items, _debug: debug })

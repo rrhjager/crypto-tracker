@@ -512,7 +512,15 @@ export default function Homepage(props: HomeProps) {
   useEffect(() => {
     let aborted = false
 
-    if (!topBuy.length || !topSell.length) setLoadingEq(true)
+    // ✅ Als we al equities hebben (via SSR snapshot of cache),
+    // sla dan de zware client-herberekening over. Dit houdt de homepage instant.
+    if (topBuy.length && topSell.length) {
+      setLoadingEq(false)
+      return () => { aborted = true }
+    }
+
+    // Alleen als SSR/caches leeg zijn doen we de fallback naar strikte scores
+    setLoadingEq(true)
 
     ;(async () => {
       try {
@@ -853,7 +861,7 @@ export default function Homepage(props: HomeProps) {
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
         <div className="grid gap-5 lg:grid-cols-3">
 
-          {/* 1) Hero — AI briefing */}
+          {/* 1) Hero — AI Briefing */}
           <Card title="Daily AI Briefing">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {briefing ? (
