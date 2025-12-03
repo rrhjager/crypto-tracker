@@ -414,14 +414,28 @@ export default function Homepage(props: HomeProps) {
         if (!r.ok) return
         const s = await r.json() as HomeSnapshot
         if (stop) return
+
         setNewsCrypto(s.newsCrypto); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
         setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
         setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
-        // equity/crypto berekenen we elders exact
+
+        // ✅ Nieuw: equities óók hydrateren vanuit snapshot als ze nog leeg zijn
+        if (!topBuy.length && Array.isArray(s.topBuy) && s.topBuy.length) {
+          setTopBuy(s.topBuy)
+          setCache('home:eq:topBuy', s.topBuy)
+        }
+        if (!topSell.length && Array.isArray(s.topSell) && s.topSell.length) {
+          setTopSell(s.topSell)
+          setCache('home:eq:topSell', s.topSell)
+        }
+        if (s.topBuy?.length && s.topSell?.length) {
+          setLoadingEq(false)
+        }
       } catch {}
     })()
     return () => { stop = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   /* ---------- NEWS warm-up (SWR prime) ---------- */
@@ -512,8 +526,7 @@ export default function Homepage(props: HomeProps) {
   useEffect(() => {
     let aborted = false
 
-    // ✅ Als we al equities hebben (via SSR snapshot of cache),
-    // sla dan de zware client-herberekening over. Dit houdt de homepage instant.
+    // Als we al equities hebben (via SSR snapshot of cache), skip zware fallback
     if (topBuy.length && topSell.length) {
       setLoadingEq(false)
       return () => { aborted = true }
@@ -584,7 +597,7 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    // ⛔ Als SSR snapshot al crypto lijsten heeft, niets client-side doen
+    // Als SSR snapshot al crypto lijsten heeft, niets client-side doen
     if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
       setLoadingCoin(false)
       return
