@@ -893,8 +893,7 @@ export default function Homepage(props: HomeProps) {
                 Congress Trading Flows
               </span>
               <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
-  Trump Trading
-</span>
+                Trump Trading 
               </span>
             </div>
 
