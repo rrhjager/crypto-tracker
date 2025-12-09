@@ -874,146 +874,70 @@ export default function Homepage(props: HomeProps) {
             <div className="absolute right-0 top-1/2 h-48 w-48 -translate-y-1/2 rounded-full bg-cyan-500/10 blur-[42px]" />
           </div>
 
-          <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            {/* Left: Brand + tagline + CTA's */}
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/70">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Live beta • Updated every few minutes
-              </div>
+          <div className="relative z-10 flex flex-col gap-5">
+            <h1 className="mt-1 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight bg-gradient-to-r from-emerald-300 via-cyan-300 to-sky-400 bg-clip-text text-transparent">
+              SignalHub.Tech
+            </h1>
 
-              <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-white">
-                SignalHub.Tech
-              </h1>
+            <p className="max-w-2xl text-sm sm:text-base text-white/75">
+              Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading and other
+              insights.
+            </p>
 
-              <p className="mt-3 max-w-2xl text-sm sm:text-base text-white/70">
-                Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading and other
-                insights.
-              </p>
-
-              {/* Feature chips */}
-              <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-white/70">
-                <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
-                  Crypto &amp; Global Equities
-                </span>
-                <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
-                  Congress Trading Flows
-                </span>
-                <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1">
-                  Trump Trading Radar
-                </span>
-              </div>
-
-              {/* CTA buttons — zonder pijltjes, met juiste routes */}
-              <div className="flex flex-wrap gap-2 justify-start mt-6">
-                <Link
-                  href="/crypto"
-                  className="px-4 py-2 bg-white text-black rounded-full text-sm font-medium hover:bg-white/90 transition"
-                >
-                  Crypto Overview
-                </Link>
-
-                <Link
-                  href="/sp500"
-                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
-                >
-                  S&P 500 Signals
-                </Link>
-
-                <Link
-                  href="/etfs"
-                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
-                >
-                  ETFs
-                </Link>
-
-                <Link
-                  href="/intel"
-                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
-                >
-                  Congress Trading
-                </Link>
-
-                <Link
-                  href="/trump-trading"
-                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
-                >
-                  Trump Trading
-                </Link>
-              </div>
+            {/* Feature chips */}
+            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-white/70">
+              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+                Crypto &amp; Global Equities
+              </span>
+              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+                Congress Trading Flows
+              </span>
+              <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1">
+                Trump Trading Radar
+              </span>
             </div>
 
-            {/* Right: mini live snapshot, gebruikt bestaande state */}
-            <div className="mt-2 w-full max-w-md lg:mt-0 lg:w-80">
-              <div className="rounded-2xl border border-white/15 bg-black/30 px-4 py-4 backdrop-blur">
-                <div className="flex items-center justify-between text-[11px] text-white/60 mb-2">
-                  <span className="font-medium text-white/70">Live Signals snapshot</span>
-                  <span>BUY / SELL</span>
-                </div>
+            {/* CTA buttons — zonder pijltjes, met juiste routes */}
+            <div className="flex flex-wrap gap-2 justify-start mt-4">
+              <Link
+                href="/crypto"
+                className="px-4 py-2 bg-white text-black rounded-full text-sm font-medium hover:bg-white/90 transition"
+              >
+                Crypto Overview
+              </Link>
 
-                <div className="grid grid-cols-2 gap-3 text-[11px]">
-                  <div>
-                    <div className="mb-1 text-[10px] uppercase tracking-wide text-white/50">
-                      Crypto — Top BUY
-                    </div>
-                    {coinTopBuy.length ? (
-                      <ul className="space-y-1.5">
-                        {coinTopBuy.slice(0, 3).map((c) => (
-                          <li key={`hero-coin-${c.symbol}`} className="flex items-center justify-between gap-2">
-                            <span className="truncate text-white/80">
-                              {c.symbol.replace('-USD', '')}
-                            </span>
-                            <span className="shrink-0">
-                              <ScoreBadge score={c.score} />
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="space-y-1.5 text-white/40">
-                        <div className="h-3 w-24 rounded bg-white/10" />
-                        <div className="h-3 w-20 rounded bg-white/10" />
-                        <div className="h-3 w-16 rounded bg-white/10" />
-                      </div>
-                    )}
-                  </div>
+              <Link
+                href="/sp500"
+                className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+              >
+                S&P 500 Signals
+              </Link>
 
-                  <div>
-                    <div className="mb-1 text-[10px] uppercase tracking-wide text-white/50">
-                      Equities — Top BUY
-                    </div>
-                    {topBuy.length ? (
-                      <ul className="space-y-1.5">
-                        {topBuy.slice(0, 3).map((s) => (
-                          <li key={`hero-eq-${s.market}-${s.symbol}`} className="flex items-center justify-between gap-2">
-                            <span className="truncate text-white/80">
-                              {(s.symbol || '').toUpperCase()}
-                            </span>
-                            <span className="shrink-0">
-                              <ScoreBadge score={s.score} />
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="space-y-1.5 text-white/40">
-                        <div className="h-3 w-24 rounded bg-white/10" />
-                        <div className="h-3 w-20 rounded bg-white/10" />
-                        <div className="h-3 w-16 rounded bg-white/10" />
-                      </div>
-                    )}
-                  </div>
-                </div>
+              <Link
+                href="/etfs"
+                className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+              >
+                ETFs
+              </Link>
 
-                <div className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/50">
-                  Scores update binnen ~5 minuten. Geen advies, wel radarscherm.
-                </div>
-              </div>
+              <Link
+                href="/intel"
+                className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+              >
+                Congress Trading
+              </Link>
+
+              <Link
+                href="/trump-trading"
+                className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+              >
+                Trump Trading
+              </Link>
             </div>
           </div>
         </section>
 
-        {/* GRID MET ALLE CARDS (ongewijzigd qua logica) */}
+        {/* GRID MET ALLE CARDS (logica ongewijzigd) */}
         <div className="grid gap-5 lg:grid-cols-3">
           {/* 1) Hero — AI Briefing */}
           <Card title="Daily AI Briefing">
