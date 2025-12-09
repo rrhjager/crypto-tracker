@@ -152,7 +152,8 @@ export default function SiteHeader() {
 
   return (
     <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-[60]">
-      <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
+      {/* Alleen hier aangepast: max-w-6xl -> max-w-screen-2xl */}
+      <div className="max-w-screen-2xl mx-auto px-4 h-14 flex items-center justify-between">
         <Link
           href="/"
           className="group font-semibold tracking-tight text-slate-900 dark:text-slate-50"
