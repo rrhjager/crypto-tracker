@@ -897,11 +897,11 @@ export default function Homepage(props: HomeProps) {
               </span>
             </div>
 
-            {/* CTA buttons — zonder pijltjes, met juiste routes */}
+            {/* CTA buttons — alle transparant */}
             <div className="flex flex-wrap gap-2 justify-start mt-4">
               <Link
                 href="/crypto"
-                className="px-4 py-2 bg-white text-black rounded-full text-sm font-medium hover:bg-white/90 transition"
+                className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
               >
                 Crypto Overview
               </Link>
@@ -910,7 +910,7 @@ export default function Homepage(props: HomeProps) {
                 href="/sp500"
                 className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
               >
-                S&P 500 Signals
+                S&amp;P 500 Signals
               </Link>
 
               <Link
