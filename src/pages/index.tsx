@@ -892,8 +892,9 @@ export default function Homepage(props: HomeProps) {
               <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
                 Congress Trading Flows
               </span>
-              <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1">
-                Trump Trading Radar
+              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+  Trump Trading
+</span>
               </span>
             </div>
 
