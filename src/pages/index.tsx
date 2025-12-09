@@ -262,7 +262,7 @@ const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string;
     <header className="flex items-center justify-between px-5 pt-4 pb-2">
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {actionHref && (
-        <Link href={actionHref} className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
+        <Link href={actionHref} className="text-[12px] text-white/70 hover:text:white inline-flex items-center gap-1">
           {actionLabel || 'View all'} <span aria-hidden>→</span>
         </Link>
       )}
@@ -420,7 +420,7 @@ export default function Homepage(props: HomeProps) {
         setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
 
-        // ✅ Nieuw: equities óók hydrateren vanuit snapshot als ze nog leeg zijn
+        // equities óók hydrateren vanuit snapshot als ze nog leeg zijn
         if (!topBuy.length && Array.isArray(s.topBuy) && s.topBuy.length) {
           setTopBuy(s.topBuy)
           setCache('home:eq:topBuy', s.topBuy)
@@ -864,7 +864,10 @@ export default function Homepage(props: HomeProps) {
     <>
       <Head>
         <title>SignalHub — Clarity in Markets</title>
-        <meta name="description" content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view." />
+        <meta
+          name="description"
+          content="Real-time tactical clarity for crypto & global equities, Congress Trading, Trump Trading and other insights."
+        />
         <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
         <link rel="dns-prefetch" href="https://query2.finance.yahoo.com" />
@@ -872,8 +875,76 @@ export default function Homepage(props: HomeProps) {
       </Head>
 
       <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
-        <div className="grid gap-5 lg:grid-cols-3">
+        {/* Hero / Banner */}
+        <section className="relative mb-8 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-r from-emerald-500/15 via-sky-500/8 to-purple-500/15 px-6 py-6 sm:px-8 sm:py-7">
+          <div className="pointer-events-none absolute inset-y-0 right-[-120px] w-[260px] opacity-40 sm:right-[-80px] sm:w-[320px]">
+            <div className="h-full w-full rounded-full bg-radial from-emerald-400/40 via-sky-400/10 to-transparent blur-3xl" />
+          </div>
 
+          <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full bg-black/40 px-3 py-1 text-[11px] font-medium text-emerald-200/90 ring-1 ring-emerald-400/40 backdrop-blur">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-[pulse_2s_ease-in-out_infinite]" />
+                Live market signals & insider flows
+              </div>
+
+              <h1 className="text-3xl sm:text-4xl md:text-[40px] font-semibold tracking-tight">
+                <span>SignalHub.</span>
+                <span className="text-emerald-400">Tech</span>
+              </h1>
+
+              <p className="max-w-2xl text-[13px] sm:text-[14px] text-white/75">
+                Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading
+                and other actionable market insights.
+              </p>
+
+              <div className="flex flex-wrap gap-2 text-[11px] text-white/80">
+                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
+                  BUY / HOLD / SELL dashboards
+                </span>
+                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
+                  Congress &amp; insider trading lens
+                </span>
+                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
+                  Daily AI market briefing
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-col items-start gap-3 sm:mt-0 sm:items-end">
+              <div className="flex flex-wrap gap-2 text-[11px]">
+                <Link
+                  href="/crypto"
+                  className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-900 shadow-sm hover:bg-slate-100"
+                >
+                  Open crypto overview <span aria-hidden>↗</span>
+                </Link>
+                <Link
+                  href="/sp500"
+                  className="inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-white/10"
+                >
+                  Global equities <span aria-hidden>→</span>
+                </Link>
+                <Link
+                  href="/intel"
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-400/50 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-medium text-emerald-100 hover:bg-emerald-400/20"
+                >
+                  Congress &amp; Trump flows <span aria-hidden>→</span>
+                </Link>
+              </div>
+
+              <div className="flex items-center gap-4 text-[11px] text-white/70">
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  <span>Crypto &amp; equities scored in real time</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Content grid */}
+        <div className="grid gap-5 lg:grid-cols-3">
           {/* 1) Hero — AI Briefing */}
           <Card title="Daily AI Briefing">
             <div className={`flex-1 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
