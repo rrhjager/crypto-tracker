@@ -132,6 +132,7 @@ export default function DisclaimerPage() {
               </p>
             </div>
 
+
             <div className="space-y-2">
               <h3 className="font-bold">Changes</h3>
               <p className="text-sm text-white/80 leading-relaxed">

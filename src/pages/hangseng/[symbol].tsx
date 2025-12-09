@@ -115,7 +115,7 @@ export default function StockDetail() {
                 : err
                   ? `Fout: ${err}`
                   : macd && macd.macd != null && macd.signal != null
-                    ? `MACD: ${fmt(macd.macd, 4)} — Signaal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
+                    ? `MACD: ${fmt(macd.macd, 4)} — Signal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
                     : 'Onvoldoende data voor MACD'
             }
           />
