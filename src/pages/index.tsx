@@ -262,8 +262,8 @@ const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string;
     <header className="flex items-center justify-between px-5 pt-4 pb-2">
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {actionHref && (
-        <Link href={actionHref} className="text-[12px] text-white/70 hover:text:white inline-flex items-center gap-1">
-          {actionLabel || 'View all'} <span aria-hidden>→</span>
+        <Link href={actionHref} className="text-[12px] text-white/70 hover:text-white inline-flex items-center gap-1">
+          {actionLabel || 'View all'}
         </Link>
       )}
     </header>
@@ -420,7 +420,6 @@ export default function Homepage(props: HomeProps) {
         setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
 
-        // equities óók hydrateren vanuit snapshot als ze nog leeg zijn
         if (!topBuy.length && Array.isArray(s.topBuy) && s.topBuy.length) {
           setTopBuy(s.topBuy)
           setCache('home:eq:topBuy', s.topBuy)
@@ -526,13 +525,11 @@ export default function Homepage(props: HomeProps) {
   useEffect(() => {
     let aborted = false
 
-    // Als we al equities hebben (via SSR snapshot of cache), skip zware fallback
     if (topBuy.length && topSell.length) {
       setLoadingEq(false)
       return () => { aborted = true }
     }
 
-    // Alleen als SSR/caches leeg zijn doen we de fallback naar strikte scores
     setLoadingEq(true)
 
     ;(async () => {
@@ -597,7 +594,6 @@ export default function Homepage(props: HomeProps) {
   }, [])
 
   useEffect(() => {
-    // Als SSR snapshot al crypto lijsten heeft, niets client-side doen
     if (props.snapshot?.coinTopBuy?.length && props.snapshot?.coinTopSell?.length) {
       setLoadingCoin(false)
       return
@@ -619,13 +615,11 @@ export default function Homepage(props: HomeProps) {
         setCoinErr(null)
         const syms = pairs.map(p => p.pair)
 
-        // splits in batches van CRYPTO_BATCH
         const batches: string[][] = []
         for (let i = 0; i < syms.length; i += CRYPTO_BATCH) {
           batches.push(syms.slice(i, i + CRYPTO_BATCH))
         }
 
-        // parallel met pool(4); bij lege result probeer lowercase fallback
         const batchResults = await pool(batches, 4, async (chunk) => {
           try {
             const j = await fetchBatch(chunk, minuteTag)
@@ -640,7 +634,6 @@ export default function Homepage(props: HomeProps) {
           }
         })
 
-        // map: pair -> score
         const scoreMap = new Map<string, number>()
         for (const br of batchResults) {
           for (const ind of (br.results || [])) {
@@ -655,7 +648,6 @@ export default function Homepage(props: HomeProps) {
           }
         }
 
-        // fallback naar localStorage voor missende symbolen
         for (const { pair } of pairs) {
           if (scoreMap.has(pair)) continue
           try {
@@ -669,7 +661,6 @@ export default function Homepage(props: HomeProps) {
           } catch {}
         }
 
-        // rows met Yahoo symbols (c.symbol)
         const rows = pairs
           .map(({ c, pair }) => {
             const s = scoreMap.get(pair)
@@ -866,7 +857,7 @@ export default function Homepage(props: HomeProps) {
         <title>SignalHub — Clarity in Markets</title>
         <meta
           name="description"
-          content="Real-time tactical clarity for crypto & global equities, Congress Trading, Trump Trading and other insights."
+          content="Real-time BUY / HOLD / SELL signals across crypto and global equities — all in one stoplight view."
         />
         <link rel="preconnect" href="https://query2.finance.yahoo.com" crossOrigin="" />
         <link rel="preconnect" href="https://api.coingecko.com" crossOrigin="" />
@@ -874,76 +865,155 @@ export default function Homepage(props: HomeProps) {
         <link rel="dns-prefetch" href="https://api.coingecko.com" />
       </Head>
 
-      <main className="max-w-screen-2xl mx-auto px-4 pt-8 pb-14">
-        {/* Hero / Banner */}
-        <section className="relative mb-8 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-r from-emerald-500/15 via-sky-500/8 to-purple-500/15 px-6 py-6 sm:px-8 sm:py-7">
-          <div className="pointer-events-none absolute inset-y-0 right-[-120px] w-[260px] opacity-40 sm:right-[-80px] sm:w-[320px]">
-            <div className="h-full w-full rounded-full bg-radial from-emerald-400/40 via-sky-400/10 to-transparent blur-3xl" />
+      <main className="max-w-screen-2xl mx-auto px-4 pt-10 pb-16">
+        {/* HERO / BANNER */}
+        <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 px-6 py-7 sm:px-10 sm:py-9 mb-8 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.7)]">
+          {/* zachte glow-orbs */}
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -left-10 -top-10 h-40 w-40 rounded-full bg-emerald-500/15 blur-[40px]" />
+            <div className="absolute right-0 top-1/2 h-48 w-48 -translate-y-1/2 rounded-full bg-cyan-500/10 blur-[42px]" />
           </div>
 
-          <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full bg-black/40 px-3 py-1 text-[11px] font-medium text-emerald-200/90 ring-1 ring-emerald-400/40 backdrop-blur">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-[pulse_2s_ease-in-out_infinite]" />
-                Live market signals & insider flows
+          <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            {/* Left: Brand + tagline + CTA's */}
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/70">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live beta • Updated every few minutes
               </div>
 
-              <h1 className="text-3xl sm:text-4xl md:text-[40px] font-semibold tracking-tight">
-                <span>SignalHub.</span>
-                <span className="text-emerald-400">Tech</span>
+              <h1 className="mt-4 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-white">
+                SignalHub.Tech
               </h1>
 
-              <p className="max-w-2xl text-[13px] sm:text-[14px] text-white/75">
-                Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading
-                and other actionable market insights.
+              <p className="mt-3 max-w-2xl text-sm sm:text-base text-white/70">
+                Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading and other
+                insights.
               </p>
 
-              <div className="flex flex-wrap gap-2 text-[11px] text-white/80">
-                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
-                  BUY / HOLD / SELL dashboards
+              {/* Feature chips */}
+              <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-white/70">
+                <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+                  Crypto &amp; Global Equities
                 </span>
-                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
-                  Congress &amp; insider trading lens
+                <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+                  Congress Trading Flows
                 </span>
-                <span className="rounded-full bg-black/50 px-3 py-1 ring-1 ring-white/10">
-                  Daily AI market briefing
+                <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1">
+                  Trump Trading Radar
                 </span>
+              </div>
+
+              {/* CTA buttons — zonder pijltjes, met juiste routes */}
+              <div className="flex flex-wrap gap-2 justify-start mt-6">
+                <Link
+                  href="/crypto"
+                  className="px-4 py-2 bg-white text-black rounded-full text-sm font-medium hover:bg-white/90 transition"
+                >
+                  Crypto Overview
+                </Link>
+
+                <Link
+                  href="/sp500"
+                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+                >
+                  S&P 500 Signals
+                </Link>
+
+                <Link
+                  href="/etfs"
+                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+                >
+                  ETFs
+                </Link>
+
+                <Link
+                  href="/intel"
+                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+                >
+                  Congress Trading
+                </Link>
+
+                <Link
+                  href="/trump-trading"
+                  className="px-4 py-2 bg-white/10 text-white rounded-full text-sm font-medium hover:bg-white/20 transition"
+                >
+                  Trump Trading
+                </Link>
               </div>
             </div>
 
-            <div className="mt-3 flex flex-col items-start gap-3 sm:mt-0 sm:items-end">
-              <div className="flex flex-wrap gap-2 text-[11px]">
-                <Link
-                  href="/crypto"
-                  className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-900 shadow-sm hover:bg-slate-100"
-                >
-                  Open crypto overview <span aria-hidden>↗</span>
-                </Link>
-                <Link
-                  href="/sp500"
-                  className="inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-white/10"
-                >
-                  Global equities <span aria-hidden>→</span>
-                </Link>
-                <Link
-                  href="/intel"
-                  className="inline-flex items-center gap-1 rounded-full border border-emerald-400/50 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-medium text-emerald-100 hover:bg-emerald-400/20"
-                >
-                  Congress &amp; Trump flows <span aria-hidden>→</span>
-                </Link>
-              </div>
+            {/* Right: mini live snapshot, gebruikt bestaande state */}
+            <div className="mt-2 w-full max-w-md lg:mt-0 lg:w-80">
+              <div className="rounded-2xl border border-white/15 bg-black/30 px-4 py-4 backdrop-blur">
+                <div className="flex items-center justify-between text-[11px] text-white/60 mb-2">
+                  <span className="font-medium text-white/70">Live Signals snapshot</span>
+                  <span>BUY / SELL</span>
+                </div>
 
-              <div className="flex items-center gap-4 text-[11px] text-white/70">
-                <div className="flex items-center gap-1.5">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  <span>Crypto &amp; equities scored in real time</span>
+                <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-wide text-white/50">
+                      Crypto — Top BUY
+                    </div>
+                    {coinTopBuy.length ? (
+                      <ul className="space-y-1.5">
+                        {coinTopBuy.slice(0, 3).map((c) => (
+                          <li key={`hero-coin-${c.symbol}`} className="flex items-center justify-between gap-2">
+                            <span className="truncate text-white/80">
+                              {c.symbol.replace('-USD', '')}
+                            </span>
+                            <span className="shrink-0">
+                              <ScoreBadge score={c.score} />
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="space-y-1.5 text-white/40">
+                        <div className="h-3 w-24 rounded bg-white/10" />
+                        <div className="h-3 w-20 rounded bg-white/10" />
+                        <div className="h-3 w-16 rounded bg-white/10" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-wide text-white/50">
+                      Equities — Top BUY
+                    </div>
+                    {topBuy.length ? (
+                      <ul className="space-y-1.5">
+                        {topBuy.slice(0, 3).map((s) => (
+                          <li key={`hero-eq-${s.market}-${s.symbol}`} className="flex items-center justify-between gap-2">
+                            <span className="truncate text-white/80">
+                              {(s.symbol || '').toUpperCase()}
+                            </span>
+                            <span className="shrink-0">
+                              <ScoreBadge score={s.score} />
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="space-y-1.5 text-white/40">
+                        <div className="h-3 w-24 rounded bg-white/10" />
+                        <div className="h-3 w-20 rounded bg-white/10" />
+                        <div className="h-3 w-16 rounded bg-white/10" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/50">
+                  Scores update binnen ~5 minuten. Geen advies, wel radarscherm.
                 </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Content grid */}
+        {/* GRID MET ALLE CARDS (ongewijzigd qua logica) */}
         <div className="grid gap-5 lg:grid-cols-3">
           {/* 1) Hero — AI Briefing */}
           <Card title="Daily AI Briefing">
@@ -957,7 +1027,7 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 2) Crypto — Top BUY */}
-          <Card title="Crypto — Top 5 BUY" actionHref="/crypto" actionLabel="All crypto →">
+          <Card title="Crypto — Top 5 BUY" actionHref="/crypto" actionLabel="All crypto">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingCoin ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
@@ -981,7 +1051,7 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 3) Crypto — Top 5 SELL */}
-          <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto →">
+          <Card title="Crypto — Top 5 SELL" actionHref="/crypto" actionLabel="All crypto">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingCoin ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
@@ -1005,7 +1075,7 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 4) Equities — Top BUY */}
-          <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets →">
+          <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingEq && topBuy.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
@@ -1031,7 +1101,7 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 5) Equities — Top SELL */}
-          <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets →">
+          <Card title="Equities — Top SELL" actionHref="/sp500" actionLabel="Browse markets">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingEq && topSell.length===0 ? (
                 <li className="py-3 text-white/60 text-[13px]">Loading…</li>
@@ -1057,7 +1127,7 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 6) Congress Trading — Latest */}
-          <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard →">
+          <Card title="Congress Trading — Latest" actionHref="/intel" actionLabel="Open dashboard">
             <div className={`overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {tradesErr && <div className="text-[11px] text-rose-300 mb-2">Error: {tradesErr}</div>}
               <div className="grid grid-cols-12 text-[10px] text-white/60 px-2 pb-1">
@@ -1107,17 +1177,17 @@ export default function Homepage(props: HomeProps) {
           </Card>
 
           {/* 7) Crypto News */}
-          <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto →">
+          <Card title="Crypto News" actionHref="/crypto" actionLabel="Open crypto">
             {renderNews(newsCrypto, 'nC', loadingNewsCrypto)}
           </Card>
 
           {/* 8) Equities News */}
-          <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX →">
+          <Card title="Equities News" actionHref="/aex" actionLabel="Open AEX">
             {renderNews(newsEq, 'nE', loadingNewsEq)}
           </Card>
 
           {/* 9) Academy */}
-          <Card title="Academy" actionHref="/academy" actionLabel="All articles →">
+          <Card title="Academy" actionHref="/academy" actionLabel="All articles">
             <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingAcademy ? (
                 <li className="text-white/60">Loading…</li>
@@ -1161,7 +1231,6 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
   }
 
   if (!matches.length) {
-    // fallback: alles als één summary zonder takeaway
     sections.push({ label: 'Summary', body: trimmed })
   } else {
     for (let i = 0; i < matches.length; i++) {
@@ -1177,9 +1246,8 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
     }
   }
 
-  // Helper: splits body op een Impact-stuk en maakt dat cursief
   const splitImpact = (body: string): { main: string; impact?: string } => {
-    const re = /\*?[*]?Impact\*?[*]?\s*:\s*(.+)$/i // pakt zowel **Impact**: als Impact:
+    const re = /\*?[*]?Impact\*?[*]?\s*:\s*(.+)$/i
     const match = body.match(re)
     if (!match) return { main: body }
     const impactText = match[1].trim()
