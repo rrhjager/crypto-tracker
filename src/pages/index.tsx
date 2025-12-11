@@ -894,39 +894,49 @@ export default function Homepage(props: HomeProps) {
               </span>
             </div>
 
-            {/* CTA buttons — goed zichtbaar in light, transparant in dark */}
+            {/* CTA buttons — LICHTGRIJS in light mode, transparant in dark */}
             <div className="flex flex-wrap gap-2 justify-start mt-4">
               <Link
                 href="/crypto"
-                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-slate-100 text-slate-900 hover:bg-slate-200
+                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Crypto Overview
               </Link>
 
               <Link
                 href="/sp500"
-                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-slate-100 text-slate-900 hover:bg-slate-200
+                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 S&amp;P 500 Signals
               </Link>
 
               <Link
                 href="/etfs"
-                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-slate-100 text-slate-900 hover:bg-slate-200
+                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 ETFs
               </Link>
 
               <Link
                 href="/intel"
-                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-slate-100 text-slate-900 hover:bg-slate-200
+                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Congress Trading
               </Link>
 
               <Link
                 href="/trump-trading"
-                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-slate-100 text-slate-900 hover:bg-slate-200
+                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Trump Trading
               </Link>
