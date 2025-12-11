@@ -434,8 +434,7 @@ export default function Homepage(props: HomeProps) {
       } catch {}
     })()
     return () => { stop = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- NEWS warm-up (SWR prime) ---------- */
   useEffect(() => {
@@ -573,8 +572,7 @@ export default function Homepage(props: HomeProps) {
     })()
 
     return () => { aborted = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minuteTag])
+  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
      CRYPTO — snelle bulk-batches + SSR skip
@@ -685,8 +683,7 @@ export default function Homepage(props: HomeProps) {
     })()
 
     return () => { aborted = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairs, minuteTag])
+  }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ========= Academy (fallback) ========= */
   type AcademyItem = { title: string; href: string }
@@ -867,84 +864,69 @@ export default function Homepage(props: HomeProps) {
 
       <main className="max-w-screen-2xl mx-auto px-4 pt-10 pb-16">
         {/* HERO / BANNER */}
-        <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 px-6 py-7 sm:px-10 sm:py-9 mb-8 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.7)]">
-          {/* zachte glow-orbs */}
-          <div className="pointer-events-none absolute inset-0">
+        <section className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-white px-6 py-7 sm:px-10 sm:py-9 mb-8 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.25)] dark:border-white/10 dark:bg-gradient-to-r dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+          {/* zachte glow-orbs alleen in dark mode */}
+          <div className="pointer-events-none absolute inset-0 hidden dark:block">
             <div className="absolute -left-10 -top-10 h-40 w-40 rounded-full bg-emerald-500/15 blur-[40px]" />
             <div className="absolute right-0 top-1/2 h-48 w-48 -translate-y-1/2 rounded-full bg-cyan-500/10 blur-[42px]" />
           </div>
 
           <div className="relative z-10 flex flex-col gap-5">
-            <h1 className="mt-1 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight bg-gradient-to-r from-emerald-300 via-cyan-300 to-sky-400 bg-clip-text text-transparent">
+            <h1 className="mt-1 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight bg-gradient-to-r from-emerald-700 via-cyan-700 to-sky-600 bg-clip-text text-transparent dark:from-emerald-300 dark:via-cyan-300 dark:to-sky-400">
               SignalHub.Tech
             </h1>
 
-            <p className="max-w-2xl text-sm sm:text-base text-white/75">
+            <p className="max-w-2xl text-sm sm:text-base text-slate-700 dark:text-white/75">
               Real-time tactical clarity for crypto &amp; global equities, Congress Trading, Trump Trading and other
               insights.
             </p>
 
             {/* Feature chips */}
-            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-white/70">
-              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-600 dark:text-white/70">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 dark:border-white/15 dark:bg-black/20">
                 Crypto &amp; Global Equities
               </span>
-              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 dark:border-white/15 dark:bg-black/20">
                 Congress Trading Flows
               </span>
-              <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1">
-                Trump Trading 
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 dark:border-white/15 dark:bg-black/20">
+                Trump Trading
               </span>
             </div>
 
-            {/* CTA buttons — alle transparant, lichtgrijs in light mode */}
+            {/* CTA buttons — goed zichtbaar in light, transparant in dark */}
             <div className="flex flex-wrap gap-2 justify-start mt-4">
               <Link
                 href="/crypto"
-                className="px-4 py-2 rounded-full text-sm font-medium
-                           bg-black/10 text-black hover:bg-black/20
-                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20
-                           transition"
+                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Crypto Overview
               </Link>
 
               <Link
                 href="/sp500"
-                className="px-4 py-2 rounded-full text-sm font-medium
-                           bg-black/10 text-black hover:bg-black/20
-                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20
-                           transition"
+                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 S&amp;P 500 Signals
               </Link>
 
               <Link
                 href="/etfs"
-                className="px-4 py-2 rounded-full text-sm font-medium
-                           bg-black/10 text-black hover:bg-black/20
-                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20
-                           transition"
+                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 ETFs
               </Link>
 
               <Link
                 href="/intel"
-                className="px-4 py-2 rounded-full text-sm font-medium
-                           bg-black/10 text-black hover:bg-black/20
-                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20
-                           transition"
+                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Congress Trading
               </Link>
 
               <Link
                 href="/trump-trading"
-                className="px-4 py-2 rounded-full text-sm font-medium
-                           bg-black/10 text-black hover:bg-black/20
-                           dark:bg-white/10 dark:text-white dark:hover:bg-white/20
-                           transition"
+                className="px-4 py-2 rounded-full text-sm font-medium transition bg-slate-900 text-white hover:bg-slate-800 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
               >
                 Trump Trading
               </Link>
