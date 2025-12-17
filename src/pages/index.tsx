@@ -494,85 +494,10 @@ export default function Homepage(props: HomeProps) {
   }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =======================
-     EQUITIES — Exacte scores (zelfde endpoint als aandeel-pagina)
+     EQUITIES — Step D
+     (geen automatische per-symbol scan op de homepage; snapshot + cache blijven leidend)
      ======================= */
-
-  const MARKET_ORDER: MarketLabel[] = ['AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex']
-
-  // cache helpers voor individuele scores
-  const getScoreCache = (sym: string): number | null => {
-    const j = getCache<{ score: number }>(`score:${sym}`)
-    return (j && Number.isFinite(j.score)) ? j.score : null
-  }
-  const setScoreCache = (sym: string, score: number) => setCache(`score:${sym}`, { score })
-
-  async function fetchStrictScore(sym: string, v: number): Promise<number | null> {
-    try {
-      const r = await fetch(`/api/indicators/score/${encodeURIComponent(sym)}?v=${v}`, { cache: 'no-store' })
-      if (!r.ok) return null
-      const j = await r.json() as { score?: number|null }
-      if (Number.isFinite(j?.score as number)) {
-        const s = Math.round(Number(j.score))
-        setScoreCache(sym, s)
-        return s
-      }
-      return null
-    } catch { return null }
-  }
-
-  // Bereken tops/bottoms per markt op basis van exacte scores
-  useEffect(() => {
-    let aborted = false
-
-    if (topBuy.length && topSell.length) {
-      setLoadingEq(false)
-      return () => { aborted = true }
-    }
-
-    setLoadingEq(true)
-
-    ;(async () => {
-      try {
-        const outBuy: ScoredEq[] = []
-        const outSell: ScoredEq[] = []
-
-        for (const market of MARKET_ORDER) {
-          const cons = constituentsForMarket(market)
-          if (!cons.length) continue
-          const scores = await pool(cons, 6, async (c) => {
-            const cached = getScoreCache(c.symbol)
-            if (Number.isFinite(cached)) return { ...c, score: cached as number }
-            const s = await fetchStrictScore(c.symbol, minuteTag)
-            return { ...c, score: s as any }
-          })
-
-          const rows = scores
-            .filter(r => Number.isFinite(r.score as number))
-            .map(r => ({ symbol: r.symbol, name: r.name, market, score: r.score as number })) as ScoredEq[]
-
-          if (rows.length) {
-            const top = [...rows].sort((a,b)=> b.score - a.score)[0]
-            const bot = [...rows].sort((a,b)=> a.score - b.score)[0]
-            if (top) outBuy.push({ ...top, signal: statusFromScore(top.score) })
-            if (bot) outSell.push({ ...bot, signal: statusFromScore(bot.score) })
-          }
-        }
-
-        const order = (m: MarketLabel) => MARKET_ORDER.indexOf(m)
-        const finalBuy  = outBuy.sort((a,b)=> order(a.market)-order(b.market))
-        const finalSell = outSell.sort((a,b)=> order(a.market)-order(b.market))
-
-        if (!aborted) {
-          setTopBuy(finalBuy); setTopSell(finalSell)
-          setCache('home:eq:topBuy', finalBuy); setCache('home:eq:topSell', finalSell)
-        }
-      } finally {
-        if (!aborted) setLoadingEq(false)
-      }
-    })()
-
-    return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+  // (bewust geen extra fetch-loop hier)
 
   /* =======================
      CRYPTO — snelle bulk-batches + SSR skip
@@ -1225,15 +1150,11 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
       BASE_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
-    const [resSnap, resBrief] = await Promise.all([
-      fetch(`${base}/api/home/snapshot`, { cache: 'no-store' }),
-      fetch(`${base}/api/home/briefing`, { cache: 'no-store' }),
-    ])
-
+    const resSnap = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
-    const briefing  = resBrief.ok ? (await resBrief.json()  as Briefing)   : null
 
-    return { props: { snapshot, briefing } }
+    // Step B: briefing niet meer in SSR (client fallback blijft)
+    return { props: { snapshot, briefing: null } }
   } catch {
     return { props: { snapshot: null, briefing: null } }
   }

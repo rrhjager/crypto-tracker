@@ -209,44 +209,43 @@ export default async function handler(
 
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
-    const items = await Promise.all(
-      symbols.map(async (sym) => {
-        const key = `ind:snapshot:${sym}:${RANGE}`
-        const snapKey = `ind:snap:all:${sym}`
+    // Step C: vervang Promise.all door een concurrency pool (burst-proof)
+    const items = await pool(symbols, 8, async (sym) => {
+      const key = `ind:snapshot:${sym}:${RANGE}`
+      const snapKey = `ind:snap:all:${sym}`
 
-        try {
-          const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-            const v = await computeOne(sym)
-            try {
-              await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
-            } catch {}
-            return v
-          })
+      try {
+        const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
+          const v = await computeOne(sym)
+          try {
+            await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
+          } catch {}
+          return v
+        })
 
-          // fallback als er echt niets terugkomt uit KV/computeOne
-          return data ?? {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-          }
-        } catch (err) {
-          // Defensief: één kapotte ticker mag de hele batch niet slopen
-          if (process.env.NODE_ENV !== 'production') {
-            // eslint-disable-next-line no-console
-            console.error('[snapshot-error]', sym, err)
-          }
-          return {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-          }
+        // fallback als er echt niets terugkomt uit KV/computeOne
+        return data ?? {
+          symbol: sym,
+          ma: { ma50: null, ma200: null },
+          rsi: null,
+          macd: { macd: null, signal: null, hist: null },
+          volume: { volume: null, avg20d: null, ratio: null },
         }
-      })
-    )
+      } catch (err) {
+        // Defensief: één kapotte ticker mag de hele batch niet slopen
+        if (process.env.NODE_ENV !== 'production') {
+          // eslint-disable-next-line no-console
+          console.error('[snapshot-error]', sym, err)
+        }
+        return {
+          symbol: sym,
+          ma: { ma50: null, ma200: null },
+          rsi: null,
+          macd: { macd: null, signal: null, hist: null },
+          volume: { volume: null, avg20d: null, ratio: null },
+        }
+      }
+    })
 
     // Debug-info: welke symbols hebben wél / geen score?
     const symbolsWithScore = items
@@ -276,4 +275,19 @@ export default async function handler(
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
   }
+}
+
+/* ========= concurrency pool helper (lokaal, geen andere imports nodig) ========= */
+async function pool<T, R>(arr: T[], size: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(arr.length) as any
+  let i = 0
+  const workers = new Array(Math.min(size, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }

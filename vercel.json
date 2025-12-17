@@ -6,11 +6,7 @@
     },
     {
       "path": "/api/internal/warm-home",
-      "schedule": "0,30 * * * *"
-    },
-    {
-      "path": "/api/internal/warm-index",
-      "schedule": "0,30 * * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/home/briefing",
