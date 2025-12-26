@@ -7,8 +7,8 @@ export default async function handler() {
       process.env.NEXT_PUBLIC_BASE_URL ||
       `https://${process.env.VERCEL_URL || 'signalhub.tech'}`
 
-    // Cron moet de rebuild triggeren (bezoekers niet) → refresh=1
-    const url = `${base}/api/home/snapshot?refresh=1`
+    // Warm de échte snapshot (zodat home:snapshot:v2 KV wordt geschreven)
+    const url = `${base}/api/home/snapshot`
     const headers: Record<string, string> = {}
     if (process.env.WARMUP_TOKEN) headers['x-warmup-token'] = process.env.WARMUP_TOKEN
 
