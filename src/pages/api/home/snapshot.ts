@@ -35,9 +35,14 @@ type Snapshot = {
 
 type KVPayload = { updatedAt: number; value: Snapshot }
 
-const FRESH_MS = 5 * 60_000                 // “up to date” definitie
-const KV_TTL_SEC = 6 * 60 * 60              // 6 uur: nooit miss-gap
-const MEM_TTL_MS = 60_000                   // 1 minuut process-cache
+// “Up-to-date” window voor homepage
+const FRESH_MS = 5 * 60_000
+
+// KV mag lang blijven leven zodat je bijna nooit een miss hebt
+const KV_TTL_SEC = 24 * 60 * 60 // 24 uur
+
+// In-memory cache per lambda/process (extra snel)
+const MEM_TTL_MS = 60_000 // 1 minuut
 
 const localeQS = 'hl=en-US&gl=US&ceid=US:en'
 const BASE_ENV = process.env.NEXT_PUBLIC_BASE_URL || ''
@@ -94,6 +99,8 @@ async function pool<T, R>(arr: T[], n: number, fn: (x: T, i: number) => Promise<
 
 // Klein in-memory cache per lambda/process
 let CACHE: { ts: number; payload: KVPayload } | null = null
+
+// Anti-stampede voor background refresh (en voor cold start)
 let INFLIGHT_REFRESH: Promise<KVPayload> | null = null
 
 async function buildSnapshot(origin: string): Promise<Snapshot> {
@@ -151,7 +158,7 @@ async function buildSnapshot(origin: string): Promise<Snapshot> {
     'AEX','S&P 500','NASDAQ','Dow Jones','DAX','FTSE 100','Nikkei 225','Hang Seng','Sensex',
   ]
 
-  // paralleliseer markets (sneller bij rebuild; output blijft identiek)
+  // Paralleliseer markets: sneller bij rebuild, output identiek
   const perMarket = await pool(MARKETS, 3, async (label) => {
     const list = marketList(label)
     if (!Array.isArray(list) || list.length === 0) return { label, best: null as any, worst: null as any }
@@ -285,49 +292,94 @@ function isAuthorized(req: NextApiRequest) {
   return token === process.env.WARMUP_TOKEN
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+function setHeaders(res: NextApiResponse, payload?: KVPayload, source?: string) {
+  res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+  if (payload?.updatedAt) {
+    const age = Date.now() - payload.updatedAt
+    res.setHeader('x-home-snapshot-age-ms', String(age))
+    res.setHeader('x-home-snapshot-stale', age > FRESH_MS ? '1' : '0')
+  }
+  if (source) res.setHeader('x-home-snapshot-source', source) // mem|kv|build|refresh
+}
+
+function maybeBackgroundRefresh(origin: string, kvKey: string, current?: KVPayload) {
+  const age = current?.updatedAt ? (Date.now() - current.updatedAt) : Infinity
+  const stale = age > FRESH_MS
+
+  if (!stale) return
+  if (INFLIGHT_REFRESH) return
+
+  INFLIGHT_REFRESH = (async () => {
+    const value = await buildSnapshot(origin)
+    const payload: KVPayload = { updatedAt: Date.now(), value }
+    await kvSetJSON(kvKey, payload, KV_TTL_SEC)
+    CACHE = { ts: Date.now(), payload }
+    return payload
+  })().finally(() => {
+    INFLIGHT_REFRESH = null
+  }) as any
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Snapshot | { error: string }>
+) {
   try {
     const origin = BASE_ENV || getOrigin(req)
     const kvKey = 'home:snapshot:v3'
 
     const refresh = String(req.query.refresh || '0') === '1'
 
-    // 1) Alleen cron/internal mag refreshen
+    // 1) Handmatige refresh (alleen cron/internal)
     if (refresh) {
       if (!isAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' })
       const value = await buildSnapshot(origin)
       const payload: KVPayload = { updatedAt: Date.now(), value }
       await kvSetJSON(kvKey, payload, KV_TTL_SEC)
       CACHE = { ts: Date.now(), payload }
-      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+      setHeaders(res, payload, 'refresh')
       return res.status(200).json(value)
     }
 
-    // 2) In-memory
+    // 2) In-memory cache
     if (CACHE && Date.now() - CACHE.ts < MEM_TTL_MS) {
-      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
+      // stale? → achtergrond refresh, maar altijd direct returnen
+      maybeBackgroundRefresh(origin, kvKey, CACHE.payload)
+      setHeaders(res, CACHE.payload, 'mem')
       return res.status(200).json(CACHE.payload.value)
     }
 
-    // 3) KV (altijd fast path)
+    // 3) KV fast-path
     const payload = await kvGetJSON<KVPayload>(kvKey)
     if (payload?.value) {
       CACHE = { ts: Date.now(), payload }
-      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
-      // (optioneel) header om te zien of cron achterloopt
-      const age = Date.now() - (payload.updatedAt || 0)
-      res.setHeader('x-home-snapshot-age-ms', String(age))
-      res.setHeader('x-home-snapshot-stale', age > FRESH_MS ? '1' : '0')
+      // stale? → achtergrond refresh, maar altijd direct returnen
+      maybeBackgroundRefresh(origin, kvKey, payload)
+      setHeaders(res, payload, 'kv')
       return res.status(200).json(payload.value)
     }
 
-    // 4) Eerste keer ooit (geen KV) → éénmalig build (kan traag zijn)
-    const value = await buildSnapshot(origin)
-    const first: KVPayload = { updatedAt: Date.now(), value }
-    await kvSetJSON(kvKey, first, KV_TTL_SEC)
-    CACHE = { ts: Date.now(), payload: first }
-    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
-    return res.status(200).json(value)
+    // 4) Eerste keer ooit (KV leeg) — éénmalig traag
+    // Anti-stampede: als er al een build loopt, wacht daarop
+    if (INFLIGHT_REFRESH) {
+      const p = await INFLIGHT_REFRESH
+      setHeaders(res, p, 'build')
+      return res.status(200).json(p.value)
+    }
+
+    INFLIGHT_REFRESH = (async () => {
+      const value = await buildSnapshot(origin)
+      const first: KVPayload = { updatedAt: Date.now(), value }
+      await kvSetJSON(kvKey, first, KV_TTL_SEC)
+      CACHE = { ts: Date.now(), payload: first }
+      return first
+    })().finally(() => {
+      INFLIGHT_REFRESH = null
+    }) as any
+
+    const built = await INFLIGHT_REFRESH
+    setHeaders(res, built, 'build')
+    return res.status(200).json(built.value)
   } catch (err: any) {
     return res.status(500).json({ error: String(err?.message || err) })
   }
