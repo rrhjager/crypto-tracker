@@ -254,6 +254,18 @@ const COINS: { symbol: string; name: string }[] = [
   { symbol: 'GMX-USD',  name: 'GMX' },
 ]
 
+/* ========= Academy hardcoded fallback (ALTIJD tonen) ========= */
+const ACADEMY_FALLBACK: { title: string; href: string }[] = [
+  { title: 'What is Momentum?',      href: '/academy/what-is-momentum' },
+  { title: 'RSI Explained',          href: '/academy/rsi-explained' },
+  { title: 'MACD Basics',            href: '/academy/macd-basics' },
+  { title: 'Volume as a Signal',     href: '/academy/volume-as-a-signal' },
+  { title: 'Moving Averages 101',    href: '/academy/moving-averages-101' },
+  { title: 'Risk Management',        href: '/academy/risk-management' },
+  { title: 'Market Regimes',         href: '/academy/market-regimes' },
+  { title: 'Backtesting Quickstart', href: '/academy/backtesting-quickstart' },
+]
+
 /* ---------------- small UI primitives ---------------- */
 const Card: React.FC<{ title: string; actionHref?: string; actionLabel?: string; children: React.ReactNode }> = ({
   title, actionHref, actionLabel, children
@@ -334,7 +346,8 @@ export default function Homepage(props: HomeProps) {
   const [loadingNewsCrypto, setLoadingNewsCrypto] = useState(!(props.snapshot?.newsCrypto?.length))
   const [loadingNewsEq, setLoadingNewsEq] = useState(!(props.snapshot?.newsEq?.length))
   const [loadingCongress, setLoadingCongress] = useState(!(props.snapshot?.congress?.length))
-  const [loadingAcademy, setLoadingAcademy] = useState(!(props.snapshot?.academy?.length))
+  // ✅ Academy nooit “No articles found” meer; default meteen gevuld
+  const [loadingAcademy, setLoadingAcademy] = useState(false)
 
   /* ---------- Prefetch routes ---------- */
   useEffect(() => {
@@ -365,9 +378,14 @@ export default function Homepage(props: HomeProps) {
   const [coinTopSell, setCoinTopSell] = useState<ScoredCoin[]>(
     props.snapshot?.coinTopSell ?? getCache<ScoredCoin[]>('home:coin:topSell') ?? []
   )
+
+  // ✅ Academy: altijd gevuld (hardcoded), maar als snapshot/cache echte items heeft: die tonen.
   const [academy, setAcademy] = useState<{ title: string; href: string }[]>(
-    props.snapshot?.academy ?? getCache<{title:string;href:string}[]>('home:academy') ?? []
+    (props.snapshot?.academy?.length ? props.snapshot.academy :
+      getCache<{title:string;href:string}[]>('home:academy')?.length ? (getCache<{title:string;href:string}[]>('home:academy') as any) :
+      ACADEMY_FALLBACK)
   )
+
   const [trades, setTrades] = useState<CongressTrade[]>(
     props.snapshot?.congress ?? getCache<CongressTrade[]>('home:congress') ?? []
   )
@@ -396,8 +414,9 @@ export default function Homepage(props: HomeProps) {
     setLoadingNewsEq(newsEq.length === 0)
     setLoadingEq(topBuy.length === 0 || topSell.length === 0)
     setLoadingCoin(coinTopBuy.length === 0 || coinTopSell.length === 0)
-    setLoadingAcademy(academy.length === 0)
     setLoadingCongress(trades.length === 0)
+    // ✅ Academy is altijd gevuld
+    setLoadingAcademy(false)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- ZACHTE REFRESH: één call naar snapshot (alleen als cache leeg) ---------- */
@@ -417,7 +436,16 @@ export default function Homepage(props: HomeProps) {
 
         setNewsCrypto(s.newsCrypto); setCache('home:news:crypto', s.newsCrypto); setLoadingNewsCrypto(false)
         setNewsEq(s.newsEq);         setCache('home:news:eq',     s.newsEq);     setLoadingNewsEq(false)
-        setAcademy(s.academy);       setCache('home:academy',     s.academy);    setLoadingAcademy(false)
+
+        // ✅ Academy: als snapshot items heeft, overnemen; anders hardcoded behouden
+        if (Array.isArray(s.academy) && s.academy.length) {
+          setAcademy(s.academy)
+          setCache('home:academy', s.academy)
+        } else {
+          setAcademy(ACADEMY_FALLBACK)
+          setCache('home:academy', ACADEMY_FALLBACK)
+        }
+
         setTrades(s.congress);       setCache('home:congress',    s.congress);   setLoadingCongress(false)
 
         if (!topBuy.length && Array.isArray(s.topBuy) && s.topBuy.length) {
@@ -610,39 +638,13 @@ export default function Homepage(props: HomeProps) {
     return () => { aborted = true }
   }, [pairs, minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ========= Academy (fallback) ========= */
-  type AcademyItem = { title: string; href: string }
+  /* ========= Academy =========
+     ✅ Geen fetch meer nodig; altijd hardcoded (of snapshot als die gevuld is)
+  ============================ */
   useEffect(() => {
-    if (academy.length) { setLoadingAcademy(false); return }
-    let aborted = false
-    ;(async () => {
-      try {
-        setLoadingAcademy(true)
-        const r = await fetch('/api/academy/list?v='+minuteTag, { cache: 'no-store' })
-        if (r.ok) {
-          const j = await r.json() as { items?: AcademyItem[] }
-          if (!aborted && Array.isArray(j.items) && j.items.length) {
-            const items = j.items.slice(0, 8)
-            setAcademy(items); setCache('home:academy', items); return
-          }
-        }
-      } catch {}
-      if (!aborted) {
-        const fallback = [
-          { title: 'What is RSI? A practical guide', href: '/academy' },
-          { title: 'MACD signals explained simply', href: '/academy' },
-          { title: 'Position sizing 101', href: '/academy' },
-          { title: 'Support & resistance basics', href: '/academy' },
-          { title: 'Trend vs mean reversion', href: '/academy' },
-          { title: 'Risk management checklists', href: '/academy' },
-          { title: 'How to read volume properly', href: '/academy' },
-          { title: 'Backtesting pitfalls to avoid', href: '/academy' },
-        ]
-        setAcademy(fallback); setCache('home:academy', fallback)
-      }
-    })().finally(() => { if (!aborted) setLoadingAcademy(false) })
-    return () => { aborted = true }
-  }, [minuteTag]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Als we ooit leeg zouden raken (shouldn't), direct terugzetten.
+    if (!academy.length) setAcademy(ACADEMY_FALLBACK)
+  }, [academy.length])
 
   /* ========= Congress Trading (fallback) ========= */
   useEffect(() => {
@@ -1045,11 +1047,7 @@ export default function Homepage(props: HomeProps) {
           {/* 9) Academy */}
           <Card title="Academy" actionHref="/academy" actionLabel="All articles">
             <ul className={`text-[13px] grid gap-2 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
-              {loadingAcademy ? (
-                <li className="text-white/60">Loading…</li>
-              ) : academy.length===0 ? (
-                <li className="text-white/60">No articles found…</li>
-              ) : academy.map((a, i) => (
+              {academy.map((a, i) => (
                 <li key={`ac-${i}`}>
                   <Link href={a.href} className="block p-2 rounded bg-white/5 hover:bg-white/10 transition">
                     {a.title}
