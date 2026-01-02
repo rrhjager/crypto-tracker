@@ -936,9 +936,9 @@ export default function Homepage(props: HomeProps) {
           <Card title="Equities — Top BUY" actionHref="/sp500" actionLabel="Browse markets">
             <ul className={`divide-y divide-white/8 overflow-y-auto ${CARD_CONTENT_H} pr-1`}>
               {loadingEq && topBuy.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">Loading…</li>
+                <li className="py-3 text-white/60 text-[13px]">Loading</li>
               ) : topBuy.length===0 ? (
-                <li className="py-3 text-white/60 text-[13px]">No data…</li>
+                <li className="py-3 text-white/60 text-[13px]">No data</li>
               ) : topBuy.map((r)=>(
                 <li key={`bb-${r.market}-${r.symbol}`}>
                   <Row
