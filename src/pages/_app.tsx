@@ -7,7 +7,7 @@ import Layout from '@/components/Layout'
 import Footer from '@/components/Footer'
 import React from 'react'
 
-// ✅ NEW: NextAuth session provider
+// ✅ NextAuth session provider
 import { SessionProvider } from 'next-auth/react'
 import type { Session } from 'next-auth'
 
@@ -17,16 +17,16 @@ import CookieConsent from '@/components/CookieConsent'
 // Linksonder subtiele advertentie-popup (wegklikbaar, keert terug)
 import AdPopup from '@/components/AdPopup'
 
-// ✅ NIEUW: centrale SWR-config (pauzeert bij hidden tab, 60s interval, dedupe)
+// ✅ centrale SWR-config
 import { swrConfig } from '@/lib/swr'
 
-// ✅ Only change: make props typing flexible so pages with varying props compile.
-type NextPageWithLayout<P = Record<string, any>> = NextPage<P> & {
+type NextPageWithLayout = NextPage<any> & {
   getLayout?: (page: React.ReactElement) => React.ReactNode
 }
 
-type AppPropsWithLayout = AppProps<{ session?: Session } & Record<string, any>> & {
-  Component: NextPageWithLayout<any>
+type AppPropsWithLayout = AppProps & {
+  Component: NextPageWithLayout
+  pageProps: AppProps['pageProps'] & { session?: Session }
 }
 
 const defaultFetcher = async (url: string) => {
@@ -53,19 +53,16 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
     Component.getLayout ??
     ((page: React.ReactElement) => <Layout>{page}</Layout>)
 
-  const page = getLayout(<Component {...pageProps} />)
+  // ✅ Cast only to satisfy TS across pages with differing props
+  const page = getLayout(<Component {...(pageProps as any)} />)
 
-  // Flag uit .env: NEXT_PUBLIC_ADS_ENABLED=true om de popup te tonen
   const ADS_ENABLED = process.env.NEXT_PUBLIC_ADS_ENABLED === 'true'
 
   return (
     <SessionProvider session={pageProps.session}>
       <SWRConfig
         value={{
-          // 🔁 Gebruik de centrale, zuinige defaults (60s, geen refresh when hidden, dedupe)
           ...swrConfig,
-
-          // behoud jouw fetcher en provider/retry-gedrag 1-op-1
           fetcher: defaultFetcher,
           provider: () => new Map(),
           onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
@@ -88,12 +85,8 @@ export default function App({ Component, pageProps }: AppPropsWithLayout) {
         <React.Fragment>
           {page}
           <Footer />
-          {/* Rechtsonder cookie consent */}
           <CookieConsent />
-          {/* Linksonder advertentie-popup (alleen tonen als env-flag true is) */}
-          {ADS_ENABLED && (
-            <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />
-          )}
+          {ADS_ENABLED && <AdPopup initialDelayMs={1500} reappearAfterMs={180000} />}
         </React.Fragment>
       </SWRConfig>
     </SessionProvider>
