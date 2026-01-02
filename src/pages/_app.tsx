@@ -20,12 +20,13 @@ import AdPopup from '@/components/AdPopup'
 // ✅ NIEUW: centrale SWR-config (pauzeert bij hidden tab, 60s interval, dedupe)
 import { swrConfig } from '@/lib/swr'
 
-type NextPageWithLayout = NextPage & {
+// ✅ Only change: make props typing flexible so pages with varying props compile.
+type NextPageWithLayout<P = Record<string, any>> = NextPage<P> & {
   getLayout?: (page: React.ReactElement) => React.ReactNode
 }
 
-type AppPropsWithLayout = AppProps<{ session?: Session }> & {
-  Component: NextPageWithLayout
+type AppPropsWithLayout = AppProps<{ session?: Session } & Record<string, any>> & {
+  Component: NextPageWithLayout<any>
 }
 
 const defaultFetcher = async (url: string) => {
