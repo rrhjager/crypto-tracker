@@ -4,6 +4,9 @@ import type { NextRequest } from 'next/server'
 
 // 1) Publieke API-routes die je frontend mag gebruiken
 const PUBLIC_ALLOW = [
+  // ✅ NextAuth (login / callbacks / session)
+  '/api/auth/',
+
   // Quotes & bulk indicators
   '/api/quotes',
   '/api/indicators/ret-batch',

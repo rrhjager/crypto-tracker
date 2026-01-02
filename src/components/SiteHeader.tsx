@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 import { createPortal } from 'react-dom'
 
+// ✅ NEW: NextAuth hooks
+import { useSession, signIn, signOut } from 'next-auth/react'
+
 function MobileMenuPortal({
   open,
   onClose,
@@ -60,9 +63,16 @@ export default function SiteHeader() {
   const [stockOpen, setStockOpen] = useState(false)
   const [intelOpen, setIntelOpen] = useState(false)
 
+  // ✅ NEW: account dropdown
+  const [accountOpen, setAccountOpen] = useState(false)
+  const accountRef = useRef<HTMLDivElement>(null)
+
   const stockRef = useRef<HTMLDivElement>(null)
   const intelRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
+
+  // ✅ NEW: session
+  const { data: session, status } = useSession()
 
   // Theme state (light/dark)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
@@ -78,7 +88,8 @@ export default function SiteHeader() {
       if (stored === 'light' || stored === 'dark') {
         initial = stored
       } else {
-        const prefersDark = window.matchMedia &&
+        const prefersDark =
+          window.matchMedia &&
           window.matchMedia('(prefers-color-scheme: dark)').matches
         initial = prefersDark ? 'dark' : 'light'
       }
@@ -116,6 +127,8 @@ export default function SiteHeader() {
       const t = e.target as Node
       if (stockRef.current && !stockRef.current.contains(t)) setStockOpen(false)
       if (intelRef.current && !intelRef.current.contains(t)) setIntelOpen(false)
+      // ✅ NEW: close account dropdown on outside click
+      if (accountRef.current && !accountRef.current.contains(t)) setAccountOpen(false)
     }
     document.addEventListener('click', onDoc)
     return () => document.removeEventListener('click', onDoc)
@@ -123,7 +136,9 @@ export default function SiteHeader() {
 
   useEffect(() => {
     const close = () => setOpen(false)
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
 
     let lastPath = router.asPath
     const obs = setInterval(() => {
@@ -252,6 +267,76 @@ export default function SiteHeader() {
             <span className={`transition-colors ${rainbow}`}>About us</span>
           </Link>
 
+          {/* ✅ NEW: Account button (desktop) */}
+          <div className="relative" ref={accountRef}>
+            {status !== 'loading' && !session?.user ? (
+              <button
+                onClick={() => signIn(undefined, { callbackUrl: router.asPath })}
+                className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-white/90 hover:bg-white/10 transition"
+              >
+                Sign in
+              </button>
+            ) : (
+              <button
+                onClick={() => setAccountOpen(v => !v)}
+                className="ml-2 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white transition"
+                aria-label="Account"
+                aria-expanded={accountOpen}
+              >
+                {((session?.user?.email || 'U')[0] || 'U').toUpperCase()}
+              </button>
+            )}
+
+            {accountOpen && session?.user && (
+              <div className="absolute right-0 mt-2 w-64 rounded-2xl border border-white/10 bg-ink shadow-lg p-1">
+                <div className="px-3 py-2">
+                  <div className="text-white/90 font-medium">Account</div>
+                  <div className="text-white/60 text-sm truncate">{session.user.email}</div>
+                </div>
+
+                <div className="h-px bg-white/10 my-1" />
+
+                {/* routes bestaan nog niet; dit is alvast klaar voor stap 2 */}
+                <button
+                  onClick={() => { setAccountOpen(false); router.push('/account') }}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
+                >
+                  Settings
+                </button>
+
+                <button
+                  onClick={() => { setAccountOpen(false); router.push('/account/indicators') }}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
+                >
+                  Indicator preferences
+                </button>
+
+                <button
+                  disabled
+                  className="w-full text-left px-3 py-2 rounded-xl text-white/50 cursor-not-allowed"
+                >
+                  Watchlist (coming next)
+                </button>
+
+                <button
+                  disabled
+                  className="w-full text-left px-3 py-2 rounded-xl text-white/50 cursor-not-allowed"
+                >
+                  Billing / Upgrade (later)
+                </button>
+
+                <div className="h-px bg-white/10 my-1" />
+
+                <button
+                  onClick={() => signOut({ callbackUrl: '/' })}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Theme toggle (desktop) */}
           {mounted && (
             <button
@@ -350,6 +435,23 @@ export default function SiteHeader() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
+          {/* ✅ NEW: Sign in/out shortcut on mobile */}
+          {status !== 'loading' && !session?.user ? (
+            <button
+              onClick={() => { setOpen(false); signIn(undefined, { callbackUrl: router.asPath }) }}
+              className="w-full text-left group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
+            >
+              <span className={rainbow}>Sign in</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => { setOpen(false); signOut({ callbackUrl: '/' }) }}
+              className="w-full text-left group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
+            >
+              <span className={rainbow}>Sign out</span>
+            </button>
+          )}
+
           <Link
             href="/crypto"
             className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
