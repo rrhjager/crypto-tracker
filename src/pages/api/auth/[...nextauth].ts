@@ -21,10 +21,13 @@ export const authOptions: NextAuthOptions = {
     signIn: '/auth/signin',
   },
 
-  // ✅ Nieuw: zorg dat we userId in de session hebben (nodig voor favorites)
+  // ✅ Fix: zorg dat userId altijd in de session staat (nodig voor favorites)
   callbacks: {
     async session({ session, user }) {
-      ;(session.user as any).id = user.id
+      if (session.user) {
+        ;(session.user as any).id =
+          (user as any)?.id ?? (session.user as any)?.id ?? null
+      }
       return session
     },
   },
