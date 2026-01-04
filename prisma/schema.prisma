@@ -81,7 +81,7 @@ model Favorite {
   userId    String
   kind      AssetKind
   symbol    String
-  market    String    @default("") // ✅ belangrijk: nooit null (crypto = "")
+  market    String    @default("") // ✅ important: never null (crypto = "")
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

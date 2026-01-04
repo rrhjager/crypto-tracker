@@ -60,8 +60,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const symbol = normalizeSymbol(symbolRaw)
 
-    // ✅ FIX: CRYPTO moet altijd market=null (anders krijg je “andere” unique keys)
-    const market = kind === 'CRYPTO' ? null : (marketRaw || null)
+    // ✅ IMPORTANT: market is never null anymore (schema default = "")
+    // - CRYPTO: always ""
+    // - EQUITY: use provided market or ""
+    const market = kind === 'CRYPTO' ? '' : (marketRaw || '')
 
     const fav = await prisma.favorite.upsert({
       where: {
@@ -99,8 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const symbol = normalizeSymbol(symbolRaw)
 
-    // ✅ FIX: CRYPTO altijd market=null
-    const market = kind === 'CRYPTO' ? null : (marketRaw || null)
+    // ✅ IMPORTANT: market is never null anymore (schema default = "")
+    const market = kind === 'CRYPTO' ? '' : (marketRaw || '')
 
     try {
       await prisma.favorite.delete({
