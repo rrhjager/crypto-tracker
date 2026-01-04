@@ -339,7 +339,8 @@ function Heatmap({ rows }: { rows: any[] }) {
 
 /* ===================== PAGE ===================== */
 function PageInner() {
-  const { status: authStatus } = useSession()
+  // ✅ keep auth gate, but also grab session email so we can broadcast/sync for /crypto/favorites
+  const { data: session, status: authStatus } = useSession()
   const canFav = authStatus === 'authenticated'
 
   // 1) Basisrijen (Binance pair alleen voor indicators)
@@ -376,6 +377,28 @@ function PageInner() {
     return new Set(arr.map((it: any) => String(it.symbol || '').toUpperCase()).filter(Boolean))
   }, [favData])
 
+  // ✅ NEW (minimal): sync + event so /crypto/favorites updates immediately
+  const favKey = useMemo(() => {
+    const email = session?.user?.email ? String(session.user.email).toLowerCase() : null
+    return email ? `faves:crypto:${email}` : null
+  }, [session?.user?.email])
+
+  const emitFavsUpdated = () => {
+    try {
+      window.dispatchEvent(new Event('crypto-favs-updated'))
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (!canFav || !favKey) return
+    try {
+      const list = Array.from(favSet)
+      localStorage.setItem(favKey, JSON.stringify(list))
+    } catch {}
+    emitFavsUpdated()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canFav, favKey, favData]) // favSet is derived from favData
+
   async function toggleFav(sym: string) {
     if (!canFav) return
     const s = String(sym || '').toUpperCase()
@@ -387,6 +410,15 @@ function PageInner() {
       ? current.filter((it: any) => String(it.symbol || '').toUpperCase() !== s)
       : [{ id: `tmp:${s}`, kind: 'CRYPTO', symbol: s, market: null, createdAt: new Date().toISOString() }, ...current]
     await mutateFavs({ favorites: optimistic }, { revalidate: false })
+
+    // ✅ NEW (minimal): immediate local sync + event (same tab)
+    try {
+      if (favKey) {
+        const next = optimistic.map((it: any) => String(it.symbol || '').toUpperCase()).filter(Boolean)
+        localStorage.setItem(favKey, JSON.stringify(next))
+      }
+    } catch {}
+    emitFavsUpdated()
 
     try {
       if (!isFav) {
