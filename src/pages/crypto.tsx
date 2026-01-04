@@ -32,7 +32,7 @@ const fmtPct = (v: number | null | undefined) =>
 // Binance-pair fallback voor indicators
 const toBinancePair = (symbol: string) => {
   const s = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  const skip = new Set(['USDT','USDC','BUSD','DAI','TUSD','FDUSD'])
+  const skip = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'])
   if (!s || skip.has(s)) return null
   return `${s}USDT`
 }
@@ -48,11 +48,11 @@ const toBaseTicker = (pairOrSym: string | null | undefined): string | null => {
 /* ===== types van je light-indicators API ===== */
 type IndResp = {
   symbol: string // Binance pair, bv. BTCUSDT
-  ma?: { ma50: number|null; ma200: number|null; cross: 'Golden Cross'|'Death Cross'|'—' }
-  rsi?: number|null
-  macd?: { macd: number|null; signal: number|null; hist: number|null }
-  volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
-  perf?: { d: number|null; w: number|null; m: number|null }
+  ma?: { ma50: number | null; ma200: number | null; cross: 'Golden Cross' | 'Death Cross' | '—' }
+  rsi?: number | null
+  macd?: { macd: number | null; signal: number | null; hist: number | null }
+  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  perf?: { d: number | null; w: number | null; m: number | null }
 }
 
 /* ===== detail→home handshake (optioneel) ===== */
@@ -105,7 +105,9 @@ function pickPx(pxData: any, baseSym: string, binance?: string) {
   if (q1 && Number.isFinite(Number(q1.regularMarketPrice))) {
     return {
       price: Number(q1.regularMarketPrice),
-      d: Number.isFinite(Number(q1.regularMarketChangePercent)) ? Number(q1.regularMarketChangePercent) : null,
+      d: Number.isFinite(Number(q1.regularMarketChangePercent))
+        ? Number(q1.regularMarketChangePercent)
+        : null,
     }
   }
 
@@ -115,12 +117,14 @@ function pickPx(pxData: any, baseSym: string, binance?: string) {
   if (q2 && Number.isFinite(Number(q2.regularMarketPrice))) {
     return {
       price: Number(q2.regularMarketPrice),
-      d: Number.isFinite(Number(q2.regularMarketChangePercent)) ? Number(q2.regularMarketChangePercent) : null,
+      d: Number.isFinite(Number(q2.regularMarketChangePercent))
+        ? Number(q2.regularMarketChangePercent)
+        : null,
     }
   }
 
   // 3) fallback naar results[]
-  const results: Array<{symbol:string, price:number|null, d:number|null}> =
+  const results: Array<{ symbol: string; price: number | null; d: number | null }> =
     Array.isArray(pxData?.results) ? pxData.results : []
 
   // 3a) exact BASE
@@ -145,7 +149,7 @@ function pickPx(pxData: any, baseSym: string, binance?: string) {
 }
 
 /* ===== Widgets ===== */
-function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
+function AISummary({ rows, updatedAt }: { rows: any[]; updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
   const buy = rows.filter(r => r.status === 'BUY').length
@@ -163,21 +167,31 @@ function AISummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
     <aside className="table-card">
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-bold">AI-advies (markt)</h3>
-        <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
+        <div className="text-xs text-white/60">
+          Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}
+        </div>
       </div>
       <div className="text-sm mb-3">
         <span className={`${biasCls} mr-2`}>{bias}</span>
         <span className="text-white/80">BUY {buyPct}% · SELL {sellPct}% · 24h groen {greenPct}%</span>
       </div>
       <div className="flex items-center gap-2 text-[11px] text-white/70">
-        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">Gem. score <b className="text-white/90">{avgScore}</b></span>
-        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">Gem. 24h <b className={`text-white/90 ${avgD >= 0 ? 'text-green-300' : 'text-red-300'}`}>{avgD >= 0 ? '+' : ''}{avgD.toFixed(2)}%</b></span>
+        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">
+          Gem. score <b className="text-white/90">{avgScore}</b>
+        </span>
+        <span className="px-2 py-1 rounded bg-white/5 ring-1 ring-white/10">
+          Gem. 24h{' '}
+          <b className={`text-white/90 ${avgD >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+            {avgD >= 0 ? '+' : ''}
+            {avgD.toFixed(2)}%
+          </b>
+        </span>
       </div>
     </aside>
   )
 }
 
-function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) {
+function DailySummary({ rows, updatedAt }: { rows: any[]; updatedAt?: number }) {
   if (!rows?.length) return null
   const total = rows.length
   const buy = rows.filter(r => r.status === 'BUY').length
@@ -193,31 +207,54 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
     <aside className="table-card">
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-bold">Dagelijkse samenvatting</h3>
-        <div className="text-xs text-white/60">Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}</div>
+        <div className="text-xs text-white/60">
+          Stand: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : '—'}
+        </div>
       </div>
       <div className="grid grid-cols-3 gap-2 mb-3">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">BUY</div>
-          <div className="flex items-end justify-between"><div className="text-lg font-bold text-green-300">{pct(buy)}%</div><div className="text-xs text-white/60">{buy}/{total}</div></div>
+          <div className="flex items-end justify-between">
+            <div className="text-lg font-bold text-green-300">{pct(buy)}%</div>
+            <div className="text-xs text-white/60">
+              {buy}/{total}
+            </div>
+          </div>
         </div>
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">HOLD</div>
-          <div className="flex items-end justify-between"><div className="text-lg font-bold text-amber-300">{pct(hold)}%</div><div className="text-xs text-white/60">{hold}/{total}</div></div>
+          <div className="flex items-end justify-between">
+            <div className="text-lg font-bold text-amber-300">{pct(hold)}%</div>
+            <div className="text-xs text-white/60">
+              {hold}/{total}
+            </div>
+          </div>
         </div>
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">SELL</div>
-          <div className="flex items-end justify-between"><div className="text-lg font-bold text-red-300">{pct(sell)}%</div><div className="text-xs text-white/60">{sell}/{total}</div></div>
+          <div className="flex items-end justify-between">
+            <div className="text-lg font-bold text-red-300">{pct(sell)}%</div>
+            <div className="text-xs text-white/60">
+              {sell}/{total}
+            </div>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 mb-3">
-        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Breadth (24h groen)</div><div className="text-lg font-bold">{greenPct}%</div></div>
-        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10"><div className="text-[10px] text-white/70 mb-1">Gem. score</div><div className="text-lg font-bold">{avgScore}</div></div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">Breadth (24h groen)</div>
+          <div className="text-lg font-bold">{greenPct}%</div>
+        </div>
+        <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
+          <div className="text-[10px] text-white/70 mb-1">Gem. score</div>
+          <div className="text-lg font-bold">{avgScore}</div>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">Top scores</div>
           <ul className="space-y-1">
-            {topUp.map((r) => (
+            {topUp.map(r => (
               <li key={`up-${r.slug}`} className="flex items-center justify-between text-xs">
                 <span className="font-semibold">{r.symbol}</span>
                 <span className="text-green-300">{r._score}</span>
@@ -228,7 +265,7 @@ function DailySummary({ rows, updatedAt }: { rows: any[], updatedAt?: number }) 
         <div className="bg-white/[0.04] rounded-lg p-2 ring-1 ring-white/10">
           <div className="text-[10px] text-white/70 mb-1">Laagste scores</div>
           <ul className="space-y-1">
-            {topDown.map((r) => (
+            {topDown.map(r => (
               <li key={`down-${r.slug}`} className="flex items-center justify-between text-xs">
                 <span className="font-semibold">{r.symbol}</span>
                 <span className="text-red-300">{r._score}</span>
@@ -246,10 +283,10 @@ function Heatmap({ rows }: { rows: any[] }) {
   const filtered = useMemo(() => {
     if (!rows) return []
     if (filter === 'ALL') return rows
-    return rows.filter((r) => (r.status || 'HOLD') === filter)
+    return rows.filter(r => (r.status || 'HOLD') === filter)
   }, [rows, filter])
   if (!rows || rows.length === 0) return null
-  const Chip = ({ value, label }: { value: StatusFilter, label: string }) => {
+  const Chip = ({ value, label }: { value: StatusFilter; label: string }) => {
     const active = filter === value
     return (
       <button
@@ -257,8 +294,7 @@ function Heatmap({ rows }: { rows: any[] }) {
         className={[
           'px-2.5 py-1 rounded-full text-[11px] transition',
           'border',
-          active ? 'bg-white/10 border-white/30 text-white'
-                 : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:border-white/20'
+          active ? 'bg-white/10 border-white/30 text-white' : 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10 hover:border-white/20',
         ].join(' ')}
       >
         {label}
@@ -280,10 +316,7 @@ function Heatmap({ rows }: { rows: any[] }) {
         {filtered.map((c: any) => {
           const score = Number(c._score ?? 0)
           const status = (c.status as Status) || 'HOLD'
-          const cls =
-            status === 'BUY' ? 'bg-green-500/20 ring-green-500/30' :
-            status === 'SELL' ? 'bg-red-500/20 ring-red-500/30' :
-            'bg-amber-500/20 ring-amber-500/30'
+          const cls = status === 'BUY' ? 'bg-green-500/20 ring-green-500/30' : status === 'SELL' ? 'bg-red-500/20 ring-red-500/30' : 'bg-amber-500/20 ring-amber-500/30'
           return (
             <Link
               key={c.slug}
@@ -316,7 +349,7 @@ function PageInner() {
       const fallback = toBinancePair(c.symbol)
       return {
         slug: (c.slug || c.symbol.toLowerCase()),
-        symbol: c.symbol,              // pure ticker (BTC/ETH/…)
+        symbol: c.symbol, // pure ticker (BTC/ETH/…)
         name: c.name,
         binance: fromList || fallback, // voor indicators fetch
         _rank: i,
@@ -331,45 +364,32 @@ function PageInner() {
     })
   }, [])
 
-  // 2) Favorieten (ALLEEN voor ingelogde users)
-  const [faves, setFaves] = useState<string[]>([])
+  // 2) Favorieten (ALLEEN voor ingelogde users) - server driven
+  const { data: favData, mutate: mutateFavs } = useSWR<any>(
+    canFav ? '/api/user/favorites?kind=CRYPTO' : null,
+    fetcher,
+    { revalidateOnFocus: false }
+  )
 
-  useEffect(() => {
-    let alive = true
-
-    async function loadFromApi() {
-      try {
-        const r = await fetch('/api/user/favorites?kind=CRYPTO', { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const j = await r.json()
-        const arr = Array.isArray(j?.favorites) ? j.favorites : []
-        const next = arr
-          .map((it: any) => String(it.symbol || '').toUpperCase())
-          .filter(Boolean)
-        if (alive) setFaves(next)
-      } catch {
-        if (alive) setFaves([])
-      }
-    }
-
-    if (canFav) loadFromApi()
-    else setFaves([])
-
-    return () => { alive = false }
-  }, [canFav])
+  const favSet = useMemo(() => {
+    const arr = Array.isArray(favData?.favorites) ? favData.favorites : []
+    return new Set(arr.map((it: any) => String(it.symbol || '').toUpperCase()).filter(Boolean))
+  }, [favData])
 
   async function toggleFav(sym: string) {
     if (!canFav) return
-
     const s = String(sym || '').toUpperCase()
-    const wasFav = faves.includes(s)
-    const next = wasFav ? faves.filter(x => x !== s) : [...faves, s]
+    const isFav = favSet.has(s)
+    const current = Array.isArray(favData?.favorites) ? favData.favorites : []
 
     // optimistic UI
-    setFaves(next)
+    const optimistic = isFav
+      ? current.filter((it: any) => String(it.symbol || '').toUpperCase() !== s)
+      : [{ id: `tmp:${s}`, kind: 'CRYPTO', symbol: s, market: null, createdAt: new Date().toISOString() }, ...current]
+    await mutateFavs({ favorites: optimistic }, { revalidate: false })
 
     try {
-      if (!wasFav) {
+      if (!isFav) {
         const r = await fetch('/api/user/favorites', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -377,15 +397,12 @@ function PageInner() {
         })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
       } else {
-        const r = await fetch(
-          `/api/user/favorites?kind=CRYPTO&symbol=${encodeURIComponent(s)}`,
-          { method: 'DELETE' }
-        )
+        const r = await fetch(`/api/user/favorites?kind=CRYPTO&symbol=${encodeURIComponent(s)}`, { method: 'DELETE' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
       }
+      await mutateFavs()
     } catch {
-      // rollback bij error
-      setFaves(wasFav ? [...faves] : faves.filter(x => x !== s))
+      await mutateFavs() // rollback/sync
     }
   }
 
@@ -410,32 +427,34 @@ function PageInner() {
     let aborted = false
     async function runOnce() {
       const groups = chunk(binanceSymbols, 12)
-      await Promise.all(groups.map(async (group, gi) => {
-        if (gi) await new Promise(r => setTimeout(r, 120 * gi))
-        const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
-        try {
-          const j = await fetchJSON(url, { timeoutMs: 9000 })
-          const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
-          if (aborted) return
-          setIndBySym(prev => {
-            const next = new Map(prev)
-            for (const it of arr) next.set(it.symbol, it)
-            return next
-          })
-          setIndUpdatedAt(Date.now())
-        } catch {}
-      }))
+      await Promise.all(
+        groups.map(async (group, gi) => {
+          if (gi) await new Promise(r => setTimeout(r, 120 * gi))
+          const url = `/api/crypto-light/indicators?symbols=${encodeURIComponent(group.join(','))}`
+          try {
+            const j = await fetchJSON(url, { timeoutMs: 9000 })
+            const arr: IndResp[] = Array.isArray(j?.results) ? j.results : []
+            if (aborted) return
+            setIndBySym(prev => {
+              const next = new Map(prev)
+              for (const it of arr) next.set(it.symbol, it)
+              return next
+            })
+            setIndUpdatedAt(Date.now())
+          } catch {}
+        })
+      )
     }
     runOnce()
     const id = setInterval(runOnce, 60_000)
-    return () => { aborted = true; clearInterval(id) }
+    return () => {
+      aborted = true
+      clearInterval(id)
+    }
   }, [binanceSymbols])
 
   // 5) Prijzen (direct per ticker → API normaliseert en limiteert tot 60)
-  const tickers = useMemo(
-    () => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))),
-    [baseRows]
-  )
+  const tickers = useMemo(() => Array.from(new Set(baseRows.map(r => String(r.symbol || '').toUpperCase()))), [baseRows])
   const { data: pxData } = useSWR<any>(
     tickers.length ? `/api/crypto-light/prices?symbols=${encodeURIComponent(tickers.join(','))}` : null,
     fetcher,
@@ -452,14 +471,19 @@ function PageInner() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   function toggleSort(nextKey: SortKey) {
     if (sortKey === nextKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortKey(nextKey); if (nextKey === 'coin') setSortDir('asc'); else if (nextKey === 'fav') setSortDir('desc'); else setSortDir('desc') }
+    else {
+      setSortKey(nextKey)
+      if (nextKey === 'coin') setSortDir('asc')
+      else if (nextKey === 'fav') setSortDir('desc')
+      else setSortDir('desc')
+    }
   }
 
   // 7) Rijen bouwen (gebruik pickPx om prijs robuust te vinden)
   const rows = useMemo(() => {
-    const list = baseRows.map((c) => {
+    const list = baseRows.map(c => {
       const symU = String(c.symbol || '').toUpperCase()
-      const ind  = c.binance ? indBySym.get(c.binance) : undefined
+      const ind = c.binance ? indBySym.get(c.binance) : undefined
 
       const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
       let finalScore = Number(calc?.score ?? 50)
@@ -467,12 +491,12 @@ function PageInner() {
 
       // lokale override via binance-key
       const ta = c.binance ? localTA.get(c.binance) : undefined
-      if (ta && (Date.now() - ta.ts) <= 10 * 60 * 1000) {
+      if (ta && Date.now() - ta.ts <= 10 * 60 * 1000) {
         if (Number.isFinite(ta.score)) finalScore = ta.score
         if (ta.status === 'BUY' || ta.status === 'HOLD' || ta.status === 'SELL') finalStatus = ta.status
       }
 
-      const pxPicked = pickPx(pxData, symU, c.binance) // 🔑 hier de robuuste prijs
+      const pxPicked = pickPx(pxData, symU, c.binance)
       if (pxPicked?.price != null) {
         console.log('DEBUG prijs gevonden voor', symU, pxPicked.price, '(binance:', c.binance, ')')
       }
@@ -482,7 +506,7 @@ function PageInner() {
 
       return {
         ...c,
-        _fav: faves.includes(symU),
+        _fav: favSet.has(symU),
         _score: finalScore,
         status: finalStatus,
         _price: pxPicked.price,
@@ -495,21 +519,28 @@ function PageInner() {
     const dir = sortDir === 'asc' ? 1 : -1
     return [...list].sort((a, b) => {
       switch (sortKey) {
-        case 'fav':   return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
-        case 'coin':  return (a._rank - b._rank) * dir
+        case 'fav':
+          return ((a._fav === b._fav) ? 0 : a._fav ? 1 : -1) * dir
+        case 'coin':
+          return (a._rank - b._rank) * dir
         case 'price':
           if (a._price == null && b._price == null) return 0
           if (a._price == null) return 1
           if (b._price == null) return -1
           return (a._price - b._price) * dir
-        case 'd':     return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
-        case 'w':     return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
-        case 'm':     return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
-        case 'status':return (a._score - b._score) * dir
-        default:      return 0
+        case 'd':
+          return ((a._d ?? -Infinity) - (b._d ?? -Infinity)) * dir
+        case 'w':
+          return ((a._w ?? -Infinity) - (b._w ?? -Infinity)) * dir
+        case 'm':
+          return ((a._m ?? -Infinity) - (b._m ?? -Infinity)) * dir
+        case 'status':
+          return (a._score - b._score) * dir
+        default:
+          return 0
       }
     })
-  }, [baseRows, faves, sortKey, sortDir, indBySym, pxData, localTA])
+  }, [baseRows, favSet, sortKey, sortDir, indBySym, pxData, localTA])
 
   const updatedAt = indUpdatedAt || (pxData ? Date.now() : undefined)
 
@@ -530,29 +561,44 @@ function PageInner() {
                 <tr>
                   <th className="text-left py-2">#</th>
                   <th className="py-2 w-10 text-center">
-                    <button onClick={() => toggleSort('fav')} title="Sorteren op favoriet"
-                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition">
+                    <button
+                      onClick={() => toggleSort('fav')}
+                      title="Sorteren op favoriet"
+                      className="mx-auto flex h-6 w-6 items-center justify-center rounded hover:bg-white/10 text-white/70 hover:text-white transition"
+                    >
                       <span className="leading-none">⭐</span>
                       <span className="sr-only">Favoriet</span>
                     </button>
                   </th>
                   <th className="text-left py-2">
-                    <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">Coin</button>
+                    <button onClick={() => toggleSort('coin')} className="inline-flex items-center gap-1 hover:text-white transition">
+                      Coin
+                    </button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Prijs</button>
+                    <button onClick={() => toggleSort('price')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">
+                      Prijs
+                    </button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">24h</button>
+                    <button onClick={() => toggleSort('d')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">
+                      24h
+                    </button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">7d</button>
+                    <button onClick={() => toggleSort('w')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">
+                      7d
+                    </button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">30d</button>
+                    <button onClick={() => toggleSort('m')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">
+                      30d
+                    </button>
                   </th>
                   <th className="text-right py-2">
-                    <button onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">Status</button>
+                    <button onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 hover:text-white transition w-full justify-end">
+                      Status
+                    </button>
                   </th>
                 </tr>
               </thead>
@@ -562,9 +608,7 @@ function PageInner() {
                   const isFav = c._fav === true
                   const scoreNum = Number.isFinite(Number(c._score)) ? Math.round(Number(c._score)) : 50
                   const statusByScore: Status = statusFromScore(scoreNum)
-                  const badgeCls =
-                    statusByScore === 'BUY' ? 'badge-buy' :
-                    statusByScore === 'SELL' ? 'badge-sell' : 'badge-hold'
+                  const badgeCls = statusByScore === 'BUY' ? 'badge-buy' : statusByScore === 'SELL' ? 'badge-sell' : 'badge-hold'
 
                   return (
                     <tr key={c.slug || c.symbol || i} className="border-t border-white/5 hover:bg-white/5">
@@ -572,9 +616,19 @@ function PageInner() {
                       <td className="py-3 w-10 text-center">
                         <button
                           disabled={!canFav}
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); void toggleFav(sym) }}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            void toggleFav(sym)
+                          }}
                           aria-pressed={isFav}
-                          title={canFav ? (isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet') : 'Log in om favorieten te gebruiken'}
+                          title={
+                            canFav
+                              ? isFav
+                                ? 'Verwijder uit favorieten'
+                                : 'Markeer als favoriet'
+                              : 'Log in om favorieten te gebruiken'
+                          }
                           className={[
                             'inline-flex items-center justify-center',
                             'h-5 w-5 rounded transition',
@@ -591,18 +645,19 @@ function PageInner() {
                         </Link>
                       </td>
 
-                      {/* Prijs + % met duidelijke fallback zodat je ziet als mapping faalt */}
                       <td className="py-3 text-right">
                         {c._price == null ? <span className="text-white/50">— (geen prijs voor {c.symbol})</span> : formatFiat(c._price)}
                       </td>
                       <td className={`py-3 text-right ${Number(c._d ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._d)}</td>
-
                       <td className={`py-3 text-right ${Number(c._w ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._w)}</td>
                       <td className={`py-3 text-right ${Number(c._m ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>{fmtPct(c._m)}</td>
                       <td className="py-3 text-right">
-                        <button type="button" className={`${badgeCls} text-xs px-2 py-1 rounded`}
+                        <button
+                          type="button"
+                          className={`${badgeCls} text-xs px-2 py-1 rounded`}
                           title={`Status: ${statusByScore} · Score: ${scoreNum}`}
-                          aria-label={`Status ${statusByScore} met score ${scoreNum}`}>
+                          aria-label={`Status ${statusByScore} met score ${scoreNum}`}
+                        >
                           {statusByScore} · {scoreNum}
                         </button>
                       </td>
@@ -614,7 +669,6 @@ function PageInner() {
           </div>
         </div>
 
-        {/* RECHTS */}
         <div className="lg:col-span-4">
           <div className="sticky top-6 space-y-6">
             <AISummary rows={rows} updatedAt={updatedAt} />
@@ -627,5 +681,4 @@ function PageInner() {
   )
 }
 
-// Client-only om SSR/hydration gedoe te voorkomen in Pages Router
 export default dynamic(() => Promise.resolve(PageInner), { ssr: false })
