@@ -7,6 +7,9 @@ const PUBLIC_ALLOW = [
   // ✅ NextAuth (login / callbacks / session)
   '/api/auth/',
 
+  // ✅ User endpoints (favorites / prefs later)
+  '/api/user/',
+
   // Quotes & bulk indicators
   '/api/quotes',
   '/api/indicators/ret-batch',

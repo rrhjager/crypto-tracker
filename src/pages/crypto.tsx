@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import useSWR from 'swr'
+import { useSession } from 'next-auth/react'
 import { COINS } from '@/lib/coins'
 import { computeScoreStatus } from '@/lib/taScore'
 
@@ -305,6 +306,9 @@ function Heatmap({ rows }: { rows: any[] }) {
 
 /* ===================== PAGE ===================== */
 function PageInner() {
+  const { status: authStatus } = useSession()
+  const canFav = authStatus === 'authenticated'
+
   // 1) Basisrijen (Binance pair alleen voor indicators)
   const baseRows = useMemo(() => {
     return COINS.slice(0, 50).map((c, i) => {
@@ -327,25 +331,62 @@ function PageInner() {
     })
   }, [])
 
-  // 2) Favorieten
+  // 2) Favorieten (ALLEEN voor ingelogde users)
   const [faves, setFaves] = useState<string[]>([])
+
   useEffect(() => {
-    try {
-      // ❗ FIX: haakjes
-      const raw = typeof window !== 'undefined' ? localStorage.getItem('faves') : null
-      if (raw) {
-        const arr = JSON.parse(raw)
-        if (Array.isArray(arr)) setFaves(arr.map((s: any) => String(s).toUpperCase()))
+    let alive = true
+
+    async function loadFromApi() {
+      try {
+        const r = await fetch('/api/user/favorites?kind=CRYPTO', { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const j = await r.json()
+        const arr = Array.isArray(j?.favorites) ? j.favorites : []
+        const next = arr
+          .map((it: any) => String(it.symbol || '').toUpperCase())
+          .filter(Boolean)
+        if (alive) setFaves(next)
+      } catch {
+        if (alive) setFaves([])
       }
-    } catch {}
-  }, [])
-  function toggleFav(sym: string) {
+    }
+
+    if (canFav) loadFromApi()
+    else setFaves([])
+
+    return () => { alive = false }
+  }, [canFav])
+
+  async function toggleFav(sym: string) {
+    if (!canFav) return
+
     const s = String(sym || '').toUpperCase()
-    setFaves(prev => {
-      const next = prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
-      try { localStorage.setItem('faves', JSON.stringify(next)) } catch {}
-      return next
-    })
+    const wasFav = faves.includes(s)
+    const next = wasFav ? faves.filter(x => x !== s) : [...faves, s]
+
+    // optimistic UI
+    setFaves(next)
+
+    try {
+      if (!wasFav) {
+        const r = await fetch('/api/user/favorites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'CRYPTO', symbol: s }),
+        })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      } else {
+        const r = await fetch(
+          `/api/user/favorites?kind=CRYPTO&symbol=${encodeURIComponent(s)}`,
+          { method: 'DELETE' }
+        )
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      }
+    } catch {
+      // rollback bij error
+      setFaves(wasFav ? [...faves] : faves.filter(x => x !== s))
+    }
   }
 
   // 3) (optioneel) localStorage TA
@@ -530,12 +571,14 @@ function PageInner() {
                       <td className="py-3 pr-3">{i + 1}</td>
                       <td className="py-3 w-10 text-center">
                         <button
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFav(sym) }}
+                          disabled={!canFav}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); void toggleFav(sym) }}
                           aria-pressed={isFav}
-                          title={isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet'}
+                          title={canFav ? (isFav ? 'Verwijder uit favorieten' : 'Markeer als favoriet') : 'Log in om favorieten te gebruiken'}
                           className={[
                             'inline-flex items-center justify-center',
-                            'h-5 w-5 rounded hover:bg-white/10 transition',
+                            'h-5 w-5 rounded transition',
+                            canFav ? 'hover:bg-white/10' : 'opacity-40 cursor-not-allowed',
                             isFav ? 'text-yellow-400' : 'text-white/40 hover:text-yellow-300',
                           ].join(' ')}
                         >
