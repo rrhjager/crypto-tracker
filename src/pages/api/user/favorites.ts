@@ -14,7 +14,19 @@ function normalizeSymbol(sym: string) {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions)
-  const userId = (session?.user as any)?.id as string | undefined
+
+  // ✅ FIX: session.user.id is vaak niet gezet → fallback via email -> userId uit DB
+  let userId = (session?.user as any)?.id as string | undefined
+  if (!userId) {
+    const email = session?.user?.email
+    if (!email) return res.status(401).json({ error: 'Not signed in' })
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    })
+    userId = user?.id
+  }
 
   if (!userId) {
     return res.status(401).json({ error: 'Not signed in' })
@@ -37,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     const kind = asString((req.body as any)?.kind)
     const symbolRaw = asString((req.body as any)?.symbol)
-    const market = asString((req.body as any)?.market) // optional for EQUITY
+    const marketRaw = asString((req.body as any)?.market) // optional for EQUITY
 
     if (!kind || (kind !== 'CRYPTO' && kind !== 'EQUITY')) {
       return res.status(400).json({ error: 'Invalid kind (CRYPTO|EQUITY)' })
@@ -48,13 +60,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const symbol = normalizeSymbol(symbolRaw)
 
+    // ✅ FIX: CRYPTO moet altijd market=null (anders krijg je “andere” unique keys)
+    const market = kind === 'CRYPTO' ? null : (marketRaw || null)
+
     const fav = await prisma.favorite.upsert({
       where: {
         userId_kind_symbol_market: {
           userId,
           kind: kind as any,
           symbol,
-          market: market || null,
+          market,
         },
       },
       update: {},
@@ -62,7 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userId,
         kind: kind as any,
         symbol,
-        market: market || null,
+        market,
       },
       select: { id: true, kind: true, symbol: true, market: true, createdAt: true },
     })
@@ -73,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const kind = asString(req.query.kind)
     const symbolRaw = asString(req.query.symbol)
-    const market = asString(req.query.market)
+    const marketRaw = asString(req.query.market)
 
     if (!kind || (kind !== 'CRYPTO' && kind !== 'EQUITY')) {
       return res.status(400).json({ error: 'Invalid kind (CRYPTO|EQUITY)' })
@@ -84,6 +99,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const symbol = normalizeSymbol(symbolRaw)
 
+    // ✅ FIX: CRYPTO altijd market=null
+    const market = kind === 'CRYPTO' ? null : (marketRaw || null)
+
     try {
       await prisma.favorite.delete({
         where: {
@@ -91,7 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userId,
             kind: kind as any,
             symbol,
-            market: market || null,
+            market,
           },
         },
       })

@@ -2,12 +2,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
-import useSWR from 'swr'
+import useSWR, { mutate as globalMutate } from 'swr'
 import { useSession } from 'next-auth/react'
 import { COINS } from '@/lib/coins'
 import { computeScoreStatus } from '@/lib/taScore'
 
-const fetcher = (url: string) => fetch(url).then(r => r.json())
+const fetcher = (url: string) => fetch(url, { cache: 'no-store' }).then(r => r.json())
 
 type Status = 'BUY' | 'HOLD' | 'SELL'
 type StatusFilter = 'ALL' | 'BUY' | 'HOLD' | 'SELL'
@@ -366,8 +366,10 @@ function PageInner() {
   }, [])
 
   // 2) Favorieten (ALLEEN voor ingelogde users) - server driven
+  const FAVS_URL = '/api/user/favorites?kind=CRYPTO'
+
   const { data: favData, mutate: mutateFavs } = useSWR<any>(
-    canFav ? '/api/user/favorites?kind=CRYPTO' : null,
+    canFav ? FAVS_URL : null,
     fetcher,
     { revalidateOnFocus: false }
   )
@@ -409,7 +411,11 @@ function PageInner() {
     const optimistic = isFav
       ? current.filter((it: any) => String(it.symbol || '').toUpperCase() !== s)
       : [{ id: `tmp:${s}`, kind: 'CRYPTO', symbol: s, market: null, createdAt: new Date().toISOString() }, ...current]
+
     await mutateFavs({ favorites: optimistic }, { revalidate: false })
+
+    // ✅ NEW (minimal): update global SWR cache so /crypto/favorites updates instantly
+    await globalMutate(FAVS_URL, { favorites: optimistic }, false)
 
     // ✅ NEW (minimal): immediate local sync + event (same tab)
     try {
@@ -432,9 +438,13 @@ function PageInner() {
         const r = await fetch(`/api/user/favorites?kind=CRYPTO&symbol=${encodeURIComponent(s)}`, { method: 'DELETE' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
       }
+
       await mutateFavs()
+      await globalMutate(FAVS_URL)
+
     } catch {
       await mutateFavs() // rollback/sync
+      await globalMutate(FAVS_URL)
     }
   }
 
