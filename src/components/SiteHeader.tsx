@@ -296,7 +296,6 @@ export default function SiteHeader() {
 
                 <div className="h-px bg-white/10 my-1" />
 
-                {/* routes bestaan nog niet; dit is alvast klaar voor stap 2 */}
                 <button
                   onClick={() => { setAccountOpen(false); router.push('/account') }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
@@ -311,11 +310,19 @@ export default function SiteHeader() {
                   Indicator preferences
                 </button>
 
+                {/* ✅ NEW: Favorites links */}
                 <button
-                  disabled
-                  className="w-full text-left px-3 py-2 rounded-xl text-white/50 cursor-not-allowed"
+                  onClick={() => { setAccountOpen(false); router.push('/crypto/favorites') }}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
-                  Watchlist (coming next)
+                  Crypto favorites
+                </button>
+
+                <button
+                  onClick={() => { setAccountOpen(false); router.push('/equities/favorites') }}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
+                >
+                  Equity favorites
                 </button>
 
                 <button
