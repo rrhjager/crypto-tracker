@@ -1,6 +1,8 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import { useSession } from 'next-auth/react'
+import useSWR from 'swr'
 import { SP500 } from '@/lib/sp500'
 import ScoreBadge from '@/components/ScoreBadge'
 
@@ -13,10 +15,10 @@ type SnapItem = {
   changePct?: number | null
   ret7Pct?: number | null
   ret30Pct?: number | null
-  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?:   number | null
-  macd?:  { macd: number | null; signal: number | null; hist: number | null }
-  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null }
+  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
+  rsi?: number | null
+  macd?: { macd: number | null; signal: number | null; hist: number | null }
+  volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
   score?: number
 }
 
@@ -25,7 +27,9 @@ function num(v: number | null | undefined, d = 2) {
 }
 function fmtPrice(v: number | null | undefined, ccy: string = 'USD') {
   if (v == null || !Number.isFinite(v)) return '—'
-  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy }).format(v as number) } catch {}
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy }).format(v as number)
+  } catch {}
   return (v as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 const pctCls = (p?: number | null) =>
@@ -39,27 +43,107 @@ const statusFromScore = (score?: number): Advice => {
 
 // batching helpers (zelfde beleid als NASDAQ)
 const CHUNK = 50
-const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms))
-function chunk<T>(arr:T[], size:number){ const out: T[][]=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out }
-async function pool<T,R>(arr:T[], n:number, fn:(x:T,i:number)=>Promise<R>):Promise<R[]>{
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+async function pool<T, R>(arr: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(arr.length) as any
-  let i=0
-  const workers = new Array(Math.min(n,arr.length)).fill(0).map(async()=> {
-    while(true){ const idx=i++; if(idx>=arr.length) break; out[idx]=await fn(arr[idx], idx) }
+  let i = 0
+  const workers = new Array(Math.min(n, arr.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++
+      if (idx >= arr.length) break
+      out[idx] = await fn(arr[idx], idx)
+    }
   })
   await Promise.all(workers)
   return out
 }
 
+const fetcher = (url: string) => fetch(url, { cache: 'no-store' }).then(r => r.json())
+
 export default function Sp500Page() {
   const symbols = useMemo(() => SP500.map(x => x.symbol), [])
+
+  // ✅ favorites (equities)
+  const { status: authStatus } = useSession()
+  const canFav = authStatus === 'authenticated'
+
+  const { data: favData, mutate: mutateFavs } = useSWR<any>(
+    canFav ? '/api/user/favorites?kind=EQUITY' : null,
+    fetcher,
+    { revalidateOnFocus: false }
+  )
+
+  const favSet = useMemo(() => {
+    const arr = Array.isArray(favData?.favorites) ? favData.favorites : []
+    return new Set(
+      arr
+        .filter((it: any) => String(it?.market || '').toUpperCase() === 'SP500')
+        .map((it: any) => String(it?.symbol || '').toUpperCase())
+        .filter(Boolean)
+    )
+  }, [favData])
+
+  async function toggleFav(sym: string) {
+    if (!canFav) return
+    const s = String(sym || '').toUpperCase()
+    const isFav = favSet.has(s)
+    const current = Array.isArray(favData?.favorites) ? favData.favorites : []
+
+    const optimistic = isFav
+      ? current.filter(
+          (it: any) =>
+            !(
+              String(it?.symbol || '').toUpperCase() === s &&
+              String(it?.market || '').toUpperCase() === 'SP500' &&
+              String(it?.kind || '') === 'EQUITY'
+            )
+        )
+      : [
+          {
+            id: `tmp:EQUITY:SP500:${s}`,
+            kind: 'EQUITY',
+            symbol: s,
+            market: 'SP500',
+            createdAt: new Date().toISOString(),
+          },
+          ...current,
+        ]
+
+    await mutateFavs({ favorites: optimistic }, { revalidate: false })
+
+    try {
+      if (!isFav) {
+        const r = await fetch('/api/user/favorites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'EQUITY', symbol: s, market: 'SP500' }),
+        })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      } else {
+        const r = await fetch(
+          `/api/user/favorites?kind=EQUITY&symbol=${encodeURIComponent(s)}&market=${encodeURIComponent('SP500')}`,
+          { method: 'DELETE' }
+        )
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      }
+      await mutateFavs()
+    } catch {
+      await mutateFavs()
+    }
+  }
 
   // 1) Snapshot (batches, vervangt quotes + snapshot-list + ret-batch)
   const [items, setItems] = useState<SnapItem[]>([])
   const [snapErr, setSnapErr] = useState<string | null>(null)
 
   useEffect(() => {
-    let timer:any, aborted=false
+    let timer: any,
+      aborted = false
     async function load() {
       try {
         setSnapErr(null)
@@ -67,33 +151,40 @@ export default function Sp500Page() {
         const parts = await pool(groups, 4, async (group, gi) => {
           if (gi) await sleep(80)
           const url = `/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
-          const r = await fetch(url, { cache:'no-store' })
+          const r = await fetch(url, { cache: 'no-store' })
           if (!r.ok) throw new Error(`HTTP ${r.status} @ snapshot[${gi}]`)
           const j: { items: SnapItem[] } = await r.json()
           return j.items || []
         })
         if (!aborted) setItems(parts.flat())
-      } catch (e:any) {
+      } catch (e: any) {
         if (!aborted) setSnapErr(String(e?.message || e))
       } finally {
         if (!aborted) timer = setTimeout(load, 30000) // 30s refresh
       }
     }
     load()
-    return () => { aborted = true; if (timer) clearTimeout(timer) }
+    return () => {
+      aborted = true
+      if (timer) clearTimeout(timer)
+    }
   }, [symbols])
 
   // Hydration-safe clock
   const [timeStr, setTimeStr] = useState('')
   useEffect(() => {
-    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12:false }))
-    upd(); const id=setInterval(upd,1000); return ()=>clearInterval(id)
+    const upd = () => setTimeStr(new Date().toLocaleTimeString('nl-NL', { hour12: false }))
+    upd()
+    const id = setInterval(upd, 1000)
+    return () => clearInterval(id)
   }, [])
 
   // Indexeren naar sym->item
   const bySym = useMemo(() => {
     const m: Record<string, SnapItem> = {}
-    items.forEach(it => { if (it?.symbol) m[it.symbol] = it })
+    items.forEach(it => {
+      if (it?.symbol) m[it.symbol] = it
+    })
     return m
   }, [items])
 
@@ -102,22 +193,23 @@ export default function Sp500Page() {
     const rows = SP500.map(a => bySym[a.symbol]).filter(Boolean) as SnapItem[]
     const total = rows.length
     const status = rows.map(r => statusFromScore(r.score))
-    const buy  = status.filter(s => s==='BUY').length
-    const hold = status.filter(s => s==='HOLD').length
-    const sell = status.filter(s => s==='SELL').length
+    const buy = status.filter(s => s === 'BUY').length
+    const hold = status.filter(s => s === 'HOLD').length
+    const sell = status.filter(s => s === 'SELL').length
 
-    const avgScore = total ? Math.round(rows.reduce((s,r)=> s + (Number(r.score) || 0), 0) / total) : 50
+    const avgScore = total ? Math.round(rows.reduce((s, r) => s + (Number(r.score) || 0), 0) / total) : 50
 
     const pctArr = rows.map(r => Number(r.changePct)).filter(v => Number.isFinite(v)) as number[]
-    const green = pctArr.filter(v => v>0).length
+    const green = pctArr.filter(v => v > 0).length
     const breadthPct = pctArr.length ? Math.round((green / pctArr.length) * 100) : 0
 
-    const priced = SP500.map(a => ({ symbol:a.symbol, pct: Number(bySym[a.symbol]?.changePct) }))
-      .filter(x => Number.isFinite(x.pct)) as {symbol:string; pct:number}[]
-    const topGainers = [...priced].sort((a,b)=> b.pct - a.pct).slice(0,3)
-    const topLosers  = [...priced].sort((a,b)=> a.pct - b.pct).slice(0,3)
+    const priced = SP500.map(a => ({ symbol: a.symbol, pct: Number(bySym[a.symbol]?.changePct) })).filter(x =>
+      Number.isFinite(x.pct)
+    ) as { symbol: string; pct: number }[]
+    const topGainers = [...priced].sort((a, b) => b.pct - a.pct).slice(0, 3)
+    const topLosers = [...priced].sort((a, b) => a.pct - b.pct).slice(0, 3)
 
-    return { counts:{ buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
+    return { counts: { buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
   }, [bySym])
 
   const [filter, setFilter] = useState<'ALL' | Advice>('ALL')
@@ -126,14 +218,16 @@ export default function Sp500Page() {
       const it = bySym[a.symbol]
       const score = Number(it?.score)
       const status = statusFromScore(score)
-      return { symbol:a.symbol, score: Number.isFinite(score) ? score : 50, status }
+      return { symbol: a.symbol, score: Number.isFinite(score) ? score : 50, status }
     })
-    return filter==='ALL' ? rows : rows.filter(r => r.status===filter)
+    return filter === 'ALL' ? rows : rows.filter(r => r.status === filter)
   }, [bySym, filter])
 
   return (
     <>
-      <Head><title>S&amp;P 500 Tracker — SignalHub</title></Head>
+      <Head>
+        <title>S&amp;P 500 Tracker — SignalHub</title>
+      </Head>
       <main className="min-h-screen">
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <h1 className="hero">S&amp;P 500 Tracker</h1>
@@ -142,17 +236,31 @@ export default function Sp500Page() {
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden: {snapErr}</div>}
 
-          <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
+          {/* ✅ same layout as AEX */}
+          <div className="grid lg:grid-cols-[2.4fr_1fr] gap-4">
             {/* Lijst */}
             <div className="table-card p-0 overflow-hidden">
-              <table className="w-full text-[13px]">
+              <table className="w-full text-[13px] table-fixed">
                 <colgroup>
-                  <col className="w-10" /><col className="w-[40%]" /><col className="w-[14%]" />
-                  <col className="w-[14%]" /><col className="w-[12%]" /><col className="w-[12%]" /><col className="w-[18%]" />
+                  <col className="w-10" />
+                  <col className="w-10" />
+                  <col className="w-[38%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[16%]" />
                 </colgroup>
                 <thead className="bg-gray-50 dark:bg-slate-900/60">
                   <tr className="text-left text-gray-500 dark:text-slate-300">
                     <th className="px-3 py-3">#</th>
+
+                    {/* ✅ NEW: favorites column */}
+                    <th className="px-2 py-3 text-center">
+                      <span className="sr-only">Favorite</span>
+                      <span aria-hidden>★</span>
+                    </th>
+
                     <th className="px-2 py-3">Aandeel</th>
                     <th className="px-3 py-3">Prijs</th>
                     <th className="px-3 py-3">24h</th>
@@ -167,33 +275,57 @@ export default function Sp500Page() {
                     const price = fmtPrice(it?.price, 'USD')
                     const chg = it?.change
                     const pct = it?.changePct
-                    const r7  = Number(it?.ret7Pct)
+                    const r7 = Number(it?.ret7Pct)
                     const r30 = Number(it?.ret30Pct)
                     const score = Number(it?.score)
 
+                    const symU = String(row.symbol || '').toUpperCase()
+                    const isFav = favSet.has(symU)
+
                     return (
-                      <tr
-                        key={row.symbol}
-                        className="hover:bg-gray-50 dark:hover:bg-slate-800 align-middle"
-                      >
-                        <td className="px-3 py-3 text-gray-500 dark:text-slate-400">{i+1}</td>
+                      <tr key={row.symbol} className="hover:bg-gray-50 dark:hover:bg-slate-800 align-middle">
+                        <td className="px-3 py-3 text-gray-500 dark:text-slate-400">{i + 1}</td>
+
+                        {/* ✅ NEW: star button */}
+                        <td className="px-2 py-3 text-center">
+                          <button
+                            disabled={!canFav}
+                            onClick={e => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              void toggleFav(symU)
+                            }}
+                            aria-pressed={isFav}
+                            title={
+                              canFav
+                                ? isFav
+                                  ? 'Verwijder uit favorieten'
+                                  : 'Markeer als favoriet'
+                                : 'Log in om favorieten te gebruiken'
+                            }
+                            className={[
+                              'inline-flex items-center justify-center',
+                              'h-6 w-6 rounded transition',
+                              canFav ? 'hover:bg-black/5 dark:hover:bg-white/10' : 'opacity-40 cursor-not-allowed',
+                              isFav ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500',
+                            ].join(' ')}
+                          >
+                            <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
+                          </button>
+                        </td>
+
                         <td className="px-2 py-3">
                           <div className="flex items-center gap-1.5">
-                            {/* Naam aandeel: dark mode leesbaar */}
                             <Link
                               href={`/sp500/${encodeURIComponent(row.symbol)}`}
                               className="font-medium text-gray-900 dark:text-slate-100 hover:underline truncate"
                             >
                               {row.name}
                             </Link>
-                            <span className="text-gray-500 dark:text-slate-400 shrink-0">
-                              ({row.symbol})
-                            </span>
+                            <span className="text-gray-500 dark:text-slate-400 shrink-0">({row.symbol})</span>
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-gray-900 dark:text-slate-100 whitespace-nowrap">
-                          {price}
-                        </td>
+                        <td className="px-3 py-3 text-gray-900 dark:text-slate-100 whitespace-nowrap">{price}</td>
                         <td className={`px-3 py-3 whitespace-nowrap ${pctCls(pct)}`}>
                           {Number.isFinite(chg as number) && Number.isFinite(pct as number)
                             ? `${chg! >= 0 ? '+' : ''}${num(chg, 2)} (${pct! >= 0 ? '+' : ''}${num(pct, 2)}%)`
@@ -205,12 +337,14 @@ export default function Sp500Page() {
                         <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r30)}`}>
                           {Number.isFinite(r30) ? `${r30 >= 0 ? '+' : ''}${num(r30, 2)}%` : '—'}
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center justify-start">
                             <div className="origin-left scale-95">
-                              {Number.isFinite(score)
-                                ? <ScoreBadge score={score} />
-                                : <span className="badge badge-hold">HOLD · 50</span>}
+                              {Number.isFinite(score) ? (
+                                <ScoreBadge score={score} />
+                              ) : (
+                                <span className="badge badge-hold">HOLD · 50</span>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -225,12 +359,9 @@ export default function Sp500Page() {
             <aside className="space-y-3 lg:sticky lg:top-16 h-max">
               <div className="table-card p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="font-semibold text-gray-900 dark:text-slate-100">
-                    Dagelijkse samenvatting
-                  </div>
+                  <div className="font-semibold text-gray-900 dark:text-slate-100">Dagelijkse samenvatting</div>
                   <div className="text-xs text-gray-500 dark:text-slate-400">
-                    Stand:{' '}
-                    <span suppressHydrationWarning>{timeStr}</span>
+                    Stand: <span suppressHydrationWarning>{timeStr}</span>
                   </div>
                 </div>
 
@@ -241,7 +372,8 @@ export default function Sp500Page() {
                       {(() => {
                         const t = summary.counts.total || 0
                         return t ? Math.round((summary.counts.buy / t) * 100) : 0
-                      })()}%
+                      })()}
+                      %
                     </div>
                     <div className="text-xs text-gray-600 dark:text-slate-300">
                       {summary.counts.buy}/{summary.counts.total}
@@ -253,7 +385,8 @@ export default function Sp500Page() {
                       {(() => {
                         const t = summary.counts.total || 0
                         return t ? Math.round((summary.counts.hold / t) * 100) : 0
-                      })()}%
+                      })()}
+                      %
                     </div>
                     <div className="text-xs text-gray-600 dark:text-slate-300">
                       {summary.counts.hold}/{summary.counts.total}
@@ -265,7 +398,8 @@ export default function Sp500Page() {
                       {(() => {
                         const t = summary.counts.total || 0
                         return t ? Math.round((summary.counts.sell / t) * 100) : 0
-                      })()}%
+                      })()}
+                      %
                     </div>
                     <div className="text-xs text-gray-600 dark:text-slate-300">
                       {summary.counts.sell}/{summary.counts.total}
@@ -275,49 +409,33 @@ export default function Sp500Page() {
 
                 <div className="grid grid-cols-2 gap-2 mb-3">
                   <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                    <div className="text-xs text-gray-600 dark:text-slate-300">
-                      Breadth (24h groen)
-                    </div>
-                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">
-                      {summary.breadthPct}%
-                    </div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">Breadth (24h groen)</div>
+                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">{summary.breadthPct}%</div>
                   </div>
                   <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                    <div className="text-xs text-gray-600 dark:text-slate-300">
-                      Gem. score
-                    </div>
-                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">
-                      {summary.avgScore}
-                    </div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300">Gem. score</div>
+                    <div className="text-xl font-bold text-gray-900 dark:text-slate-100">{summary.avgScore}</div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                    <div className="text-xs text-gray-600 dark:text-slate-300 mb-1">
-                      Top stijgers (24h)
-                    </div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300 mb-1">Top stijgers (24h)</div>
                     <ul className="space-y-1 text-sm">
                       {summary.topGainers.map((g, i) => (
                         <li key={`g${i}`} className="flex justify-between">
-                          <span className="text-gray-800 dark:text-slate-100">
-                            {g.symbol}
-                          </span>
+                          <span className="text-gray-800 dark:text-slate-100">{g.symbol}</span>
                           <span className="text-green-600">+{num(g.pct, 2)}%</span>
                         </li>
                       ))}
                     </ul>
                   </div>
                   <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                    <div className="text-xs text-gray-600 dark:text-slate-300 mb-1">
-                      Top dalers (24h)
-                    </div>
+                    <div className="text-xs text-gray-600 dark:text-slate-300 mb-1">Top dalers (24h)</div>
                     <ul className="space-y-1 text-sm">
                       {summary.topLosers.map((l, i) => (
                         <li key={`l${i}`} className="flex justify-between">
-                          <span className="text-gray-800 dark:text-slate-100">
-                            {l.symbol}
-                          </span>
+                          <span className="text-gray-800 dark:text-slate-100">{l.symbol}</span>
                           <span className="text-red-600">{num(l.pct, 2)}%</span>
                         </li>
                       ))}
@@ -329,9 +447,7 @@ export default function Sp500Page() {
               {/* Heatmap */}
               <div className="table-card p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-semibold text-gray-900 dark:text-slate-100">
-                    Heatmap
-                  </div>
+                  <div className="font-semibold text-gray-900 dark:text-slate-100">Heatmap</div>
                   <div className="flex gap-1">
                     <button
                       type="button"
@@ -386,8 +502,8 @@ export default function Sp500Page() {
                       status === 'BUY'
                         ? 'bg-green-500/15 text-green-700 border-green-500/30'
                         : status === 'SELL'
-                          ? 'bg-red-500/15 text-red-700 border-red-500/30'
-                          : 'bg-amber-500/15 text-amber-700 border-amber-500/30'
+                        ? 'bg-red-500/15 text-red-700 border-red-500/30'
+                        : 'bg-amber-500/15 text-amber-700 border-amber-500/30'
                     return (
                       <Link
                         key={symbol}
