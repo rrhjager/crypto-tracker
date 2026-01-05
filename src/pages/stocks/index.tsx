@@ -235,8 +235,9 @@ export default function AEXIndex() {
 
           <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
             {/* Lijst */}
-            <div className="table-card p-0 overflow-hidden">
-              <table className="w-full text-[13px]">
+            {/* ✅ FIX: make it scrollable instead of clipping the Status column */}
+            <div className="table-card p-0 overflow-x-auto">
+              <table className="min-w-[920px] w-full text-[13px]">
                 <colgroup>
                   <col className="w-10" />
                   <col className="w-10" />
