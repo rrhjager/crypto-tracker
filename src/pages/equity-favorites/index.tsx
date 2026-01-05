@@ -300,42 +300,6 @@ export default function EquityFavorites() {
       .sort((a, b) => (a.market === b.market ? a.symbol.localeCompare(b.symbol) : a.market.localeCompare(b.market)))
   }, [filteredFavs, bySym, ret7Map, ret30Map])
 
-  const summary = useMemo(() => {
-    const total = rows.length
-    const buy = rows.filter(r => r.status === 'BUY').length
-    const hold = rows.filter(r => r.status === 'HOLD').length
-    const sell = rows.filter(r => r.status === 'SELL').length
-
-    const avgScore = total ? Math.round(rows.reduce((s, r) => s + (Number(r.score) || 0), 0) / total) : 50
-
-    const pctArr = rows.map(r => Number(r.it?.changePct)).filter(v => Number.isFinite(v)) as number[]
-    const green = pctArr.filter(v => v > 0).length
-    const breadthPct = pctArr.length ? Math.round((green / pctArr.length) * 100) : 0
-
-    const movers = rows
-      .map(r => ({ key: `${r.market}::${r.symbol}`, market: r.market, symbol: r.symbol, disp: r.disp, pct: Number(r.it?.changePct) }))
-      .filter(x => Number.isFinite(x.pct)) as any[]
-
-    const topGainers = [...movers].sort((a, b) => b.pct - a.pct).slice(0, 3)
-    const topLosers = [...movers].sort((a, b) => a.pct - b.pct).slice(0, 3)
-
-    return { counts: { buy, hold, sell, total }, avgScore, breadthPct, topGainers, topLosers }
-  }, [rows])
-
-  const [statusFilter, setStatusFilter] = useState<'ALL' | Advice>('ALL')
-  const heatmapData = useMemo(() => {
-    const base = rows.map(r => ({
-      key: `${r.market}::${r.symbol}`,
-      market: r.market,
-      symbol: r.symbol,
-      disp: r.disp,
-      score: Number.isFinite(r.score) ? r.score : 50,
-      status: r.status,
-      href: r.href,
-    }))
-    return statusFilter === 'ALL' ? base : base.filter(x => x.status === statusFilter)
-  }, [rows, statusFilter])
-
   return (
     <>
       <Head>
@@ -392,252 +356,112 @@ export default function EquityFavorites() {
             <>
               {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij laden: {snapErr}</div>}
 
-              <div className="grid lg:grid-cols-[2.4fr_1fr] gap-4">
-                {/* TABLE */}
-                <div className="table-card p-0 overflow-hidden">
-                  <table className="w-full text-[13px] table-fixed">
-                    <colgroup>
-                      <col className="w-10" />
-                      <col className="w-10" />
-                      <col className="w-[12%]" />
-                      <col className="w-[28%]" />
-                      <col className="w-[12%]" />
-                      <col className="w-[14%]" />
-                      <col className="w-[10%]" />
-                      <col className="w-[10%]" />
-                      <col className="w-[14%]" />
-                    </colgroup>
+              {/* ONLY TABLE (no right column) */}
+              <div className="table-card p-0 overflow-hidden">
+                <table className="w-full text-[13px] table-fixed">
+                  <colgroup>
+                    <col className="w-10" />
+                    <col className="w-10" />
+                    <col className="w-[12%]" />
+                    <col className="w-[28%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[14%]" />
+                  </colgroup>
 
-                    <thead className="bg-gray-50 dark:bg-slate-900/60">
-                      <tr className="text-left text-gray-500 dark:text-slate-400">
-                        <th className="px-3 py-3">#</th>
-                        <th className="px-2 py-3 text-center" title="Favorites">
-                          <span className="sr-only">Favorite</span>★
-                        </th>
-                        <th className="px-2 py-3">Market</th>
-                        <th className="px-2 py-3">Equity</th>
-                        <th className="px-3 py-3">Price</th>
-                        <th className="px-3 py-3">24h</th>
-                        <th className="px-3 py-3">7d</th>
-                        <th className="px-3 py-3">30d</th>
-                        <th className="px-3 py-3">Status</th>
-                      </tr>
-                    </thead>
+                  <thead className="bg-gray-50 dark:bg-slate-900/60">
+                    <tr className="text-left text-gray-500 dark:text-slate-400">
+                      <th className="px-3 py-3">#</th>
+                      <th className="px-2 py-3 text-center" title="Favorites">
+                        <span className="sr-only">Favorite</span>★
+                      </th>
+                      <th className="px-2 py-3">Market</th>
+                      <th className="px-2 py-3">Equity</th>
+                      <th className="px-3 py-3">Price</th>
+                      <th className="px-3 py-3">24h</th>
+                      <th className="px-3 py-3">7d</th>
+                      <th className="px-3 py-3">30d</th>
+                      <th className="px-3 py-3">Status</th>
+                    </tr>
+                  </thead>
 
-                    <tbody className="divide-y divide-gray-100 dark:divide-slate-800/80">
-                      {rows.map((r, i) => {
-                        const it = r.it
-                        const price = fmtPrice(it?.price, r.currency)
-                        const chg = it?.change
-                        const pct = it?.changePct
-                        const isFav = favSet.has(`${r.market}::${r.symbol}`)
+                  <tbody className="divide-y divide-gray-100 dark:divide-slate-800/80">
+                    {rows.map((r, i) => {
+                      const it = r.it
+                      const price = fmtPrice(it?.price, r.currency)
+                      const chg = it?.change
+                      const pct = it?.changePct
+                      const isFav = favSet.has(`${r.market}::${r.symbol}`)
 
-                        return (
-                          <tr key={`${r.market}::${r.symbol}`} className="hover:bg-gray-50 dark:hover:bg-slate-800/60">
-                            <td className="px-3 py-3 text-gray-500 dark:text-slate-400">{i + 1}</td>
+                      return (
+                        <tr key={`${r.market}::${r.symbol}`} className="hover:bg-gray-50 dark:hover:bg-slate-800/60">
+                          <td className="px-3 py-3 text-gray-500 dark:text-slate-400">{i + 1}</td>
 
-                            <td className="px-2 py-3 text-center">
-                              <button
-                                onClick={e => {
-                                  e.preventDefault()
-                                  e.stopPropagation()
-                                  void toggleFav(r.market, r.symbol)
-                                }}
-                                aria-pressed={isFav}
-                                title={isFav ? 'Remove from favorites' : 'Add to favorites'}
-                                className={[
-                                  'inline-flex items-center justify-center',
-                                  'h-6 w-6 rounded transition',
-                                  'hover:bg-black/5 dark:hover:bg-white/10',
-                                  isFav ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500',
-                                ].join(' ')}
-                              >
-                                <span aria-hidden className="leading-none">
-                                  {isFav ? '★' : '☆'}
-                                </span>
-                              </button>
-                            </td>
-
-                            <td className="px-2 py-3">
-                              <span className="inline-flex rounded-full border border-gray-200 dark:border-slate-700 px-2 py-1 text-xs text-gray-700 dark:text-slate-200">
-                                {r.market}
+                          <td className="px-2 py-3 text-center">
+                            <button
+                              onClick={e => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                void toggleFav(r.market, r.symbol)
+                              }}
+                              aria-pressed={isFav}
+                              title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                              className={[
+                                'inline-flex items-center justify-center',
+                                'h-6 w-6 rounded transition',
+                                'hover:bg-black/5 dark:hover:bg-white/10',
+                                isFav ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500',
+                              ].join(' ')}
+                            >
+                              <span aria-hidden className="leading-none">
+                                {isFav ? '★' : '☆'}
                               </span>
-                            </td>
+                            </button>
+                          </td>
 
-                            <td className="px-2 py-3">
-                              {r.href !== '#' ? (
-                                <Link href={r.href} className="font-medium text-gray-900 dark:text-slate-100 hover:underline">
-                                  {r.disp}
-                                </Link>
-                              ) : (
-                                <span className="font-medium text-gray-900 dark:text-slate-100">{r.disp}</span>
-                              )}
-                              <span className="ml-2 text-gray-500 dark:text-slate-400">({r.symbol})</span>
-                            </td>
+                          <td className="px-2 py-3">
+                            <span className="inline-flex rounded-full border border-gray-200 dark:border-slate-700 px-2 py-1 text-xs text-gray-700 dark:text-slate-200">
+                              {r.market}
+                            </span>
+                          </td>
 
-                            <td className="px-3 py-3 text-gray-900 dark:text-slate-100 whitespace-nowrap">{price}</td>
+                          <td className="px-2 py-3">
+                            {r.href !== '#' ? (
+                              <Link href={r.href} className="font-medium text-gray-900 dark:text-slate-100 hover:underline">
+                                {r.disp}
+                              </Link>
+                            ) : (
+                              <span className="font-medium text-gray-900 dark:text-slate-100">{r.disp}</span>
+                            )}
+                            <span className="ml-2 text-gray-500 dark:text-slate-400">({r.symbol})</span>
+                          </td>
 
-                            <td className={`px-3 py-3 whitespace-nowrap ${pctCls(pct)}`}>
-                              {Number.isFinite(chg as number) && Number.isFinite(pct as number)
-                                ? `${chg! >= 0 ? '+' : ''}${num(chg, 2)} (${pct! >= 0 ? '+' : ''}${num(pct, 2)}%)`
-                                : '—'}
-                            </td>
+                          <td className="px-3 py-3 text-gray-900 dark:text-slate-100 whitespace-nowrap">{price}</td>
 
-                            <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r.r7)}`}>
-                              {Number.isFinite(r.r7 as number) ? `${(r.r7 as number) >= 0 ? '+' : ''}${num(r.r7, 2)}%` : '—'}
-                            </td>
+                          <td className={`px-3 py-3 whitespace-nowrap ${pctCls(pct)}`}>
+                            {Number.isFinite(chg as number) && Number.isFinite(pct as number)
+                              ? `${chg! >= 0 ? '+' : ''}${num(chg, 2)} (${pct! >= 0 ? '+' : ''}${num(pct, 2)}%)`
+                              : '—'}
+                          </td>
 
-                            <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r.r30)}`}>
-                              {Number.isFinite(r.r30 as number) ? `${(r.r30 as number) >= 0 ? '+' : ''}${num(r.r30, 2)}%` : '—'}
-                            </td>
+                          <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r.r7)}`}>
+                            {Number.isFinite(r.r7 as number) ? `${(r.r7 as number) >= 0 ? '+' : ''}${num(r.r7, 2)}%` : '—'}
+                          </td>
 
-                            <td className="px-3 py-3 whitespace-nowrap">
-                              {Number.isFinite(r.score) ? <ScoreBadge score={r.score} /> : <span className="badge badge-hold">HOLD · 50</span>}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                          <td className={`px-3 py-3 whitespace-nowrap ${pctCls(r.r30)}`}>
+                            {Number.isFinite(r.r30 as number) ? `${(r.r30 as number) >= 0 ? '+' : ''}${num(r.r30, 2)}%` : '—'}
+                          </td>
 
-                {/* RIGHT COLUMN */}
-                <aside className="space-y-3 lg:sticky lg:top-16 h-max">
-                  <div className="table-card p-4">
-                    <div className="font-semibold text-gray-900 dark:text-slate-100 mb-3">Daily summary</div>
-
-                    <div className="grid grid-cols-3 gap-2 mb-3">
-                      <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-center">
-                        <div className="text-xs text-gray-600 dark:text-slate-300">BUY</div>
-                        <div className="text-lg font-bold text-green-700">
-                          {(() => {
-                            const t = summary.counts.total || 0
-                            return t ? Math.round((summary.counts.buy / t) * 100) : 0
-                          })()}
-                          %
-                        </div>
-                        <div className="text-xs text-gray-600 dark:text-slate-300">
-                          {summary.counts.buy}/{summary.counts.total}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
-                        <div className="text-xs text-gray-600 dark:text-slate-300">HOLD</div>
-                        <div className="text-lg font-bold text-amber-700">
-                          {(() => {
-                            const t = summary.counts.total || 0
-                            return t ? Math.round((summary.counts.hold / t) * 100) : 0
-                          })()}
-                          %
-                        </div>
-                        <div className="text-xs text-gray-600 dark:text-slate-300">
-                          {summary.counts.hold}/{summary.counts.total}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center">
-                        <div className="text-xs text-gray-600 dark:text-slate-300">SELL</div>
-                        <div className="text-lg font-bold text-red-700">
-                          {(() => {
-                            const t = summary.counts.total || 0
-                            return t ? Math.round((summary.counts.sell / t) * 100) : 0
-                          })()}
-                          %
-                        </div>
-                        <div className="text-xs text-gray-600 dark:text-slate-300">
-                          {summary.counts.sell}/{summary.counts.total}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                        <div className="text-xs text-gray-600 dark:text-slate-400">Breadth (24h green)</div>
-                        <div className="text-xl font-bold text-gray-900 dark:text-slate-100">{summary.breadthPct}%</div>
-                      </div>
-                      <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                        <div className="text-xs text-gray-600 dark:text-slate-400">Avg. score</div>
-                        <div className="text-xl font-bold text-gray-900 dark:text-slate-100">{summary.avgScore}</div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                        <div className="text-xs text-gray-600 dark:text-slate-400 mb-1">Top gainers (24h)</div>
-                        <ul className="space-y-1 text-sm">
-                          {summary.topGainers.map((g: any) => (
-                            <li key={g.key} className="flex justify-between">
-                              <span className="text-gray-800 dark:text-slate-100">{g.disp}</span>
-                              <span className="text-green-600">+{num(g.pct, 2)}%</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div className="rounded-xl border border-gray-200 dark:border-slate-700 p-3">
-                        <div className="text-xs text-gray-600 dark:text-slate-400 mb-1">Top losers (24h)</div>
-                        <ul className="space-y-1 text-sm">
-                          {summary.topLosers.map((l: any) => (
-                            <li key={l.key} className="flex justify-between">
-                              <span className="text-gray-800 dark:text-slate-100">{l.disp}</span>
-                              <span className="text-red-600">{num(l.pct, 2)}%</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="table-card p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-gray-900 dark:text-slate-100">Heatmap</div>
-                      <div className="flex gap-1">
-                        {(['ALL', 'BUY', 'HOLD', 'SELL'] as const).map(k => (
-                          <button
-                            key={k}
-                            className={`px-2.5 py-1 rounded-full text-xs border ${
-                              statusFilter === k
-                                ? k === 'BUY'
-                                  ? 'bg-green-600 text-white border-green-600'
-                                  : k === 'SELL'
-                                  ? 'bg-red-600 text-white border-red-600'
-                                  : k === 'HOLD'
-                                  ? 'bg-amber-500 text-white border-amber-500'
-                                  : 'bg-gray-200 text-gray-900 border-gray-300 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
-                                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-800'
-                            }`}
-                            onClick={() => setStatusFilter(k)}
-                          >
-                            {k === 'ALL' ? 'All' : k[0] + k.slice(1).toLowerCase()}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-4 sm:grid-cols-5 gap-2">
-                      {heatmapData.map(x => {
-                        const cls =
-                          x.status === 'BUY'
-                            ? 'bg-green-500/15 text-green-700 border-green-500/30'
-                            : x.status === 'SELL'
-                            ? 'bg-red-500/15 text-red-700 border-red-500/30'
-                            : 'bg-amber-500/15 text-amber-700 border-amber-500/30'
-                        return (
-                          <Link
-                            key={x.key}
-                            href={x.href !== '#' ? x.href : '/equity-favorites'}
-                            className={`rounded-xl px-2.5 py-2 text-xs font-semibold border text-center hover:opacity-90 ${cls}`}
-                            title={`${x.market} · ${x.symbol} · ${x.status} · ${x.score}`}
-                          >
-                            <div className="leading-none">{x.disp}</div>
-                            <div className="mt-1 text-[10px] opacity-80">
-                              {x.market} · {x.score}
-                            </div>
-                          </Link>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </aside>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            {Number.isFinite(r.score) ? <ScoreBadge score={r.score} /> : <span className="badge badge-hold">HOLD · 50</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </>
           )}
