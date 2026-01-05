@@ -319,7 +319,7 @@ export default function SiteHeader() {
                 </button>
 
                 <button
-                  onClick={() => { setAccountOpen(false); router.push('/equities/favorites') }}
+                  onClick={() => { setAccountOpen(false); router.push('/equity-favorites') }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
                   Equity favorites
