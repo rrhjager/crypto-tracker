@@ -82,7 +82,6 @@ export default function AEXIndex() {
 
   const favSet = useMemo(() => {
     const arr = Array.isArray(favData?.favorites) ? favData.favorites : []
-    // AEX equities: symbol includes .AS in your data, market stored as "AEX"
     return new Set(
       arr
         .filter((it: any) => String(it?.market || '').toUpperCase() === 'AEX')
@@ -97,7 +96,6 @@ export default function AEXIndex() {
     const isFav = favSet.has(s)
     const current = Array.isArray(favData?.favorites) ? favData.favorites : []
 
-    // optimistic UI
     const optimistic = isFav
       ? current.filter(
           (it: any) =>
@@ -137,7 +135,7 @@ export default function AEXIndex() {
       }
       await mutateFavs()
     } catch {
-      await mutateFavs() // rollback/sync
+      await mutateFavs()
     }
   }
 
@@ -233,26 +231,27 @@ export default function AEXIndex() {
         <section className="max-w-6xl mx-auto px-4 pb-16">
           {snapErr && <div className="mb-3 text-red-600 text-sm">Fout bij indicatoren: {snapErr}</div>}
 
-          <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
+          {/* ✅ FIX: make the list wider vs the sidebar so Status fits without clipping */}
+          <div className="grid lg:grid-cols-[2.4fr_1fr] gap-4">
             {/* Lijst */}
-            {/* ✅ FIX: make it scrollable instead of clipping the Status column */}
-            <div className="table-card p-0 overflow-x-auto">
-              <table className="min-w-[920px] w-full text-[13px]">
+            <div className="table-card p-0 overflow-hidden">
+              <table className="w-full text-[13px] table-fixed">
                 <colgroup>
                   <col className="w-10" />
                   <col className="w-10" />
+
+                  {/* ✅ FIX: rebalance widths so everything fits (no overflow, Status wider) */}
                   <col className="w-[38%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[14%]" />
                   <col className="w-[12%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[18%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[16%]" />
                 </colgroup>
                 <thead className="bg-gray-50 dark:bg-slate-900/60">
                   <tr className="text-left text-gray-500 dark:text-slate-400">
                     <th className="px-3 py-3">#</th>
 
-                    {/* ✅ NEW: favorites column */}
                     <th className="px-2 py-3 text-center">
                       <span className="sr-only">Favorite</span>
                       <span aria-hidden>★</span>
@@ -283,7 +282,6 @@ export default function AEXIndex() {
                       <tr key={row.symbol} className="hover:bg-gray-50 dark:hover:bg-slate-800/60 align-middle">
                         <td className="px-3 py-3 text-gray-500 dark:text-slate-400">{i + 1}</td>
 
-                        {/* ✅ NEW: star button */}
                         <td className="px-2 py-3 text-center">
                           <button
                             disabled={!canFav}
@@ -307,9 +305,7 @@ export default function AEXIndex() {
                               isFav ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500',
                             ].join(' ')}
                           >
-                            <span aria-hidden className="leading-none">
-                              {isFav ? '★' : '☆'}
-                            </span>
+                            <span aria-hidden className="leading-none">{isFav ? '★' : '☆'}</span>
                           </button>
                         </td>
 
@@ -339,7 +335,7 @@ export default function AEXIndex() {
                             ? `${(r30 as number) >= 0 ? '+' : ''}${num(r30, 2)}%`
                             : '—'}
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center justify-start">
                             <div className="origin-left scale-95">
                               {Number.isFinite(score) ? (
