@@ -113,7 +113,6 @@ export default function CryptoPastPerformancePage() {
 
   const rows = data?.rows || []
 
-  // Summary stats (only matured values count)
   const s7 = buildSummary(rows.map(r => r.perf?.d7Signal ?? null))
   const s30 = buildSummary(rows.map(r => r.perf?.d30Signal ?? null))
   const sUntil = buildSummary(rows.map(r => r.nextSignal?.signalReturnPct ?? null))
@@ -169,7 +168,7 @@ export default function CryptoPastPerformancePage() {
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[1150px] w-full text-sm">
+          <table className="min-w-[1000px] w-full text-sm">
             <thead className="bg-black/25 text-white/70">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Coin</th>
@@ -179,7 +178,6 @@ export default function CryptoPastPerformancePage() {
                 <th className="text-left px-4 py-3 font-semibold">30d signal return</th>
                 <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
                 <th className="text-left px-4 py-3 font-semibold">Current</th>
-                <th className="text-left px-4 py-3 font-semibold">Source</th>
               </tr>
             </thead>
 
@@ -252,16 +250,12 @@ export default function CryptoPastPerformancePage() {
                       <span className="text-white/50 text-xs">—</span>
                     )}
                   </td>
-
-                  <td className="px-4 py-3 text-xs text-white/55">
-                    {r.source || '—'}
-                  </td>
                 </tr>
               ))}
 
               {!rows.length && !isLoading ? (
                 <tr>
-                  <td className="px-4 py-8 text-white/60" colSpan={8}>
+                  <td className="px-4 py-8 text-white/60" colSpan={7}>
                     No data.
                   </td>
                 </tr>
