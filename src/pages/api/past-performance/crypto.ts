@@ -44,19 +44,22 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
   // We still compute signals using the SAME 200-day window per day.
   const LOOKBACK = 900
   const WINDOW = 200
-  const horizons = [1, 7, 30]
-  const maxH = 30
 
   const got = await fetchMarketDataFor(pair.toUpperCase(), { limit: LOOKBACK })
-  if (!got.ok) {
+
+  // ✅ TS-safe narrowing (fixes "Property 'error' does not exist" build error)
+  if (got.ok === false) {
+    const err = got.error
     return {
       row: {
-        coin, name, pair,
+        coin,
+        name,
+        pair,
         current: null,
         lastSignal: null,
         perf: { h24: null, d7: null, d30: null },
-        error: got.error,
-      }
+        error: err,
+      },
     }
   }
 
@@ -66,12 +69,15 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
   if (n < WINDOW + 2) {
     return {
       row: {
-        coin, name, pair, source: got.source,
+        coin,
+        name,
+        pair,
+        source: got.source,
         current: null,
         lastSignal: null,
         perf: { h24: null, d7: null, d30: null },
         error: 'Not enough history',
-      }
+      },
     }
   }
 
@@ -103,8 +109,6 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
   }
 
   // Scan backward to find latest day where status switched into BUY or SELL.
-  // We need at least WINDOW-1 index to compute.
-  // We also need previous day to compare; and for outcomes we might need +30 days (optional).
   let eventIdx: number | null = null
   let eventScore = 50
   let eventStatus: UiStatus | null = null
@@ -133,12 +137,14 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
   if (eventIdx == null || eventStatus == null) {
     return {
       row: {
-        coin, name, pair,
+        coin,
+        name,
+        pair,
         source: got.source,
         current,
         lastSignal: null,
         perf: { h24: null, d7: null, d30: null },
-      }
+      },
     }
   }
 
@@ -158,12 +164,14 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
 
   return {
     row: {
-      coin, name, pair,
+      coin,
+      name,
+      pair,
       source: got.source,
       current,
       lastSignal,
       perf,
-    }
+    },
   }
 }
 
