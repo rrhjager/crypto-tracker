@@ -75,28 +75,6 @@ type Summary = {
   med: number | null
 }
 
-function buildSummaryFromRows(
-  rows: Row[],
-  getValue: (r: Row) => number | null,
-  isEligible: (r: Row) => boolean
-): Summary {
-  const eligible = rows.filter(isEligible)
-  const vals = eligible.map(getValue).filter((v): v is number => v != null && Number.isFinite(v))
-  const nEligible = eligible.length
-  const nIncluded = vals.length
-  if (nIncluded === 0) {
-    return { nIncluded, nEligible, winRate: null, avg: null, med: null }
-  }
-  const wins = vals.filter(v => v > 0).length
-  return {
-    nIncluded,
-    nEligible,
-    winRate: (wins / nIncluded) * 100,
-    avg: mean(vals),
-    med: median(vals),
-  }
-}
-
 function safeDate(d: string | null | undefined) {
   if (!d) return null
   const dt = new Date(d + 'T00:00:00Z')
@@ -117,16 +95,16 @@ function pct(from: number, to: number) {
   return ((to / from) - 1) * 100
 }
 
-// signal -> raw (inverse mapping for MFE/MAE when API provides signal-aligned)
-function rawFromSignal(side: 'BUY' | 'SELL', signal: number | null) {
-  if (signal == null) return null
-  return side === 'BUY' ? signal : -signal
-}
-
-// raw -> signal (only used for the small “Signal:” hint)
+// raw -> signal (BUY keeps sign, SELL flips sign)
 function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
   if (raw == null) return null
   return side === 'BUY' ? raw : -raw
+}
+
+// signal -> raw (inverse mapping; used for MFE/MAE when API gives aligned numbers)
+function rawFromSignal(side: 'BUY' | 'SELL', signal: number | null) {
+  if (signal == null) return null
+  return side === 'BUY' ? signal : -signal
 }
 
 function isValidBaseRow(r: Row) {
@@ -140,6 +118,47 @@ function isValidBaseRow(r: Row) {
 function openRawReturnToLatest(r: Row): number | null {
   if (!isValidBaseRow(r)) return null
   return pct(r.lastSignal!.close, r.current!.close)
+}
+
+/**
+ * Directional summary:
+ * - Converts raw price change into direction-aligned "signal return"
+ * - Win = aligned > 0
+ * - Avg/Median are also computed on aligned (so SELL down-moves improve stats)
+ */
+function buildDirectionalSummary(
+  rows: Row[],
+  getRaw: (r: Row) => number | null,
+  isEligible: (r: Row) => boolean
+): Summary {
+  const eligible = rows.filter(isEligible)
+  const alignedVals: number[] = []
+
+  for (const r of eligible) {
+    const side = r.lastSignal?.status
+    if (!side) continue
+    const raw = getRaw(r)
+    if (raw == null || !Number.isFinite(raw)) continue
+    const aligned = signalFromRaw(side, raw)
+    if (aligned == null || !Number.isFinite(aligned)) continue
+    alignedVals.push(aligned)
+  }
+
+  const nEligible = eligible.length
+  const nIncluded = alignedVals.length
+
+  if (nIncluded === 0) {
+    return { nIncluded, nEligible, winRate: null, avg: null, med: null }
+  }
+
+  const wins = alignedVals.filter(v => v > 0).length
+  return {
+    nIncluded,
+    nEligible,
+    winRate: (wins / nIncluded) * 100,
+    avg: mean(alignedVals),
+    med: median(alignedVals),
+  }
 }
 
 function StatCard({
@@ -164,11 +183,11 @@ function StatCard({
           </div>
         </div>
         <div>
-          <div className="text-white/55 text-xs">Avg</div>
+          <div className="text-white/55 text-xs">Avg (aligned)</div>
           <div className={`font-semibold ${pctClass(stat.avg)}`}>{fmtPct(stat.avg)}</div>
         </div>
         <div>
-          <div className="text-white/55 text-xs">Median</div>
+          <div className="text-white/55 text-xs">Median (aligned)</div>
           <div className={`font-semibold ${pctClass(stat.med)}`}>{fmtPct(stat.med)}</div>
         </div>
       </div>
@@ -189,8 +208,16 @@ function InfoCard() {
         <div>
           <div className="text-white/80 font-semibold">Price change (main number)</div>
           <div className="text-white/60 text-xs mt-1">
-            The big percentage is the <b>real price change</b> from the signal close.
-            For SELL, a good outcome usually means the price is <b>down</b> (negative / red).
+            The big percentage is the <b>real price move</b> from the signal close.
+            For SELL, “winning” typically means the price is <b>down</b> (negative).
+          </div>
+        </div>
+
+        <div>
+          <div className="text-white/80 font-semibold">Signal (small line)</div>
+          <div className="text-white/60 text-xs mt-1">
+            The small <b>Signal:</b> line is direction-aligned: BUY uses the raw move, SELL flips the sign.
+            This is what we use for <b>win rate</b>.
           </div>
         </div>
 
@@ -199,14 +226,6 @@ function InfoCard() {
           <div className="text-white/60 text-xs mt-1">
             Return from the signal close until the model changes status (to HOLD or the opposite).
             If no next signal happened yet, we show <b>Open → latest</b>.
-          </div>
-        </div>
-
-        <div>
-          <div className="text-white/80 font-semibold">MFE / MAE</div>
-          <div className="text-white/60 text-xs mt-1">
-            <b>MFE</b> = best price move during the holding period. <b>MAE</b> = worst price move during the holding period.
-            These help you judge “potential upside” vs. “drawdown risk”.
           </div>
         </div>
       </div>
@@ -228,22 +247,13 @@ export default function CryptoPastPerformancePage() {
   const rows = data?.rows || []
   const eligibleBase = (r: Row) => isValidBaseRow(r)
 
-  // Until next (or latest) — PRICE CHANGE
-  const untilRawValue = (r: Row) => {
-    if (!eligibleBase(r)) return null
-    if (r.nextSignal?.rawReturnPct != null && Number.isFinite(r.nextSignal.rawReturnPct)) {
-      return r.nextSignal.rawReturnPct
-    }
-    return openRawReturnToLatest(r)
-  }
-
-  // Guards
   const show7d = (r: Row) => {
     if (!eligibleBase(r)) return false
     if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 7
     const days = diffDays(r.lastSignal!.date, r.current!.date)
     return days != null && days >= 7
   }
+
   const show30d = (r: Row) => {
     if (!eligibleBase(r)) return false
     if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 30
@@ -251,22 +261,24 @@ export default function CryptoPastPerformancePage() {
     return days != null && days >= 30
   }
 
-  // Summaries — PRICE CHANGE (more intuitive for visitors)
-  const sUntil = buildSummaryFromRows(rows, untilRawValue, eligibleBase)
-  const s7 = buildSummaryFromRows(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
-  const s30 = buildSummaryFromRows(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
+  // RAW values for display columns
+  const untilRaw = (r: Row) => {
+    if (!eligibleBase(r)) return null
+    if (r.nextSignal?.rawReturnPct != null && Number.isFinite(r.nextSignal.rawReturnPct)) return r.nextSignal.rawReturnPct
+    return openRawReturnToLatest(r)
+  }
 
-  // For MFE/MAE: API provides signal-aligned values; convert to RAW price move for display + summary
-  const sMfe = buildSummaryFromRows(
-    rows,
-    r => (r.lastSignal ? rawFromSignal(r.lastSignal.status, r.untilNext?.mfeSignal ?? null) : null),
-    eligibleBase
-  )
-  const sMae = buildSummaryFromRows(
-    rows,
-    r => (r.lastSignal ? rawFromSignal(r.lastSignal.status, r.untilNext?.maeSignal ?? null) : null),
-    eligibleBase
-  )
+  // Directional summaries (winrate correct for SELL)
+  const sUntil = buildDirectionalSummary(rows, untilRaw, eligibleBase)
+  const s7 = buildDirectionalSummary(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
+  const s30 = buildDirectionalSummary(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
+
+  // Convert MFE/MAE to raw for display/summary
+  const mfeRaw = (r: Row) => (r.lastSignal ? rawFromSignal(r.lastSignal.status, r.untilNext?.mfeSignal ?? null) : null)
+  const maeRaw = (r: Row) => (r.lastSignal ? rawFromSignal(r.lastSignal.status, r.untilNext?.maeSignal ?? null) : null)
+
+  const sMfe = buildDirectionalSummary(rows, mfeRaw, eligibleBase)
+  const sMae = buildDirectionalSummary(rows, maeRaw, eligibleBase)
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -274,7 +286,8 @@ export default function CryptoPastPerformancePage() {
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
           <p className="text-white/70 text-sm">
-            We show the most recent BUY/SELL switch per coin. The table highlights the <b>real price move</b> from the signal close.
+            We show the most recent BUY/SELL switch per coin. The table focuses on <b>real price change</b>,
+            while win rate is computed <b>directionally</b> (SELL wins when price drops).
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -284,31 +297,31 @@ export default function CryptoPastPerformancePage() {
 
       <InfoCard />
 
-      {/* Summary (price change) */}
+      {/* Summary (directional winrate + aligned avg/median) */}
       <div className="mb-6 grid md:grid-cols-5 gap-4">
         <StatCard
           title="Until Next (or Latest)"
-          subtitle="Real price change until the next signal (or latest close)."
+          subtitle="Directional (SELL down = win). Uses next signal, else open → latest."
           stat={sUntil}
         />
         <StatCard
-          title="7D Price Change"
-          subtitle="Only when the signal stayed active (or existed) for ≥7 days."
+          title="Price 7d"
+          subtitle="Directional winrate after 7 days (only if ≥7 days of data)."
           stat={s7}
         />
         <StatCard
-          title="30D Price Change"
-          subtitle="Only when the signal stayed active (or existed) for ≥30 days."
+          title="Price 30d"
+          subtitle="Directional winrate after 30 days (only if ≥30 days of data)."
           stat={s30}
         />
         <StatCard
-          title="MFE (Price)"
-          subtitle="Best raw price move during the holding period."
+          title="MFE (until next)"
+          subtitle="Directional best move during holding period."
           stat={sMfe}
         />
         <StatCard
-          title="MAE (Price)"
-          subtitle="Worst raw price move during the holding period."
+          title="MAE (until next)"
+          subtitle="Directional worst move during holding period."
           stat={sMae}
         />
       </div>
@@ -330,40 +343,48 @@ export default function CryptoPastPerformancePage() {
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[1500px] w-full text-sm">
+          <table className="min-w-[1550px] w-full text-sm">
             <thead className="bg-black/25 text-white/70">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Coin</th>
                 <th className="text-left px-4 py-3 font-semibold">Last signal</th>
                 <th className="text-left px-4 py-3 font-semibold">Signal score</th>
 
-                <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
+                <th className="text-left px-4 py-3 font-semibold">Until next (Price)</th>
 
-                <th className="text-left px-4 py-3 font-semibold">7d</th>
-                <th className="text-left px-4 py-3 font-semibold">30d</th>
-                <th className="text-left px-4 py-3 font-semibold">MFE</th>
-                <th className="text-left px-4 py-3 font-semibold">MAE</th>
+                <th className="text-left px-4 py-3 font-semibold">Price 7d</th>
+                <th className="text-left px-4 py-3 font-semibold">Price 30d</th>
+
+                <th className="text-left px-4 py-3 font-semibold">MFE (Price)</th>
+                <th className="text-left px-4 py-3 font-semibold">MAE (Price)</th>
                 <th className="text-left px-4 py-3 font-semibold">Current</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-white/10">
               {rows.map((r) => {
+                const side = r.lastSignal?.status
+
                 const openRaw = openRawReturnToLatest(r)
                 const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
 
                 const show7 = show7d(r)
                 const show30 = show30d(r)
 
-                const side = r.lastSignal?.status
+                const untilRawVal = untilRaw(r)
+                const untilSignalVal = side ? signalFromRaw(side, untilRawVal) : null
 
-                const mfeRaw = side ? rawFromSignal(side, r.untilNext?.mfeSignal ?? null) : null
-                const maeRaw = side ? rawFromSignal(side, r.untilNext?.maeSignal ?? null) : null
+                const d7Raw = show7 ? r.perf.d7Raw : null
+                const d7Signal = side ? signalFromRaw(side, d7Raw) : null
 
-                // small hint line: show signal-aligned too, but NOT the main number
-                const untilSignalHint = r.nextSignal
-                  ? (side ? signalFromRaw(side, r.nextSignal.rawReturnPct) : r.nextSignal.signalReturnPct)
-                  : (side ? signalFromRaw(side, openRaw) : null)
+                const d30Raw = show30 ? r.perf.d30Raw : null
+                const d30Signal = side ? signalFromRaw(side, d30Raw) : null
+
+                const mfeRawVal = mfeRaw(r)
+                const mfeSignalVal = r.untilNext?.mfeSignal ?? null
+
+                const maeRawVal = maeRaw(r)
+                const maeSignalVal = r.untilNext?.maeSignal ?? null
 
                 return (
                   <tr key={r.pair} className="hover:bg-white/[0.03]">
@@ -393,20 +414,16 @@ export default function CryptoPastPerformancePage() {
                       )}
                     </td>
 
-                    <td className="px-4 py-3 text-white/80">
-                      {r.lastSignal ? r.lastSignal.score : '—'}
-                    </td>
+                    <td className="px-4 py-3 text-white/80">{r.lastSignal ? r.lastSignal.score : '—'}</td>
 
-                    {/* Until next signal — MAIN: price change */}
+                    {/* Until next (Price) */}
                     <td className="px-4 py-3">
                       {r.nextSignal ? (
                         <div className="text-xs">
                           <div className={`font-semibold ${pctClass(r.nextSignal.rawReturnPct)}`}>
                             {fmtPct(r.nextSignal.rawReturnPct)}
                           </div>
-                          <div className="text-xs text-white/55">
-                            Signal: {fmtPct(untilSignalHint)}
-                          </div>
+                          <div className="text-xs text-white/55">Signal: {fmtPct(r.nextSignal.signalReturnPct)}</div>
                           <div className="text-white/70">
                             {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
                           </div>
@@ -415,12 +432,8 @@ export default function CryptoPastPerformancePage() {
                       ) : eligibleBase(r) ? (
                         <div className="text-xs">
                           <div className={`font-semibold ${pctClass(openRaw)}`}>{fmtPct(openRaw)}</div>
-                          <div className="text-xs text-white/55">
-                            Signal: {fmtPct(untilSignalHint)}
-                          </div>
-                          <div className="text-white/70">
-                            {openDays != null ? `${openDays}d` : '—'} → Open (no exit yet)
-                          </div>
+                          <div className="text-xs text-white/55">Signal: {fmtPct(side ? signalFromRaw(side, openRaw) : null)}</div>
+                          <div className="text-white/70">{openDays != null ? `${openDays}d` : '—'} → Open (no exit yet)</div>
                           <div className="text-white/55">{r.current?.date}</div>
                         </div>
                       ) : (
@@ -428,35 +441,27 @@ export default function CryptoPastPerformancePage() {
                       )}
                     </td>
 
-                    {/* 7d — MAIN: price change */}
-                    <td className={`px-4 py-3 ${pctClass(show7 ? r.perf.d7Raw : null)}`}>
-                      <div className="font-semibold">{fmtPct(show7 ? r.perf.d7Raw : null)}</div>
-                      <div className="text-xs text-white/55">
-                        Signal: {fmtPct(show7 && side ? signalFromRaw(side, r.perf.d7Raw) : null)}
-                      </div>
+                    {/* Price 7d */}
+                    <td className={`px-4 py-3 ${pctClass(d7Raw)}`}>
+                      <div className="font-semibold">{fmtPct(d7Raw)}</div>
+                      <div className="text-xs text-white/55">Signal: {fmtPct(d7Signal)}</div>
                     </td>
 
-                    {/* 30d — MAIN: price change */}
-                    <td className={`px-4 py-3 ${pctClass(show30 ? r.perf.d30Raw : null)}`}>
-                      <div className="font-semibold">{fmtPct(show30 ? r.perf.d30Raw : null)}</div>
-                      <div className="text-xs text-white/55">
-                        Signal: {fmtPct(show30 && side ? signalFromRaw(side, r.perf.d30Raw) : null)}
-                      </div>
+                    {/* Price 30d */}
+                    <td className={`px-4 py-3 ${pctClass(d30Raw)}`}>
+                      <div className="font-semibold">{fmtPct(d30Raw)}</div>
+                      <div className="text-xs text-white/55">Signal: {fmtPct(d30Signal)}</div>
                     </td>
 
-                    {/* MFE/MAE — MAIN: price change */}
-                    <td className={`px-4 py-3 ${pctClass(mfeRaw)}`}>
-                      <div className="font-semibold">{fmtPct(mfeRaw)}</div>
-                      <div className="text-xs text-white/55">
-                        Signal: {fmtPct(r.untilNext?.mfeSignal ?? null)}
-                      </div>
+                    {/* MFE/MAE (Price) */}
+                    <td className={`px-4 py-3 ${pctClass(mfeRawVal)}`}>
+                      <div className="font-semibold">{fmtPct(mfeRawVal)}</div>
+                      <div className="text-xs text-white/55">Signal: {fmtPct(mfeSignalVal)}</div>
                     </td>
 
-                    <td className={`px-4 py-3 ${pctClass(maeRaw)}`}>
-                      <div className="font-semibold">{fmtPct(maeRaw)}</div>
-                      <div className="text-xs text-white/55">
-                        Signal: {fmtPct(r.untilNext?.maeSignal ?? null)}
-                      </div>
+                    <td className={`px-4 py-3 ${pctClass(maeRawVal)}`}>
+                      <div className="font-semibold">{fmtPct(maeRawVal)}</div>
+                      <div className="text-xs text-white/55">Signal: {fmtPct(maeSignalVal)}</div>
                     </td>
 
                     <td className="px-4 py-3">
@@ -488,7 +493,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Main values show <b>Price change</b> (raw). Small “Signal:” values show direction-aligned performance (BUY = long, SELL = sign flipped).
+        Main numbers show <b>Price</b> (raw). Win rate is computed directionally using <b>Signal</b> (BUY up = win, SELL down = win).
       </div>
     </main>
   )
