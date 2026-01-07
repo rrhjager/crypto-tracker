@@ -27,6 +27,9 @@ const PUBLIC_ALLOW = [
   '/api/crypto-light/indicators',
   '/api/crypto-light/prices',
 
+  // ✅ NEW: Past performance API
+  '/api/past-performance/',
+
   // Market Intel (server-side geaggregeerd)
   '/api/market/',
 

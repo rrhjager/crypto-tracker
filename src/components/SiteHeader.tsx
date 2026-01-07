@@ -63,6 +63,10 @@ export default function SiteHeader() {
   const [stockOpen, setStockOpen] = useState(false)
   const [intelOpen, setIntelOpen] = useState(false)
 
+  // ✅ NEW: Past performance dropdown
+  const [perfOpen, setPerfOpen] = useState(false)
+  const perfRef = useRef<HTMLDivElement>(null)
+
   // ✅ NEW: account dropdown
   const [accountOpen, setAccountOpen] = useState(false)
   const accountRef = useRef<HTMLDivElement>(null)
@@ -127,6 +131,10 @@ export default function SiteHeader() {
       const t = e.target as Node
       if (stockRef.current && !stockRef.current.contains(t)) setStockOpen(false)
       if (intelRef.current && !intelRef.current.contains(t)) setIntelOpen(false)
+
+      // ✅ close past performance dropdown on outside click
+      if (perfRef.current && !perfRef.current.contains(t)) setPerfOpen(false)
+
       // ✅ NEW: close account dropdown on outside click
       if (accountRef.current && !accountRef.current.contains(t)) setAccountOpen(false)
     }
@@ -189,8 +197,8 @@ export default function SiteHeader() {
           <div className="relative" ref={stockRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
-              onClick={() => { setStockOpen(v => !v); setIntelOpen(false) }}
-              onMouseEnter={() => { setStockOpen(true); setIntelOpen(false) }}
+              onClick={() => { setStockOpen(v => !v); setIntelOpen(false); setPerfOpen(false) }}
+              onMouseEnter={() => { setStockOpen(true); setIntelOpen(false); setPerfOpen(false) }}
               aria-haspopup="true"
               aria-expanded={stockOpen}
             >
@@ -226,8 +234,8 @@ export default function SiteHeader() {
           <div className="relative" ref={intelRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
-              onClick={() => { setIntelOpen(v => !v); setStockOpen(false) }}
-              onMouseEnter={() => { setIntelOpen(true); setStockOpen(false) }}
+              onClick={() => { setIntelOpen(v => !v); setStockOpen(false); setPerfOpen(false) }}
+              onMouseEnter={() => { setIntelOpen(true); setStockOpen(false); setPerfOpen(false) }}
               aria-haspopup="true"
               aria-expanded={intelOpen}
             >
@@ -244,6 +252,36 @@ export default function SiteHeader() {
                   { href: '/intel/hedgefunds', label: 'Hedge fund holdings' },
                   { href: '/intel/macro', label: 'Macro calendar' },
                   { href: '/intel/sectors', label: 'Sector performance' },
+                ].map(it => (
+                  <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ✅ NEW: Past performance */}
+          <div className="relative" ref={perfRef}>
+            <button
+              className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
+              onClick={() => { setPerfOpen(v => !v); setStockOpen(false); setIntelOpen(false) }}
+              onMouseEnter={() => { setPerfOpen(true); setStockOpen(false); setIntelOpen(false) }}
+              aria-haspopup="true"
+              aria-expanded={perfOpen}
+            >
+              <span className={rainbow}>Past performance</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+            </button>
+
+            {perfOpen && (
+              <div
+                onMouseLeave={() => setPerfOpen(false)}
+                className="absolute right-0 mt-2 w-60 rounded-2xl border border-white/10 bg-ink shadow-lg p-1"
+              >
+                {[
+                  { href: '/past-performance/crypto', label: 'Crypto past performance' },
+                  { href: '/past-performance/equities', label: 'Equities past performance' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
                     <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
@@ -466,6 +504,24 @@ export default function SiteHeader() {
           >
             <span className={rainbow}>Crypto tracker</span>
           </Link>
+
+          {/* ✅ NEW: Past performance (mobile) */}
+          <div className="rounded-xl px-3 py-2">
+            <div className="text-white/70 mb-2 px-1">Past performance</div>
+            {[
+              { href: '/past-performance/crypto', label: 'Crypto past performance' },
+              { href: '/past-performance/equities', label: 'Equities past performance' },
+            ].map(it => (
+              <Link
+                key={it.href}
+                href={it.href}
+                className="group block rounded-lg px-4 py-3 text-base hover:bg-white/10"
+                onClick={onMobileLinkClick}
+              >
+                <span className={`transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+              </Link>
+            ))}
+          </div>
 
           <div className="rounded-xl px-3 py-2">
             <div className="text-white/70 mb-2 px-1">Stock tracker</div>
