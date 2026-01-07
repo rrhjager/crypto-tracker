@@ -20,10 +20,25 @@ type Row = {
   name: string
   pair: string
   source?: string
+
   current: { date: string; status: Status; score: number; close: number } | null
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
-  perf: { d7Raw: number | null; d7Signal: number | null; d30Raw: number | null; d30Signal: number | null }
+
+  perf: {
+    d7Raw: number | null
+    d7Signal: number | null
+    d30Raw: number | null
+    d30Signal: number | null
+  }
+
   nextSignal: NextSignal | null
+
+  untilNext: {
+    days: number | null
+    mfeSignal: number | null
+    maeSignal: number | null
+  }
+
   error?: string
 }
 
@@ -113,9 +128,12 @@ export default function CryptoPastPerformancePage() {
 
   const rows = data?.rows || []
 
+  // Summary stats (only matured values count)
   const s7 = buildSummary(rows.map(r => r.perf?.d7Signal ?? null))
   const s30 = buildSummary(rows.map(r => r.perf?.d30Signal ?? null))
   const sUntil = buildSummary(rows.map(r => r.nextSignal?.signalReturnPct ?? null))
+  const sMfe = buildSummary(rows.map(r => r.untilNext?.mfeSignal ?? null))
+  const sMae = buildSummary(rows.map(r => r.untilNext?.maeSignal ?? null))
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -125,6 +143,7 @@ export default function CryptoPastPerformancePage() {
           <p className="text-white/70 text-sm">
             We show the most recent BUY/SELL switch per coin. Returns are measured from the <b>signal day close</b>.
             The table uses <b>signal return</b>: BUY = long return, SELL = short/avoid return (sign flipped).
+            7d/30d are only shown if the signal stayed active that long. MFE/MAE are measured until the next signal.
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -133,21 +152,31 @@ export default function CryptoPastPerformancePage() {
       </div>
 
       {/* Summary */}
-      <div className="mb-6 grid md:grid-cols-3 gap-4">
+      <div className="mb-6 grid md:grid-cols-5 gap-4">
         <StatCard
           title="7D Signal Return"
-          subtitle="Direction-aligned return from signal close to close 7 days later."
+          subtitle="Direction-aligned return after 7 days (only if active)."
           stat={s7}
         />
         <StatCard
           title="30D Signal Return"
-          subtitle="Direction-aligned return from signal close to close 30 days later."
+          subtitle="Direction-aligned return after 30 days (only if active)."
           stat={s30}
         />
         <StatCard
           title="Until Next Signal"
-          subtitle="Direction-aligned return from signal close until the model changes status."
+          subtitle="Direction-aligned return until the model changes status."
           stat={sUntil}
+        />
+        <StatCard
+          title="MFE Until Next Signal"
+          subtitle="Best direction-aligned move during the holding period."
+          stat={sMfe}
+        />
+        <StatCard
+          title="MAE Until Next Signal"
+          subtitle="Worst direction-aligned move during the holding period."
+          stat={sMae}
         />
       </div>
 
@@ -168,15 +197,17 @@ export default function CryptoPastPerformancePage() {
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[1000px] w-full text-sm">
+          <table className="min-w-[1250px] w-full text-sm">
             <thead className="bg-black/25 text-white/70">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Coin</th>
                 <th className="text-left px-4 py-3 font-semibold">Last signal</th>
                 <th className="text-left px-4 py-3 font-semibold">Signal score</th>
-                <th className="text-left px-4 py-3 font-semibold">7d signal return</th>
-                <th className="text-left px-4 py-3 font-semibold">30d signal return</th>
-                <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
+                <th className="text-left px-4 py-3 font-semibold">7d</th>
+                <th className="text-left px-4 py-3 font-semibold">30d</th>
+                <th className="text-left px-4 py-3 font-semibold">Until next</th>
+                <th className="text-left px-4 py-3 font-semibold">MFE</th>
+                <th className="text-left px-4 py-3 font-semibold">MAE</th>
                 <th className="text-left px-4 py-3 font-semibold">Current</th>
               </tr>
             </thead>
@@ -238,6 +269,14 @@ export default function CryptoPastPerformancePage() {
                     )}
                   </td>
 
+                  <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.mfeSignal ?? null)}`}>
+                    {fmtPct(r.untilNext?.mfeSignal ?? null)}
+                  </td>
+
+                  <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.maeSignal ?? null)}`}>
+                    {fmtPct(r.untilNext?.maeSignal ?? null)}
+                  </td>
+
                   <td className="px-4 py-3">
                     {r.current ? (
                       <div className="text-xs text-white/70">
@@ -255,7 +294,7 @@ export default function CryptoPastPerformancePage() {
 
               {!rows.length && !isLoading ? (
                 <tr>
-                  <td className="px-4 py-8 text-white/60" colSpan={7}>
+                  <td className="px-4 py-8 text-white/60" colSpan={9}>
                     No data.
                   </td>
                 </tr>
@@ -266,7 +305,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Notes: “Signal return” is direction-aligned (BUY = long, SELL = short/avoid). “—” means the last signal is too recent (not enough forward daily candles), or no next signal has occurred yet.
+        Notes: “Signal return” is direction-aligned (BUY = long, SELL = short/avoid). “—” means the signal is too recent (not enough forward daily candles), or no next signal has occurred yet. MFE/MAE are computed from the signal close until the next signal (or until the latest candle if no next signal yet).
       </div>
     </main>
   )
