@@ -19,7 +19,6 @@ type Row = {
   coin: string
   name: string
   pair: string
-  source?: string
 
   current: { date: string; status: Status; score: number; close: number } | null
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
@@ -68,19 +67,75 @@ function mean(nums: number[]) {
   return nums.reduce((s, x) => s + x, 0) / nums.length
 }
 
-function buildSummary(values: Array<number | null>) {
-  const nums = values.filter((v): v is number => v != null && Number.isFinite(v))
-  const n = nums.length
-  if (n === 0) {
-    return { n: 0, winRate: null as number | null, avg: null as number | null, med: null as number | null }
+type Summary = {
+  nIncluded: number
+  nEligible: number
+  winRate: number | null
+  avg: number | null
+  med: number | null
+}
+
+function buildSummaryFromRows(
+  rows: Row[],
+  getValue: (r: Row) => number | null,
+  isEligible: (r: Row) => boolean
+): Summary {
+  const eligible = rows.filter(isEligible)
+  const vals = eligible.map(getValue).filter((v): v is number => v != null && Number.isFinite(v))
+  const nEligible = eligible.length
+  const nIncluded = vals.length
+  if (nIncluded === 0) {
+    return { nIncluded, nEligible, winRate: null, avg: null, med: null }
   }
-  const wins = nums.filter(v => v > 0).length
+  const wins = vals.filter(v => v > 0).length
   return {
-    n,
-    winRate: (wins / n) * 100,
-    avg: mean(nums),
-    med: median(nums),
+    nIncluded,
+    nEligible,
+    winRate: (wins / nIncluded) * 100,
+    avg: mean(vals),
+    med: median(vals),
   }
+}
+
+function safeDate(d: string | null | undefined) {
+  if (!d) return null
+  const dt = new Date(d + 'T00:00:00Z')
+  if (!Number.isFinite(dt.getTime())) return null
+  return dt
+}
+
+function diffDays(fromISO: string, toISO: string) {
+  const a = safeDate(fromISO)
+  const b = safeDate(toISO)
+  if (!a || !b) return null
+  const ms = b.getTime() - a.getTime()
+  return Math.max(0, Math.round(ms / 86400000))
+}
+
+function pct(from: number, to: number) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return null
+  return ((to / from) - 1) * 100
+}
+
+// BUY: raw return; SELL: flip sign (so down-move becomes positive)
+function signalAlign(side: 'BUY' | 'SELL', raw: number | null) {
+  if (raw == null) return null
+  return side === 'BUY' ? raw : -raw
+}
+
+function isValidBaseRow(r: Row) {
+  if (r.error) return false
+  if (!r.lastSignal) return false
+  if (!r.current) return false
+  if (!Number.isFinite(r.lastSignal.close) || !Number.isFinite(r.current.close)) return false
+  return true
+}
+
+function openSignalReturnToLatest(r: Row): number | null {
+  if (!isValidBaseRow(r)) return null
+  const side = r.lastSignal!.status
+  const raw = pct(r.lastSignal!.close, r.current!.close)
+  return signalAlign(side, raw)
 }
 
 function StatCard({
@@ -90,7 +145,7 @@ function StatCard({
 }: {
   title: string
   subtitle: string
-  stat: { n: number; winRate: number | null; avg: number | null; med: number | null }
+  stat: Summary
 }) {
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
@@ -114,7 +169,9 @@ function StatCard({
         </div>
       </div>
 
-      <div className="mt-2 text-xs text-white/45">Sample size: {stat.n}</div>
+      <div className="mt-2 text-xs text-white/45">
+        Included: {stat.nIncluded} / Eligible: {stat.nEligible}
+      </div>
     </div>
   )
 }
@@ -122,37 +179,36 @@ function StatCard({
 function InfoCard() {
   return (
     <div className="mb-6 rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
-      <div className="text-white/90 font-semibold">How to read this table</div>
+      <div className="text-white/90 font-semibold">What you’re looking at</div>
 
       <div className="mt-2 grid md:grid-cols-3 gap-4 text-sm">
         <div>
           <div className="text-white/80 font-semibold">Signal return</div>
           <div className="text-white/60 text-xs mt-1">
-            Direction-aligned performance: <b>BUY</b> counts up-moves as positive, <b>SELL</b> counts down-moves as positive.
-            This avoids confusing “SELL but price went up” visuals.
+            Direction-aligned performance: <b>BUY</b> treats upward moves as positive, <b>SELL</b> treats downward moves as positive (sign flipped).
+            This keeps the proof intuitive.
           </div>
         </div>
 
         <div>
           <div className="text-white/80 font-semibold">Until next signal</div>
           <div className="text-white/60 text-xs mt-1">
-            The most realistic “strategy view”: performance from the signal day close until the model changes status
-            (to HOLD or the opposite).
+            The “strategy view”: return from the signal day close until the model changes status (to HOLD or the opposite).
+            If no next signal happened yet, we show <b>Open → latest</b> as a live snapshot.
           </div>
         </div>
 
         <div>
-          <div className="text-white/80 font-semibold">MFE / MAE (proof mindset)</div>
+          <div className="text-white/80 font-semibold">MFE / MAE</div>
           <div className="text-white/60 text-xs mt-1">
-            <b>MFE</b> = best move <i>in your direction</i> during the holding period.
-            <b>MAE</b> = worst move <i>against you</i> during the holding period.
-            Ideally you want <b>high MFE</b> and <b>limited MAE</b>—that’s a strong sign the signal had edge and manageable risk.
+            <b>MFE</b> = best move in your direction during the holding period. <b>MAE</b> = worst move against you.
+            Strong signals tend to show <b>high MFE</b> and <b>contained MAE</b> (edge + manageable risk).
           </div>
         </div>
       </div>
 
       <div className="mt-3 text-xs text-white/45">
-        Note: This is past performance and does not guarantee future results. We show it to be transparent and measurable.
+        Past performance is not a guarantee of future results. This page exists to make the signals measurable and transparent.
       </div>
     </div>
   )
@@ -167,12 +223,46 @@ export default function CryptoPastPerformancePage() {
 
   const rows = data?.rows || []
 
-  // Summary stats (only matured values count)
-  const sUntil = buildSummary(rows.map(r => r.nextSignal?.signalReturnPct ?? null))
-  const s7 = buildSummary(rows.map(r => r.perf?.d7Signal ?? null))
-  const s30 = buildSummary(rows.map(r => r.perf?.d30Signal ?? null))
-  const sMfe = buildSummary(rows.map(r => r.untilNext?.mfeSignal ?? null))
-  const sMae = buildSummary(rows.map(r => r.untilNext?.maeSignal ?? null))
+  // Eligibility: only count rows that have a valid signal + current price and no error
+  const eligibleBase = (r: Row) => isValidBaseRow(r)
+
+  // Until next (or latest): use nextSignal if exists, else "open to latest"
+  const untilValue = (r: Row) => {
+    if (!eligibleBase(r)) return null
+    if (r.nextSignal?.signalReturnPct != null && Number.isFinite(r.nextSignal.signalReturnPct)) {
+      return r.nextSignal.signalReturnPct
+    }
+    return openSignalReturnToLatest(r)
+  }
+
+  // Guard horizons in UI + summary (in case of stale cache)
+  const show7d = (r: Row) => {
+    if (!eligibleBase(r)) return false
+    if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 7
+    const days = diffDays(r.lastSignal!.date, r.current!.date)
+    return days != null && days >= 7
+  }
+  const show30d = (r: Row) => {
+    if (!eligibleBase(r)) return false
+    if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 30
+    const days = diffDays(r.lastSignal!.date, r.current!.date)
+    return days != null && days >= 30
+  }
+
+  // Summaries (exclude nulls automatically; exclude bad rows via eligibleBase)
+  const sUntil = buildSummaryFromRows(rows, untilValue, eligibleBase)
+  const s7 = buildSummaryFromRows(
+    rows,
+    r => (show7d(r) ? (r.perf?.d7Signal ?? null) : null),
+    eligibleBase
+  )
+  const s30 = buildSummaryFromRows(
+    rows,
+    r => (show30d(r) ? (r.perf?.d30Signal ?? null) : null),
+    eligibleBase
+  )
+  const sMfe = buildSummaryFromRows(rows, r => r.untilNext?.mfeSignal ?? null, eligibleBase)
+  const sMae = buildSummaryFromRows(rows, r => r.untilNext?.maeSignal ?? null, eligibleBase)
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -180,8 +270,7 @@ export default function CryptoPastPerformancePage() {
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
           <p className="text-white/70 text-sm">
-            A transparent track record for our BUY/SELL signals (daily timeframe). The key column is <b>Until next signal</b>—
-            it reflects what happened before the model changed its mind.
+            A transparent track record for our BUY/SELL signals (daily timeframe). Start with <b>Until next signal</b> to see what happened before the model changed its mind.
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -189,34 +278,33 @@ export default function CryptoPastPerformancePage() {
         </Link>
       </div>
 
-      {/* Visitor-friendly explanation */}
       <InfoCard />
 
       {/* Summary */}
       <div className="mb-6 grid md:grid-cols-5 gap-4">
         <StatCard
-          title="Until Next Signal"
-          subtitle="Direction-aligned return until the model changes status."
+          title="Until Next (or Latest)"
+          subtitle="Closed at next signal, or open performance to the latest close."
           stat={sUntil}
         />
         <StatCard
           title="7D Signal Return"
-          subtitle="After 7 days (only if signal stayed active ≥7d)."
+          subtitle="Only when the signal stayed active (or existed) for ≥7 days."
           stat={s7}
         />
         <StatCard
           title="30D Signal Return"
-          subtitle="After 30 days (only if signal stayed active ≥30d)."
+          subtitle="Only when the signal stayed active (or existed) for ≥30 days."
           stat={s30}
         />
         <StatCard
-          title="MFE Until Next Signal"
-          subtitle="Best direction-aligned move during the holding period."
+          title="MFE Until Next"
+          subtitle="Best move in your direction during the holding period."
           stat={sMfe}
         />
         <StatCard
-          title="MAE Until Next Signal"
-          subtitle="Worst direction-aligned move during the holding period."
+          title="MAE Until Next"
+          subtitle="Worst move against you during the holding period."
           stat={sMae}
         />
       </div>
@@ -238,14 +326,13 @@ export default function CryptoPastPerformancePage() {
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[1300px] w-full text-sm">
+          <table className="min-w-[1350px] w-full text-sm">
             <thead className="bg-black/25 text-white/70">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Coin</th>
                 <th className="text-left px-4 py-3 font-semibold">Last signal</th>
                 <th className="text-left px-4 py-3 font-semibold">Signal score</th>
 
-                {/* ✅ requested: Until next signal immediately after score */}
                 <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
 
                 <th className="text-left px-4 py-3 font-semibold">7d</th>
@@ -257,85 +344,102 @@ export default function CryptoPastPerformancePage() {
             </thead>
 
             <tbody className="divide-y divide-white/10">
-              {rows.map((r) => (
-                <tr key={r.pair} className="hover:bg-white/[0.03]">
-                  <td className="px-4 py-3">
-                    <div className="text-white/90 font-semibold">{r.coin}</div>
-                    <div className="text-xs text-white/55">{r.name}</div>
-                  </td>
+              {rows.map((r) => {
+                const openRet = openSignalReturnToLatest(r)
+                const openDays =
+                  r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
 
-                  <td className="px-4 py-3">
-                    {r.error ? (
-                      <span className="text-red-200 text-xs">{r.error}</span>
-                    ) : r.lastSignal ? (
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`text-xs px-2 py-1 rounded ${
-                            r.lastSignal.status === 'BUY'
-                              ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
-                              : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
-                          }`}
-                        >
-                          → {r.lastSignal.status}
-                        </span>
-                        <span className="text-white/80">{r.lastSignal.date}</span>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
-                    )}
-                  </td>
+                const show7 = show7d(r)
+                const show30 = show30d(r)
 
-                  <td className="px-4 py-3 text-white/80">
-                    {r.lastSignal ? r.lastSignal.score : '—'}
-                  </td>
+                return (
+                  <tr key={r.pair} className="hover:bg-white/[0.03]">
+                    <td className="px-4 py-3">
+                      <div className="text-white/90 font-semibold">{r.coin}</div>
+                      <div className="text-xs text-white/55">{r.name}</div>
+                    </td>
 
-                  {/* ✅ Until next signal (moved here) */}
-                  <td className="px-4 py-3">
-                    {r.nextSignal ? (
-                      <div className="text-xs">
-                        <div className={`font-semibold ${pctClass(r.nextSignal.signalReturnPct)}`}>
-                          {fmtPct(r.nextSignal.signalReturnPct)}
+                    <td className="px-4 py-3">
+                      {r.error ? (
+                        <span className="text-red-200 text-xs">{r.error}</span>
+                      ) : r.lastSignal ? (
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-xs px-2 py-1 rounded ${
+                              r.lastSignal.status === 'BUY'
+                                ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
+                                : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
+                            }`}
+                          >
+                            → {r.lastSignal.status}
+                          </span>
+                          <span className="text-white/80">{r.lastSignal.date}</span>
                         </div>
-                        <div className="text-white/70">
-                          {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
+                      ) : (
+                        <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
+                      )}
+                    </td>
+
+                    <td className="px-4 py-3 text-white/80">
+                      {r.lastSignal ? r.lastSignal.score : '—'}
+                    </td>
+
+                    {/* Until next signal */}
+                    <td className="px-4 py-3">
+                      {r.nextSignal ? (
+                        <div className="text-xs">
+                          <div className={`font-semibold ${pctClass(r.nextSignal.signalReturnPct)}`}>
+                            {fmtPct(r.nextSignal.signalReturnPct)}
+                          </div>
+                          <div className="text-white/70">
+                            {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
+                          </div>
+                          <div className="text-white/55">{r.nextSignal.date}</div>
                         </div>
-                        <div className="text-white/55">{r.nextSignal.date}</div>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">—</span>
-                    )}
-                  </td>
-
-                  <td className={`px-4 py-3 font-semibold ${pctClass(r.perf.d7Signal)}`}>
-                    {fmtPct(r.perf.d7Signal)}
-                  </td>
-
-                  <td className={`px-4 py-3 font-semibold ${pctClass(r.perf.d30Signal)}`}>
-                    {fmtPct(r.perf.d30Signal)}
-                  </td>
-
-                  <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.mfeSignal ?? null)}`}>
-                    {fmtPct(r.untilNext?.mfeSignal ?? null)}
-                  </td>
-
-                  <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.maeSignal ?? null)}`}>
-                    {fmtPct(r.untilNext?.maeSignal ?? null)}
-                  </td>
-
-                  <td className="px-4 py-3">
-                    {r.current ? (
-                      <div className="text-xs text-white/70">
-                        <div className="text-white/85 font-semibold">
-                          {r.current.status} (score {r.current.score})
+                      ) : eligibleBase(r) ? (
+                        <div className="text-xs">
+                          <div className={`font-semibold ${pctClass(openRet)}`}>{fmtPct(openRet)}</div>
+                          <div className="text-white/70">
+                            {openDays != null ? `${openDays}d` : '—'} → Open (no exit yet)
+                          </div>
+                          <div className="text-white/55">{r.current?.date}</div>
                         </div>
-                        <div>{r.current.date}</div>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      ) : (
+                        <span className="text-white/50 text-xs">—</span>
+                      )}
+                    </td>
+
+                    <td className={`px-4 py-3 font-semibold ${pctClass(show7 ? r.perf.d7Signal : null)}`}>
+                      {fmtPct(show7 ? r.perf.d7Signal : null)}
+                    </td>
+
+                    <td className={`px-4 py-3 font-semibold ${pctClass(show30 ? r.perf.d30Signal : null)}`}>
+                      {fmtPct(show30 ? r.perf.d30Signal : null)}
+                    </td>
+
+                    <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.mfeSignal ?? null)}`}>
+                      {fmtPct(r.untilNext?.mfeSignal ?? null)}
+                    </td>
+
+                    <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.maeSignal ?? null)}`}>
+                      {fmtPct(r.untilNext?.maeSignal ?? null)}
+                    </td>
+
+                    <td className="px-4 py-3">
+                      {r.current ? (
+                        <div className="text-xs text-white/70">
+                          <div className="text-white/85 font-semibold">
+                            {r.current.status} (score {r.current.score})
+                          </div>
+                          <div>{r.current.date}</div>
+                        </div>
+                      ) : (
+                        <span className="text-white/50 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
 
               {!rows.length && !isLoading ? (
                 <tr>
@@ -350,7 +454,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        “—” means the signal is too recent (not enough daily candles yet) or no next signal has occurred. MFE/MAE are computed from the signal close until the next signal (or until the latest candle if no next signal yet).
+        “—” means insufficient history / too recent / or missing data. Summary cards exclude rows with errors and rows without a valid last signal + current price.
       </div>
     </main>
   )
