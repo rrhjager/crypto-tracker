@@ -7,24 +7,45 @@ import { getOrRefreshSnap, snapKey } from '@/lib/kvSnap'
 import { COINS } from '@/lib/coins'
 import { computeScoreStatus, Status as UiStatus } from '@/lib/taScore'
 
-// ✅ exact same indicator calc + same source chain (copied from existing code)
+// exact same indicator calc + same source chain (copied from existing code)
 import { fetchMarketDataFor, computeIndicators } from '@/lib/pastPerformance/cryptoIndicatorsExact'
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
 const toISODate = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 
+type Status = UiStatus // 'BUY' | 'HOLD' | 'SELL'
+
+type NextSignal = {
+  date: string
+  status: Status
+  score: number
+  close: number
+  daysFromSignal: number
+  rawReturnPct: number | null
+  signalReturnPct: number | null
+}
+
 type Row = {
-  coin: string        // BTC
-  name: string        // Bitcoin
-  pair: string        // BTCUSDT
+  coin: string
+  name: string
+  pair: string
   source?: string
-  current: { date: string; status: UiStatus; score: number; close: number } | null
+
+  current: { date: string; status: Status; score: number; close: number } | null
+
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
+
+  // Returns are computed FROM the signal day close to the close X days later.
   perf: {
-    h24: number | null
-    d7: number | null
-    d30: number | null
+    d7Raw: number | null
+    d7Signal: number | null
+    d30Raw: number | null
+    d30Signal: number | null
   }
+
+  // First day AFTER the signal where the model changes away from BUY/SELL (to HOLD or opposite).
+  nextSignal: NextSignal | null
+
   error?: string
 }
 
@@ -33,21 +54,21 @@ function pct(from: number, to: number) {
   return ((to / from) - 1) * 100
 }
 
-// Find latest event day index where status switched into BUY or SELL.
-// We compute day-by-day status using a rolling 200-candle window, scanning backward.
-async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
+function signalAlign(status: 'BUY' | 'SELL', raw: number | null): number | null {
+  if (raw == null) return null
+  return status === 'BUY' ? raw : -raw
+}
+
+async function computeOne(pair: string): Promise<{ row: Row }> {
   const coinObj = COINS.find(c => c.pairUSD?.binance?.toUpperCase() === pair.toUpperCase())
   const coin = coinObj?.symbol || pair.replace(/USDT$/, '')
   const name = coinObj?.name || coin
 
-  // Enough history so we can find a previous switch and still have forward 30d.
-  // We still compute signals using the SAME 200-day window per day.
   const LOOKBACK = 900
   const WINDOW = 200
 
   const got = await fetchMarketDataFor(pair.toUpperCase(), { limit: LOOKBACK })
 
-  // ✅ TS-safe narrowing (fixes "Property 'error' does not exist" build error)
   if (got.ok === false) {
     const err = got.error
     return {
@@ -57,7 +78,8 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
         pair,
         current: null,
         lastSignal: null,
-        perf: { h24: null, d7: null, d30: null },
+        perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+        nextSignal: null,
         error: err,
       },
     }
@@ -75,14 +97,15 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
         source: got.source,
         current: null,
         lastSignal: null,
-        perf: { h24: null, d7: null, d30: null },
+        perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+        nextSignal: null,
         error: 'Not enough history',
       },
     }
   }
 
-  // helper: compute status/score for day index i using last 200 candles ending at i
-  const calcAt = (i: number): { status: UiStatus; score: number } => {
+  // compute status/score for day index i using last 200 candles ending at i
+  const calcAt = (i: number): { status: Status; score: number } => {
     const from = i - (WINDOW - 1)
     const cWin = closes.slice(from, i + 1)
     const vWin = volumes.slice(from, i + 1)
@@ -98,7 +121,7 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
     return { score, status }
   }
 
-  // Compute current (last candle)
+  // Current
   const lastIdx = n - 1
   const cur = calcAt(lastIdx)
   const current = {
@@ -108,28 +131,22 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
     close: closes[lastIdx],
   }
 
-  // Scan backward to find latest day where status switched into BUY or SELL.
+  // Find most recent transition INTO BUY or SELL
   let eventIdx: number | null = null
   let eventScore = 50
-  let eventStatus: UiStatus | null = null
+  let eventStatus: Status | null = null
 
-  // Compute status for most recent day first (cur day)
   let curIdx = lastIdx
   let curState = cur
 
   for (let i = lastIdx - 1; i >= WINDOW - 1; i--) {
     const prevState = calcAt(i)
-
-    // Transition into BUY/SELL happens on curIdx:
-    // status[curIdx] != status[i] where i = curIdx-1
     if (curState.status !== prevState.status && (curState.status === 'BUY' || curState.status === 'SELL')) {
       eventIdx = curIdx
       eventScore = curState.score
       eventStatus = curState.status
       break
     }
-
-    // step backward
     curIdx = i
     curState = prevState
   }
@@ -143,23 +160,42 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
         source: got.source,
         current,
         lastSignal: null,
-        perf: { h24: null, d7: null, d30: null },
+        perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+        nextSignal: null,
       },
     }
   }
 
+  const signalSide = eventStatus as 'BUY' | 'SELL'
   const eventClose = closes[eventIdx]
   const lastSignal = {
     date: toISODate(times[eventIdx]),
-    status: eventStatus as 'BUY' | 'SELL',
+    status: signalSide,
     score: eventScore,
     close: eventClose,
   }
 
-  const perf = {
-    h24: (eventIdx + 1 < n) ? pct(eventClose, closes[eventIdx + 1]) : null,
-    d7:  (eventIdx + 7 < n) ? pct(eventClose, closes[eventIdx + 7]) : null,
-    d30: (eventIdx + 30 < n) ? pct(eventClose, closes[eventIdx + 30]) : null,
+  const d7Raw = (eventIdx + 7 < n) ? pct(eventClose, closes[eventIdx + 7]) : null
+  const d30Raw = (eventIdx + 30 < n) ? pct(eventClose, closes[eventIdx + 30]) : null
+
+  // Find first day AFTER signal where status changes away from BUY/SELL
+  let nextSignal: NextSignal | null = null
+  for (let j = eventIdx + 1; j < n; j++) {
+    if (j < WINDOW - 1) continue
+    const st = calcAt(j)
+    if (st.status !== eventStatus) {
+      const raw = pct(eventClose, closes[j])
+      nextSignal = {
+        date: toISODate(times[j]),
+        status: st.status,
+        score: st.score,
+        close: closes[j],
+        daysFromSignal: j - eventIdx,
+        rawReturnPct: raw,
+        signalReturnPct: signalAlign(signalSide, raw),
+      }
+      break
+    }
   }
 
   return {
@@ -170,7 +206,13 @@ async function computeOne(pair: string): Promise<{ row: Row; debug?: any }> {
       source: got.source,
       current,
       lastSignal,
-      perf,
+      perf: {
+        d7Raw,
+        d7Signal: signalAlign(signalSide, d7Raw),
+        d30Raw,
+        d30Signal: signalAlign(signalSide, d30Raw),
+      },
+      nextSignal,
     },
   }
 }
@@ -185,7 +227,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:v1')
+    const kvKey = snapKey.custom('pastperf:crypto:v2') // bump version because payload changed
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]
@@ -195,13 +237,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (let bi = 0; bi < batches.length; bi++) {
         const group = batches[bi]
-        const groupRows = await Promise.all(group.map(async (pair) => {
-          const { row } = await computeOne(pair)
-          return row
-        }))
+        const groupRows = await Promise.all(group.map(async (pair) => (await computeOne(pair)).row))
         rows.push(...groupRows)
 
-        // throttle like your existing crypto endpoints
         if (bi < batches.length - 1) await sleep(650)
       }
 
@@ -209,8 +247,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         meta: {
           computedAt: Date.now(),
           note:
-            'Past performance uses the exact same indicator calculation code as crypto-light/indicators (copied unchanged), and the exact same score/status via lib/taScore.computeScoreStatus(). Signals are evaluated on DAILY candles with a rolling 200-candle window.',
-          horizons: ['24h', '7d', '30d'],
+            'Signals use the exact same indicator calculation as crypto-light/indicators (copied unchanged) and the exact same score/status via lib/taScore.computeScoreStatus(). Signals are evaluated on DAILY candles with a rolling 200-candle window. Returns are computed from the signal day close to the close 7/30 days later. "Signal return" is direction-aligned: BUY = long return, SELL = short/avoid return (sign flipped).',
+          horizons: ['7d', '30d', 'until next signal'],
         },
         rows,
       }
