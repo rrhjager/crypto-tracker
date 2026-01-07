@@ -123,6 +123,12 @@ function signalAlign(side: 'BUY' | 'SELL', raw: number | null) {
   return side === 'BUY' ? raw : -raw
 }
 
+// signal -> raw (inverse mapping)
+function rawFromSignal(side: 'BUY' | 'SELL', signal: number | null) {
+  if (signal == null) return null
+  return side === 'BUY' ? signal : -signal
+}
+
 function isValidBaseRow(r: Row) {
   if (r.error) return false
   if (!r.lastSignal) return false
@@ -131,10 +137,15 @@ function isValidBaseRow(r: Row) {
   return true
 }
 
+function openRawReturnToLatest(r: Row): number | null {
+  if (!isValidBaseRow(r)) return null
+  return pct(r.lastSignal!.close, r.current!.close)
+}
+
 function openSignalReturnToLatest(r: Row): number | null {
   if (!isValidBaseRow(r)) return null
   const side = r.lastSignal!.status
-  const raw = pct(r.lastSignal!.close, r.current!.close)
+  const raw = openRawReturnToLatest(r)
   return signalAlign(side, raw)
 }
 
@@ -183,18 +194,18 @@ function InfoCard() {
 
       <div className="mt-2 grid md:grid-cols-3 gap-4 text-sm">
         <div>
-          <div className="text-white/80 font-semibold">Signal return</div>
+          <div className="text-white/80 font-semibold">Signal return vs. price change</div>
           <div className="text-white/60 text-xs mt-1">
-            Direction-aligned performance: <b>BUY</b> treats upward moves as positive, <b>SELL</b> treats downward moves as positive (sign flipped).
-            This keeps the proof intuitive.
+            We show both: <b>Signal return</b> (direction-aligned) and <b>Price change</b> (raw).
+            For <b>SELL</b>, signal return flips the sign so a price drop becomes a positive “signal win”.
           </div>
         </div>
 
         <div>
           <div className="text-white/80 font-semibold">Until next signal</div>
           <div className="text-white/60 text-xs mt-1">
-            The “strategy view”: return from the signal day close until the model changes status (to HOLD or the opposite).
-            If no next signal happened yet, we show <b>Open → latest</b> as a live snapshot.
+            The “strategy view”: performance from the signal day close until the model changes status (to HOLD or the opposite).
+            If no next signal happened yet, we show <b>Open → latest</b>.
           </div>
         </div>
 
@@ -202,7 +213,7 @@ function InfoCard() {
           <div className="text-white/80 font-semibold">MFE / MAE</div>
           <div className="text-white/60 text-xs mt-1">
             <b>MFE</b> = best move in your direction during the holding period. <b>MAE</b> = worst move against you.
-            Strong signals tend to show <b>high MFE</b> and <b>contained MAE</b> (edge + manageable risk).
+            Strong signals tend to show <b>high MFE</b> with <b>limited MAE</b>.
           </div>
         </div>
       </div>
@@ -227,7 +238,7 @@ export default function CryptoPastPerformancePage() {
   const eligibleBase = (r: Row) => isValidBaseRow(r)
 
   // Until next (or latest): use nextSignal if exists, else "open to latest"
-  const untilValue = (r: Row) => {
+  const untilSignalValue = (r: Row) => {
     if (!eligibleBase(r)) return null
     if (r.nextSignal?.signalReturnPct != null && Number.isFinite(r.nextSignal.signalReturnPct)) {
       return r.nextSignal.signalReturnPct
@@ -249,8 +260,8 @@ export default function CryptoPastPerformancePage() {
     return days != null && days >= 30
   }
 
-  // Summaries (exclude nulls automatically; exclude bad rows via eligibleBase)
-  const sUntil = buildSummaryFromRows(rows, untilValue, eligibleBase)
+  // Summaries (signal-return, because it reflects the indicator's intended direction)
+  const sUntil = buildSummaryFromRows(rows, untilSignalValue, eligibleBase)
   const s7 = buildSummaryFromRows(
     rows,
     r => (show7d(r) ? (r.perf?.d7Signal ?? null) : null),
@@ -270,7 +281,7 @@ export default function CryptoPastPerformancePage() {
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
           <p className="text-white/70 text-sm">
-            A transparent track record for our BUY/SELL signals (daily timeframe). Start with <b>Until next signal</b> to see what happened before the model changed its mind.
+            A transparent track record for our BUY/SELL signals (daily timeframe). We show <b>both signal performance</b> and the <b>actual price move</b>.
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -284,7 +295,7 @@ export default function CryptoPastPerformancePage() {
       <div className="mb-6 grid md:grid-cols-5 gap-4">
         <StatCard
           title="Until Next (or Latest)"
-          subtitle="Closed at next signal, or open performance to the latest close."
+          subtitle="Signal return: closed at next signal, or open performance to the latest close."
           stat={sUntil}
         />
         <StatCard
@@ -326,7 +337,7 @@ export default function CryptoPastPerformancePage() {
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-[1350px] w-full text-sm">
+          <table className="min-w-[1500px] w-full text-sm">
             <thead className="bg-black/25 text-white/70">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Coin</th>
@@ -345,12 +356,19 @@ export default function CryptoPastPerformancePage() {
 
             <tbody className="divide-y divide-white/10">
               {rows.map((r) => {
-                const openRet = openSignalReturnToLatest(r)
+                const openSignal = openSignalReturnToLatest(r)
+                const openRaw = openRawReturnToLatest(r)
                 const openDays =
                   r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
 
                 const show7 = show7d(r)
                 const show30 = show30d(r)
+
+                const side = r.lastSignal?.status
+
+                // Derive raw equivalents for MFE/MAE so visitors see the real price move too
+                const mfeRaw = side ? rawFromSignal(side, r.untilNext?.mfeSignal ?? null) : null
+                const maeRaw = side ? rawFromSignal(side, r.untilNext?.maeSignal ?? null) : null
 
                 return (
                   <tr key={r.pair} className="hover:bg-white/[0.03]">
@@ -391,6 +409,9 @@ export default function CryptoPastPerformancePage() {
                           <div className={`font-semibold ${pctClass(r.nextSignal.signalReturnPct)}`}>
                             {fmtPct(r.nextSignal.signalReturnPct)}
                           </div>
+                          <div className="text-xs text-white/55">
+                            Price: {fmtPct(r.nextSignal.rawReturnPct)}
+                          </div>
                           <div className="text-white/70">
                             {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
                           </div>
@@ -398,7 +419,8 @@ export default function CryptoPastPerformancePage() {
                         </div>
                       ) : eligibleBase(r) ? (
                         <div className="text-xs">
-                          <div className={`font-semibold ${pctClass(openRet)}`}>{fmtPct(openRet)}</div>
+                          <div className={`font-semibold ${pctClass(openSignal)}`}>{fmtPct(openSignal)}</div>
+                          <div className="text-xs text-white/55">Price: {fmtPct(openRaw)}</div>
                           <div className="text-white/70">
                             {openDays != null ? `${openDays}d` : '—'} → Open (no exit yet)
                           </div>
@@ -409,20 +431,28 @@ export default function CryptoPastPerformancePage() {
                       )}
                     </td>
 
-                    <td className={`px-4 py-3 font-semibold ${pctClass(show7 ? r.perf.d7Signal : null)}`}>
-                      {fmtPct(show7 ? r.perf.d7Signal : null)}
+                    <td className={`px-4 py-3 ${pctClass(show7 ? r.perf.d7Signal : null)}`}>
+                      <div className="font-semibold">{fmtPct(show7 ? r.perf.d7Signal : null)}</div>
+                      <div className="text-xs text-white/55">
+                        Price: {fmtPct(show7 ? r.perf.d7Raw : null)}
+                      </div>
                     </td>
 
-                    <td className={`px-4 py-3 font-semibold ${pctClass(show30 ? r.perf.d30Signal : null)}`}>
-                      {fmtPct(show30 ? r.perf.d30Signal : null)}
+                    <td className={`px-4 py-3 ${pctClass(show30 ? r.perf.d30Signal : null)}`}>
+                      <div className="font-semibold">{fmtPct(show30 ? r.perf.d30Signal : null)}</div>
+                      <div className="text-xs text-white/55">
+                        Price: {fmtPct(show30 ? r.perf.d30Raw : null)}
+                      </div>
                     </td>
 
-                    <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.mfeSignal ?? null)}`}>
-                      {fmtPct(r.untilNext?.mfeSignal ?? null)}
+                    <td className={`px-4 py-3 ${pctClass(r.untilNext?.mfeSignal ?? null)}`}>
+                      <div className="font-semibold">{fmtPct(r.untilNext?.mfeSignal ?? null)}</div>
+                      <div className="text-xs text-white/55">Price: {fmtPct(mfeRaw)}</div>
                     </td>
 
-                    <td className={`px-4 py-3 font-semibold ${pctClass(r.untilNext?.maeSignal ?? null)}`}>
-                      {fmtPct(r.untilNext?.maeSignal ?? null)}
+                    <td className={`px-4 py-3 ${pctClass(r.untilNext?.maeSignal ?? null)}`}>
+                      <div className="font-semibold">{fmtPct(r.untilNext?.maeSignal ?? null)}</div>
+                      <div className="text-xs text-white/55">Price: {fmtPct(maeRaw)}</div>
                     </td>
 
                     <td className="px-4 py-3">
@@ -454,7 +484,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        “—” means insufficient history / too recent / or missing data. Summary cards exclude rows with errors and rows without a valid last signal + current price.
+        “Signal return” is direction-aligned (BUY = long, SELL = short/avoid). “Price” shows the raw price move. Summary cards exclude rows with errors and rows without a valid last signal + current price.
       </div>
     </main>
   )
