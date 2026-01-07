@@ -35,7 +35,8 @@ type Row = {
 
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
 
-  // Returns are computed FROM the signal day close to the close X days later.
+  // Returns are computed FROM the signal day close to the close X days later,
+  // but only if the signal stayed active for that long (otherwise null).
   perf: {
     d7Raw: number | null
     d7Signal: number | null
@@ -45,6 +46,13 @@ type Row = {
 
   // First day AFTER the signal where the model changes away from BUY/SELL (to HOLD or opposite).
   nextSignal: NextSignal | null
+
+  // ✅ Added: path stats until next signal (direction-aligned)
+  untilNext: {
+    days: number | null
+    mfeSignal: number | null // max favorable excursion (best)
+    maeSignal: number | null // max adverse excursion (worst)
+  }
 
   error?: string
 }
@@ -80,6 +88,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         lastSignal: null,
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
+        untilNext: { days: null, mfeSignal: null, maeSignal: null },
         error: err,
       },
     }
@@ -99,6 +108,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         lastSignal: null,
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
+        untilNext: { days: null, mfeSignal: null, maeSignal: null },
         error: 'Not enough history',
       },
     }
@@ -162,6 +172,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         lastSignal: null,
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
+        untilNext: { days: null, mfeSignal: null, maeSignal: null },
       },
     }
   }
@@ -175,11 +186,10 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
     close: eventClose,
   }
 
-  const d7Raw = (eventIdx + 7 < n) ? pct(eventClose, closes[eventIdx + 7]) : null
-  const d30Raw = (eventIdx + 30 < n) ? pct(eventClose, closes[eventIdx + 30]) : null
-
   // Find first day AFTER signal where status changes away from BUY/SELL
   let nextSignal: NextSignal | null = null
+  let endIdxExclusive = n // if no next signal, holding period runs to last candle
+
   for (let j = eventIdx + 1; j < n; j++) {
     if (j < WINDOW - 1) continue
     const st = calcAt(j)
@@ -194,8 +204,40 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         rawReturnPct: raw,
         signalReturnPct: signalAlign(signalSide, raw),
       }
+      endIdxExclusive = j + 1 // include day j in the scan range below
       break
     }
+  }
+
+  // ✅ Only show horizon returns if the signal actually lasted that long
+  const lastedAtLeast = (days: number) => !nextSignal || nextSignal.daysFromSignal >= days
+
+  const d7Raw = (eventIdx + 7 < n && lastedAtLeast(7)) ? pct(eventClose, closes[eventIdx + 7]) : null
+  const d30Raw = (eventIdx + 30 < n && lastedAtLeast(30)) ? pct(eventClose, closes[eventIdx + 30]) : null
+
+  // ✅ MFE/MAE until next signal (direction-aligned)
+  // Range: from day AFTER signal (eventIdx+1) up to next signal day (inclusive),
+  // or up to last candle if no next signal yet.
+  let mfe: number | null = null
+  let mae: number | null = null
+
+  const scanFrom = eventIdx + 1
+  const scanTo = Math.min(endIdxExclusive - 1, n - 1)
+
+  if (scanFrom <= scanTo) {
+    for (let k = scanFrom; k <= scanTo; k++) {
+      const raw = pct(eventClose, closes[k])
+      const sig = signalAlign(signalSide, raw)
+      if (sig == null) continue
+      if (mfe == null || sig > mfe) mfe = sig
+      if (mae == null || sig < mae) mae = sig
+    }
+  }
+
+  const untilNext = {
+    days: nextSignal ? nextSignal.daysFromSignal : (n - 1 - eventIdx),
+    mfeSignal: mfe,
+    maeSignal: mae,
   }
 
   return {
@@ -213,6 +255,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         d30Signal: signalAlign(signalSide, d30Raw),
       },
       nextSignal,
+      untilNext,
     },
   }
 }
@@ -227,7 +270,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:v2') // bump version because payload changed
+    const kvKey = snapKey.custom('pastperf:crypto:v3') // bump: horizons filtered + untilNext stats
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]
@@ -247,8 +290,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         meta: {
           computedAt: Date.now(),
           note:
-            'Signals use the exact same indicator calculation as crypto-light/indicators (copied unchanged) and the exact same score/status via lib/taScore.computeScoreStatus(). Signals are evaluated on DAILY candles with a rolling 200-candle window. Returns are computed from the signal day close to the close 7/30 days later. "Signal return" is direction-aligned: BUY = long return, SELL = short/avoid return (sign flipped).',
-          horizons: ['7d', '30d', 'until next signal'],
+            'Signals use the exact same indicator calculation as crypto-light/indicators (copied unchanged) and the exact same score/status via lib/taScore.computeScoreStatus(). Signals are evaluated on DAILY candles with a rolling 200-candle window. 7d/30d returns are only shown if the signal stayed active for at least that many days. "Signal return" is direction-aligned: BUY = long return, SELL = short/avoid return (sign flipped). "MFE/MAE" show the best/worst direction-aligned move until the next signal.',
+          horizons: ['7d (if active)', '30d (if active)', 'until next signal', 'MFE/MAE until next signal'],
         },
         rows,
       }
