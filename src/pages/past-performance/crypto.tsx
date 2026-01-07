@@ -45,7 +45,7 @@ export default function CryptoPastPerformancePage() {
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
           <p className="text-white/70 text-sm">
-            Per crypto tonen we de <b>laatste BUY/SELL switch</b> en de return <b>24h / 7d / 30d</b> daarna (daily close-to-close).
+            For each coin, we show the <b>most recent BUY/SELL switch</b> and the return <b>24h / 7d / 30d</b> after that signal (daily close-to-close).
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -153,7 +153,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Cells are “—” when the signal is too recent (not enough forward days yet). This still uses real historical candles.
+        “—” means the last signal is too recent (not enough forward daily candles yet). Returns are calculated from the signal day close to the close 1 / 7 / 30 days later.
       </div>
     </main>
   )
