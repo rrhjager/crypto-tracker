@@ -196,6 +196,8 @@ function ClosedPnlCard({
   roi1x,
   pnl3x,
   roi3x,
+  pnl10x,
+  roi10x,
   n,
   totalInvested,
 }: {
@@ -205,6 +207,8 @@ function ClosedPnlCard({
   roi1x: number | null
   pnl3x: number
   roi3x: number | null
+  pnl10x: number
+  roi10x: number | null
   n: number
   totalInvested: number
 }) {
@@ -230,20 +234,38 @@ function ClosedPnlCard({
         </div>
       </div>
 
-      {/* 3x (smaller, underneath) */}
+      {/* 3x + 10x (smaller, underneath) */}
       <div className="mt-3 rounded-xl bg-white/[0.03] ring-1 ring-white/10 p-3">
         <div className="flex items-center justify-between">
-          <div className="text-white/70 text-xs font-semibold">3x leveraged (simulated)</div>
+          <div className="text-white/70 text-xs font-semibold">Leveraged (simulated)</div>
           <div className="text-xs text-white/45">Floor at -100%</div>
         </div>
 
-        <div className={`text-base font-extrabold mt-1 ${pnl3x >= 0 ? 'text-green-200' : 'text-red-200'}`}>
-          {fmtEur(pnl3x)}
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          <div className="rounded-lg bg-black/15 ring-1 ring-white/10 p-2">
+            <div className="text-xs text-white/60 font-semibold">3x</div>
+            <div className={`text-sm font-extrabold mt-1 ${pnl3x >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+              {fmtEur(pnl3x)}
+            </div>
+            <div className="text-xs text-white/70 mt-1">
+              ROI: <span className={pctClassBySign(roi3x)}>{fmtPct(roi3x)}</span>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-black/15 ring-1 ring-white/10 p-2">
+            <div className="text-xs text-white/60 font-semibold">10x</div>
+            <div className={`text-sm font-extrabold mt-1 ${pnl10x >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+              {fmtEur(pnl10x)}
+            </div>
+            <div className="text-xs text-white/70 mt-1">
+              ROI: <span className={pctClassBySign(roi10x)}>{fmtPct(roi10x)}</span>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-1 text-xs text-white/70">
-          ROI:{' '}
-          <span className={pctClassBySign(roi3x)}>{fmtPct(roi3x)}</span>
+        <div className="mt-2 text-[11px] text-white/45">
+          Note: This is a simplified simulation (leverage × return, max loss capped at -100% per trade). Real liquidation
+          depends on exchange rules, funding, fees, and intraday moves.
         </div>
       </div>
 
@@ -325,10 +347,12 @@ export default function CryptoPastPerformancePage() {
 
   // Closed-only €10 P&L (directional)
   const betEur = 10
-  const leverage = 3
+  const lev3 = 3
+  const lev10 = 10
 
   let pnl1x = 0
   let pnl3x = 0
+  let pnl10x = 0
   let nClosed = 0
 
   for (const r of rows) {
@@ -346,8 +370,12 @@ export default function CryptoPastPerformancePage() {
     pnl1x += (betEur * aligned) / 100
 
     // 3x simulated with -100% floor (max loss = full stake)
-    const aligned3 = Math.max(-100, aligned * leverage)
+    const aligned3 = Math.max(-100, aligned * lev3)
     pnl3x += (betEur * aligned3) / 100
+
+    // 10x simulated with -100% floor
+    const aligned10 = Math.max(-100, aligned * lev10)
+    pnl10x += (betEur * aligned10) / 100
 
     nClosed += 1
   }
@@ -355,6 +383,7 @@ export default function CryptoPastPerformancePage() {
   const totalInvested = nClosed * betEur
   const roi1x = totalInvested > 0 ? (pnl1x / totalInvested) * 100 : null
   const roi3x = totalInvested > 0 ? (pnl3x / totalInvested) * 100 : null
+  const roi10x = totalInvested > 0 ? (pnl10x / totalInvested) * 100 : null
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -395,6 +424,8 @@ export default function CryptoPastPerformancePage() {
           roi1x={roi1x}
           pnl3x={pnl3x}
           roi3x={roi3x}
+          pnl10x={pnl10x}
+          roi10x={roi10x}
           n={nClosed}
           totalInvested={totalInvested}
         />
@@ -526,7 +557,8 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Table colors show raw price direction (green up / red down). P&L is computed directionally (SELL down counts as win). 3x is a simple simulation (3× returns, floored at -100%).
+        Table colors show raw price direction (green up / red down). P&L is computed directionally (SELL down counts as win).
+        3x/10x are simplified simulations (leverage × return, floored at -100%).
       </div>
     </main>
   )
