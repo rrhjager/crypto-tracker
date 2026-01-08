@@ -192,35 +192,59 @@ function StatCard({
 function ClosedPnlCard({
   title,
   subtitle,
-  pnl,
+  pnl1x,
+  roi1x,
+  pnl3x,
+  roi3x,
   n,
   totalInvested,
-  roiPct,
 }: {
   title: string
   subtitle: string
-  pnl: number
+  pnl1x: number
+  roi1x: number | null
+  pnl3x: number
+  roi3x: number | null
   n: number
   totalInvested: number
-  roiPct: number | null
 }) {
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
       <div className="text-white/85 font-semibold">{title}</div>
       <div className="text-white/55 text-xs mt-1">{subtitle}</div>
 
+      {/* 1x */}
       <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
-        <div className="text-white/55 text-xs">Closed only</div>
+        <div className="flex items-center justify-between">
+          <div className="text-white/70 text-xs font-semibold">1x (spot)</div>
+          <div className="text-xs text-white/45">Closed · {n} trades</div>
+        </div>
 
-        <div className={`text-lg font-extrabold mt-1 ${pnl >= 0 ? 'text-green-200' : 'text-red-200'}`}>
-          {fmtEur(pnl)}
+        <div className={`text-lg font-extrabold mt-1 ${pnl1x >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+          {fmtEur(pnl1x)}
         </div>
 
         <div className="mt-1 text-xs text-white/70">
-          Invested: €{totalInvested.toFixed(0)} · ROI: <span className={pctClassBySign(roiPct)}>{fmtPct(roiPct)}</span>
+          Invested: €{totalInvested.toFixed(0)} · ROI:{' '}
+          <span className={pctClassBySign(roi1x)}>{fmtPct(roi1x)}</span>
+        </div>
+      </div>
+
+      {/* 3x (smaller, underneath) */}
+      <div className="mt-3 rounded-xl bg-white/[0.03] ring-1 ring-white/10 p-3">
+        <div className="flex items-center justify-between">
+          <div className="text-white/70 text-xs font-semibold">3x leveraged (simulated)</div>
+          <div className="text-xs text-white/45">Floor at -100%</div>
         </div>
 
-        <div className="text-xs text-white/45 mt-1">Trades: {n}</div>
+        <div className={`text-base font-extrabold mt-1 ${pnl3x >= 0 ? 'text-green-200' : 'text-red-200'}`}>
+          {fmtEur(pnl3x)}
+        </div>
+
+        <div className="mt-1 text-xs text-white/70">
+          ROI:{' '}
+          <span className={pctClassBySign(roi3x)}>{fmtPct(roi3x)}</span>
+        </div>
       </div>
 
       <div className="mt-3 text-xs text-white/45">
@@ -258,9 +282,7 @@ function InfoCard() {
         </div>
       </div>
 
-      <div className="mt-3 text-xs text-white/45">
-        Past performance is not a guarantee of future results.
-      </div>
+      <div className="mt-3 text-xs text-white/45">Past performance is not a guarantee of future results.</div>
     </div>
   )
 }
@@ -301,25 +323,38 @@ export default function CryptoPastPerformancePage() {
   const s7 = buildDirectionalSummary(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
   const s30 = buildDirectionalSummary(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
 
-  // Closed-only €10 P&L (exit at next signal)
+  // Closed-only €10 P&L (directional)
   const betEur = 10
-  let pnlClosed = 0
+  const leverage = 3
+
+  let pnl1x = 0
+  let pnl3x = 0
   let nClosed = 0
 
   for (const r of rows) {
     if (!eligibleBase(r)) continue
     if (!r.nextSignal) continue
+
     const side = r.lastSignal!.status
     const raw = r.nextSignal.rawReturnPct
     if (raw == null || !Number.isFinite(raw)) continue
+
     const aligned = signalFromRaw(side, raw)
     if (aligned == null || !Number.isFinite(aligned)) continue
-    pnlClosed += (betEur * aligned) / 100
+
+    // 1x
+    pnl1x += (betEur * aligned) / 100
+
+    // 3x simulated with -100% floor (max loss = full stake)
+    const aligned3 = Math.max(-100, aligned * leverage)
+    pnl3x += (betEur * aligned3) / 100
+
     nClosed += 1
   }
 
   const totalInvested = nClosed * betEur
-  const roiPct = totalInvested > 0 ? (pnlClosed / totalInvested) * 100 : null
+  const roi1x = totalInvested > 0 ? (pnl1x / totalInvested) * 100 : null
+  const roi3x = totalInvested > 0 ? (pnl3x / totalInvested) * 100 : null
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -337,7 +372,6 @@ export default function CryptoPastPerformancePage() {
 
       <InfoCard />
 
-      {/* Summary (P&L card on the far right) */}
       <div className="mb-6 grid md:grid-cols-4 gap-4">
         <StatCard
           title="Until next signal (closed)"
@@ -355,12 +389,14 @@ export default function CryptoPastPerformancePage() {
           stat={s30}
         />
         <ClosedPnlCard
-          title="€10 per signal (closed only)"
-          subtitle="BUY = long, SELL = short. Exit when the status changes."
-          pnl={pnlClosed}
+          title="€10 per signal"
+          subtitle="Directional P&L: BUY benefits from up, SELL benefits from down. Closed only."
+          pnl1x={pnl1x}
+          roi1x={roi1x}
+          pnl3x={pnl3x}
+          roi3x={roi3x}
           n={nClosed}
           totalInvested={totalInvested}
-          roiPct={roiPct}
         />
       </div>
 
@@ -490,7 +526,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Table colors show raw price direction (green up / red down). Summary win rates and €10 P&L are computed directionally (SELL down counts as win).
+        Table colors show raw price direction (green up / red down). P&L is computed directionally (SELL down counts as win). 3x is a simple simulation (3× returns, floored at -100%).
       </div>
     </main>
   )
