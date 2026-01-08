@@ -55,7 +55,7 @@ function priceMoveClass(raw: number | null) {
   return 'text-white/80'
 }
 
-// ✅ summary % colors (requested)
+// ✅ summary % colors
 function pctClassBySign(v: number | null) {
   if (v == null || !Number.isFinite(v)) return 'text-white/50'
   if (v > 0) return 'text-green-200'
@@ -194,11 +194,15 @@ function ClosedPnlCard({
   subtitle,
   pnl,
   n,
+  totalInvested,
+  roiPct,
 }: {
   title: string
   subtitle: string
   pnl: number
   n: number
+  totalInvested: number
+  roiPct: number | null
 }) {
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
@@ -207,9 +211,15 @@ function ClosedPnlCard({
 
       <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
         <div className="text-white/55 text-xs">Closed only</div>
+
         <div className={`text-lg font-extrabold mt-1 ${pnl >= 0 ? 'text-green-200' : 'text-red-200'}`}>
           {fmtEur(pnl)}
         </div>
+
+        <div className="mt-1 text-xs text-white/70">
+          Invested: €{totalInvested.toFixed(0)} · ROI: <span className={pctClassBySign(roiPct)}>{fmtPct(roiPct)}</span>
+        </div>
+
         <div className="text-xs text-white/45 mt-1">Trades: {n}</div>
       </div>
 
@@ -308,6 +318,9 @@ export default function CryptoPastPerformancePage() {
     nClosed += 1
   }
 
+  const totalInvested = nClosed * betEur
+  const roiPct = totalInvested > 0 ? (pnlClosed / totalInvested) * 100 : null
+
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -346,6 +359,8 @@ export default function CryptoPastPerformancePage() {
           subtitle="BUY = long, SELL = short. Exit when the status changes."
           pnl={pnlClosed}
           n={nClosed}
+          totalInvested={totalInvested}
+          roiPct={roiPct}
         />
       </div>
 
