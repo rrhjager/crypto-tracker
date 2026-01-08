@@ -47,11 +47,19 @@ function fmtEur(v: number | null) {
   return `${sign}€${v.toFixed(2)}`
 }
 
-// ✅ simple colors: green if price up, red if price down (ignores BUY/SELL)
+// ✅ table colors: green if price up, red if price down
 function priceMoveClass(raw: number | null) {
   if (raw == null || !Number.isFinite(raw)) return 'text-white/50'
   if (raw > 0) return 'text-green-200'
   if (raw < 0) return 'text-red-200'
+  return 'text-white/80'
+}
+
+// ✅ summary % colors (requested)
+function pctClassBySign(v: number | null) {
+  if (v == null || !Number.isFinite(v)) return 'text-white/50'
+  if (v > 0) return 'text-green-200'
+  if (v < 0) return 'text-red-200'
   return 'text-white/80'
 }
 
@@ -91,7 +99,7 @@ function diffDays(fromISO: string, toISO: string) {
   return Math.max(0, Math.round(ms / 86400000))
 }
 
-// raw -> signal (BUY keeps sign, SELL flips sign)
+// raw -> signal (BUY keeps sign, SELL flips sign) — used internally for win rate/P&L
 function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
   if (raw == null) return null
   return side === 'BUY' ? raw : -raw
@@ -106,8 +114,9 @@ function isValidBaseRow(r: Row) {
 }
 
 /**
- * Directional summary still uses aligned values internally (SELL down counts as win).
- * Display colors, however, are raw price colors (as requested).
+ * Directional summary:
+ * - SELL down counts as win (aligned > 0)
+ * - Used for win rate / avg / median in the cards
  */
 function buildDirectionalSummary(
   rows: Row[],
@@ -164,12 +173,12 @@ function StatCard({
           </div>
         </div>
         <div>
-          <div className="text-white/55 text-xs">Avg (directional)</div>
-          <div className="text-white/90 font-semibold">{fmtPct(stat.avg)}</div>
+          <div className="text-white/55 text-xs">Avg</div>
+          <div className={`font-semibold ${pctClassBySign(stat.avg)}`}>{fmtPct(stat.avg)}</div>
         </div>
         <div>
-          <div className="text-white/55 text-xs">Median (directional)</div>
-          <div className="text-white/90 font-semibold">{fmtPct(stat.med)}</div>
+          <div className="text-white/55 text-xs">Median</div>
+          <div className={`font-semibold ${pctClassBySign(stat.med)}`}>{fmtPct(stat.med)}</div>
         </div>
       </div>
 
@@ -205,7 +214,7 @@ function ClosedPnlCard({
       </div>
 
       <div className="mt-3 text-xs text-white/45">
-        Assumption: €10 notional per signal. Exit at the moment the status changes (next signal row).
+        Assumption: €10 notional per signal. Exit at the moment the status changes.
       </div>
     </div>
   )
@@ -220,21 +229,21 @@ function InfoCard() {
         <div>
           <div className="text-white/80 font-semibold">Price change</div>
           <div className="text-white/60 text-xs mt-1">
-            The main number is the <b>raw price move</b> from the signal close.
+            The values shown are the <b>raw price moves</b> from the signal close.
           </div>
         </div>
 
         <div>
           <div className="text-white/80 font-semibold">Colors</div>
           <div className="text-white/60 text-xs mt-1">
-            Simple: <b>green</b> = price went up, <b>red</b> = price went down (independent of BUY/SELL).
+            Simple: <b>green</b> = price went up, <b>red</b> = price went down.
           </div>
         </div>
 
         <div>
           <div className="text-white/80 font-semibold">Until next signal</div>
           <div className="text-white/60 text-xs mt-1">
-            Performance from the signal close until the model changes status. If no next signal exists yet, it shows “—”.
+            Performance until the model changes status. If no next signal exists yet, it shows “—”.
           </div>
         </div>
       </div>
@@ -270,19 +279,19 @@ export default function CryptoPastPerformancePage() {
     return days != null && days >= 30
   }
 
-  // Price move (raw) until next signal (closed only for display)
+  // Until next signal (closed only)
   const untilRawClosed = (r: Row) => {
     if (!eligibleBase(r)) return null
     if (r.nextSignal?.rawReturnPct != null && Number.isFinite(r.nextSignal.rawReturnPct)) return r.nextSignal.rawReturnPct
     return null
   }
 
-  // Summary cards (directional winrate)
+  // Summary cards (directional internally)
   const sUntil = buildDirectionalSummary(rows, untilRawClosed, r => eligibleBase(r) && !!r.nextSignal)
   const s7 = buildDirectionalSummary(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
   const s30 = buildDirectionalSummary(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
 
-  // ✅ Closed-only €10 P&L (exit at next signal)
+  // Closed-only €10 P&L (exit at next signal)
   const betEur = 10
   let pnlClosed = 0
   let nClosed = 0
@@ -295,8 +304,7 @@ export default function CryptoPastPerformancePage() {
     if (raw == null || !Number.isFinite(raw)) continue
     const aligned = signalFromRaw(side, raw)
     if (aligned == null || !Number.isFinite(aligned)) continue
-    const pnl = (betEur * aligned) / 100
-    pnlClosed += pnl
+    pnlClosed += (betEur * aligned) / 100
     nClosed += 1
   }
 
@@ -306,7 +314,7 @@ export default function CryptoPastPerformancePage() {
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
           <p className="text-white/70 text-sm">
-            A transparent track record for our BUY/SELL signals (daily timeframe). Table values are raw price moves (green up / red down).
+            We show the most recent BUY/SELL switch per coin. Table values are <b>raw price changes</b> (green up / red down).
           </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
@@ -373,20 +381,12 @@ export default function CryptoPastPerformancePage() {
 
             <tbody className="divide-y divide-white/10">
               {rows.map((r) => {
-                const side = r.lastSignal?.status
-
                 const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
                 const show7 = show7d(r)
                 const show30 = show30d(r)
 
-                const untilRawVal = untilRawClosed(r)
-                const untilSignalVal = side ? signalFromRaw(side, untilRawVal) : null
-
                 const d7Raw = show7 ? r.perf.d7Raw : null
-                const d7Signal = side ? signalFromRaw(side, d7Raw) : null
-
                 const d30Raw = show30 ? r.perf.d30Raw : null
-                const d30Signal = side ? signalFromRaw(side, d30Raw) : null
 
                 return (
                   <tr key={r.pair} className="hover:bg-white/[0.03]">
@@ -418,14 +418,12 @@ export default function CryptoPastPerformancePage() {
 
                     <td className="px-4 py-3 text-white/80">{r.lastSignal ? r.lastSignal.score : '—'}</td>
 
-                    {/* Until next signal (closed only) */}
                     <td className="px-4 py-3">
                       {r.nextSignal ? (
                         <div className="text-xs">
                           <div className={`font-semibold ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
                             {fmtPct(r.nextSignal.rawReturnPct)}
                           </div>
-                          <div className="text-xs text-white/55">Signal: {fmtPct(r.nextSignal.signalReturnPct)}</div>
                           <div className="text-white/70">
                             {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
                           </div>
@@ -440,16 +438,12 @@ export default function CryptoPastPerformancePage() {
                       )}
                     </td>
 
-                    {/* Price 7d */}
                     <td className="px-4 py-3">
                       <div className={`font-semibold ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
-                      <div className="text-xs text-white/55">Signal: {fmtPct(d7Signal)}</div>
                     </td>
 
-                    {/* Price 30d */}
                     <td className="px-4 py-3">
                       <div className={`font-semibold ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
-                      <div className="text-xs text-white/55">Signal: {fmtPct(d30Signal)}</div>
                     </td>
 
                     <td className="px-4 py-3">
@@ -481,7 +475,7 @@ export default function CryptoPastPerformancePage() {
       </section>
 
       <div className="mt-4 text-xs text-white/50">
-        Table colors show raw price direction (green up / red down). Win rate and €10 P&L are still computed directionally (SELL down counts as win).
+        Table colors show raw price direction (green up / red down). Summary win rates and €10 P&L are computed directionally (SELL down counts as win).
       </div>
     </main>
   )
