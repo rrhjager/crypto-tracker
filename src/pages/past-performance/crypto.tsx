@@ -232,39 +232,6 @@ function ClosedPnlCard({
   )
 }
 
-function InfoCard() {
-  return (
-    <div className="mb-6 rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
-      <div className="text-white/90 font-semibold">How to read this table</div>
-
-      <div className="mt-2 grid md:grid-cols-3 gap-4 text-sm">
-        <div>
-          <div className="text-white/80 font-semibold">Price change</div>
-          <div className="text-white/60 text-xs mt-1">
-            The values shown are the <b>raw price moves</b> from the signal close.
-          </div>
-        </div>
-
-        <div>
-          <div className="text-white/80 font-semibold">Colors</div>
-          <div className="text-white/60 text-xs mt-1">
-            Simple: <b>green</b> = price went up, <b>red</b> = price went down.
-          </div>
-        </div>
-
-        <div>
-          <div className="text-white/80 font-semibold">Until next signal</div>
-          <div className="text-white/60 text-xs mt-1">
-            Performance until the model changes status. If no next signal exists yet, it shows “—”.
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-3 text-xs text-white/45">Past performance is not a guarantee of future results.</div>
-    </div>
-  )
-}
-
 export default function CryptoPastPerformancePage() {
   const { data, error, isLoading } = useSWR<{ meta: any; rows: Row[] }>(
     '/api/past-performance/crypto',
@@ -329,16 +296,11 @@ export default function CryptoPastPerformancePage() {
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold">Crypto Past Performance</h1>
-          <p className="text-white/70 text-sm">
-            We show the most recent BUY/SELL switch per coin. Table values are <b>raw price changes</b> (green up / red down).
-          </p>
         </div>
         <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
           ← Back
         </Link>
       </div>
-
-      <InfoCard />
 
       <div className="mb-6 grid md:grid-cols-4 gap-4">
         <StatCard
@@ -365,13 +327,6 @@ export default function CryptoPastPerformancePage() {
           totalInvested={totalInvested}
         />
       </div>
-
-      {data?.meta?.note ? (
-        <div className="mb-6 rounded-xl bg-white/[0.04] ring-1 ring-white/10 p-4 text-xs text-white/70">
-          <div className="font-semibold text-white/85 mb-1">Method</div>
-          <div>{data.meta.note}</div>
-        </div>
-      ) : null}
 
       {error ? (
         <div className="mb-6 rounded-xl bg-red-500/10 ring-1 ring-red-400/30 p-4 text-red-200">
@@ -490,10 +445,6 @@ export default function CryptoPastPerformancePage() {
           </table>
         </div>
       </section>
-
-      <div className="mt-4 text-xs text-white/50">
-        Table colors show raw price direction (green up / red down). P&L is computed directionally (SELL down counts as win).
-      </div>
     </main>
   )
 }
