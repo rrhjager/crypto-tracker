@@ -14,9 +14,8 @@ type NextSignal = {
 }
 
 type Row = {
-  coin: string
+  symbol: string
   name: string
-  pair: string
 
   current: { date: string; status: Status; score: number; close: number } | null
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
@@ -58,12 +57,10 @@ function priceMoveClass(raw: number | null) {
   return 'text-white/80'
 }
 
-function pctClassByThreshold50(v: number | null) {
-  // ✅ requested: % in the blocks = green if > 50%, red if < 50%
-  if (v == null || !Number.isFinite(v)) return 'text-white/50'
-  if (v > 50) return 'text-green-200'
-  if (v < 50) return 'text-red-200'
-  return 'text-white/80'
+// ✅ blocks: percentage is green if >=50%, red if <50%
+function winRateClass(winRate: number | null) {
+  if (winRate == null || !Number.isFinite(winRate)) return 'text-white/90'
+  return winRate >= 50 ? 'text-green-200' : 'text-red-200'
 }
 
 function pctClassBySign(v: number | null) {
@@ -157,8 +154,8 @@ function buildDirectionalSummary(
 }
 
 /**
- * Same "block-in-block" style as ClosedPnlCard.
- * ✅ Only change: Win rate color uses >50 green / <50 red.
+ * ✅ Same “block-in-block” style as the 4th card
+ * ✅ Win-rate % colored by >=50% (green) / <50% (red)
  */
 function StatCard({
   title,
@@ -183,7 +180,7 @@ function StatCard({
           </div>
         </div>
 
-        <div className={`text-lg font-extrabold mt-1 ${pctClassByThreshold50(stat.winRate)}`}>{winTxt}</div>
+        <div className={`text-lg font-extrabold mt-1 ${winRateClass(stat.winRate)}`}>{winTxt}</div>
 
         <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
           <div className="flex items-baseline justify-between gap-2">
@@ -242,12 +239,6 @@ function ClosedPnlCard({
       </div>
     </div>
   )
-}
-
-// turn a "pair" into the symbol used in /stocks/[symbol]
-function toStockSymbol(pair: string) {
-  // For equities we’ll pass the symbol as-is (your stock pages use /stocks/:symbol)
-  return String(pair || '').trim()
 }
 
 export default function SP500PastPerformancePage({ rows, fetchError }: PageProps) {
@@ -313,11 +304,7 @@ export default function SP500PastPerformancePage({ rows, fetchError }: PageProps
           subtitle="Directional win rate until the model changes status (closed trades only)."
           stat={sUntil}
         />
-        <StatCard
-          title="Price 7d"
-          subtitle="Directional win rate after 7 days (only if ≥7 days of data)."
-          stat={s7}
-        />
+        <StatCard title="Price 7d" subtitle="Directional win rate after 7 days (only if ≥7 days of data)." stat={s7} />
         <StatCard
           title="Price 30d"
           subtitle="Directional win rate after 30 days (only if ≥30 days of data)."
@@ -340,51 +327,53 @@ export default function SP500PastPerformancePage({ rows, fetchError }: PageProps
       ) : null}
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
-        {/* ✅ Make table fit more often (no forced wide min-width). */}
         <div className="overflow-x-auto">
-          <table className="w-full text-sm table-fixed">
+          {/* ✅ Keep same column structure, but reduce min width so it fits more often (less sideways scroll) */}
+          <table className="w-full text-sm table-fixed min-w-0">
             <colgroup>
-              <col className="w-[22%]" />
-              <col className="w-[20%]" />
-              <col className="w-[10%]" />
-              <col className="w-[18%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
+              <col className="w-[26%]" /> {/* Stock */}
+              <col className="w-[18%]" /> {/* Last signal */}
+              <col className="w-[10%]" /> {/* Signal score */}
+              <col className="w-[20%]" /> {/* Until next */}
+              <col className="w-[9%]" /> {/* 7d */}
+              <col className="w-[9%]" /> {/* 30d */}
+              <col className="w-[8%]" /> {/* Current */}
             </colgroup>
 
             <thead className="bg-black/25 text-white/70">
               <tr>
-                <th className="text-left px-4 py-3 font-semibold">Equity</th>
+                <th className="text-left px-4 py-3 font-semibold">Stock</th>
                 <th className="text-left px-4 py-3 font-semibold">Last signal</th>
-                <th className="text-left px-4 py-3 font-semibold">Score</th>
-                <th className="text-left px-4 py-3 font-semibold">Until next</th>
-                <th className="text-left px-4 py-3 font-semibold">7d</th>
-                <th className="text-left px-4 py-3 font-semibold">30d</th>
+                <th className="text-left px-4 py-3 font-semibold">Signal score</th>
+                <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
+                <th className="text-left px-4 py-3 font-semibold">Price 7d</th>
+                <th className="text-left px-4 py-3 font-semibold">Price 30d</th>
                 <th className="text-left px-4 py-3 font-semibold">Current</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-white/10">
               {rows.map(r => {
-                const sym = toStockSymbol(r.pair)
                 const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
                 const show7 = show7d(r)
                 const show30 = show30d(r)
+
                 const d7Raw = show7 ? r.perf.d7Raw : null
                 const d30Raw = show30 ? r.perf.d30Raw : null
 
                 return (
-                  <tr key={r.pair} className="hover:bg-white/[0.03]">
+                  <tr key={r.symbol} className="hover:bg-white/[0.03]">
+                    {/* ✅ Clickable like stock tracker */}
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/stocks/${encodeURIComponent(sym)}`}
-                        className="block hover:underline"
-                        title={`Open ${sym}`}
-                      >
-                        <div className="text-white/90 font-semibold truncate">{r.coin || sym}</div>
-                        <div className="text-xs text-white/55 truncate">{r.name}</div>
-                      </Link>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Link
+                          href={`/stocks/${encodeURIComponent(r.symbol)}`}
+                          className="text-white/90 font-semibold hover:underline truncate"
+                        >
+                          {r.name}
+                        </Link>
+                        <span className="text-xs text-white/55 shrink-0">({r.symbol})</span>
+                      </div>
                     </td>
 
                     <td className="px-4 py-3">
