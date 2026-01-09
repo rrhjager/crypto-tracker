@@ -293,6 +293,10 @@ export default function CryptoPastPerformancePage({ rows, fetchError }: PageProp
   const totalInvested = nClosed * betEur
   const roi = totalInvested > 0 ? (pnl / totalInvested) * 100 : null
 
+  // ✅ Route to coin page (same pattern as your crypto list page)
+  // If your project uses a different route, change only this function.
+  const coinHref = (r: Row) => `/crypto/${encodeURIComponent(String(r.coin || '').toLowerCase())}`
+
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -372,10 +376,16 @@ export default function CryptoPastPerformancePage({ rows, fetchError }: PageProp
 
               return (
                 <tr key={r.pair} className="hover:bg-white/[0.03] align-top">
-                  {/* Coin */}
+                  {/* ✅ Coin (clickable) */}
                   <td className="px-3 py-2">
-                    <div className="text-white/90 font-semibold truncate">{r.coin}</div>
-                    <div className="text-xs text-white/55 truncate">{r.name}</div>
+                    <Link href={coinHref(r)} className="group block">
+                      <div className="text-white/90 font-semibold truncate group-hover:text-white">
+                        {r.coin}
+                      </div>
+                      <div className="text-xs text-white/55 truncate group-hover:text-white/70">
+                        {r.name}
+                      </div>
+                    </Link>
                   </td>
 
                   {/* Last signal */}
