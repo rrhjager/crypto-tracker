@@ -148,6 +148,12 @@ function buildDirectionalSummary(
   }
 }
 
+/**
+ * ✅ Updated to match the "block-in-block" style of ClosedPnlCard:
+ * - Outer card
+ * - Inner panel (bg-black/20 + ring)
+ * - Small label top-right
+ */
 function StatCard({
   title,
   subtitle,
@@ -157,31 +163,35 @@ function StatCard({
   subtitle: string
   stat: Summary
 }) {
+  const winTxt = stat.winRate == null ? '—' : `${stat.winRate.toFixed(0)}%`
+
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
       <div className="text-white/85 font-semibold">{title}</div>
       <div className="text-white/55 text-xs mt-1">{subtitle}</div>
 
-      <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
-        <div>
-          <div className="text-white/55 text-xs">Win rate</div>
-          <div className="text-white/90 font-semibold">
-            {stat.winRate == null ? '—' : `${stat.winRate.toFixed(0)}%`}
+      <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
+        <div className="flex items-center justify-end">
+          <div className="text-xs text-white/45">
+            Included · {stat.nIncluded} / {stat.nEligible}
           </div>
         </div>
-        <div>
-          <div className="text-white/55 text-xs">Avg</div>
-          <div className={`font-semibold ${pctClassBySign(stat.avg)}`}>{fmtPct(stat.avg)}</div>
-        </div>
-        <div>
-          <div className="text-white/55 text-xs">Median</div>
-          <div className={`font-semibold ${pctClassBySign(stat.med)}`}>{fmtPct(stat.med)}</div>
+
+        <div className="text-lg font-extrabold mt-1 text-white/90">{winTxt}</div>
+
+        <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-white/55">Avg</div>
+            <div className={`font-semibold ${pctClassBySign(stat.avg)}`}>{fmtPct(stat.avg)}</div>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-white/55">Median</div>
+            <div className={`font-semibold ${pctClassBySign(stat.med)}`}>{fmtPct(stat.med)}</div>
+          </div>
         </div>
       </div>
 
-      <div className="mt-2 text-xs text-white/45">
-        Included: {stat.nIncluded} / Eligible: {stat.nEligible}
-      </div>
+      <div className="mt-3 text-xs text-white/45">Win rate is directional (SELL wins when price drops).</div>
     </div>
   )
 }
@@ -437,10 +447,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     const baseUrl = `${proto}://${host}`
 
     const r = await fetch(`${baseUrl}/api/past-performance/crypto`, {
-      headers: {
-        // helps some deployments
-        'accept': 'application/json',
-      },
+      headers: { accept: 'application/json' },
     })
 
     if (!r.ok) {
@@ -450,12 +457,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     const json = await r.json()
     const rows = Array.isArray(json?.rows) ? (json.rows as Row[]) : []
 
-    return {
-      props: {
-        rows,
-        fetchError: null,
-      },
-    }
+    return { props: { rows, fetchError: null } }
   } catch (e: any) {
     return { props: { rows: [], fetchError: e?.message || 'Failed to fetch' } }
   }
