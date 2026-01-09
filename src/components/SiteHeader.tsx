@@ -45,14 +45,8 @@ function MobileMenuPortal({
 
   return createPortal(
     <>
-      <div
-        className="fixed inset-0 z-[99998] bg-black/50"
-        onClick={onClose}
-        aria-hidden
-      />
-      <div className="fixed inset-0 z-[99999] bg-ink text-white flex flex-col">
-        {children}
-      </div>
+      <div className="fixed inset-0 z-[99998] bg-black/50" onClick={onClose} aria-hidden />
+      <div className="fixed inset-0 z-[99999] bg-ink text-white flex flex-col">{children}</div>
     </>,
     containerRef.current
   )
@@ -63,11 +57,11 @@ export default function SiteHeader() {
   const [stockOpen, setStockOpen] = useState(false)
   const [intelOpen, setIntelOpen] = useState(false)
 
-  // ✅ NEW: Past performance dropdown
+  // ✅ Past performance dropdown
   const [perfOpen, setPerfOpen] = useState(false)
   const perfRef = useRef<HTMLDivElement>(null)
 
-  // ✅ NEW: account dropdown
+  // ✅ account dropdown
   const [accountOpen, setAccountOpen] = useState(false)
   const accountRef = useRef<HTMLDivElement>(null)
 
@@ -75,7 +69,7 @@ export default function SiteHeader() {
   const intelRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
 
-  // ✅ NEW: session
+  // ✅ session
   const { data: session, status } = useSession()
 
   // Theme state (light/dark)
@@ -92,21 +86,15 @@ export default function SiteHeader() {
       if (stored === 'light' || stored === 'dark') {
         initial = stored
       } else {
-        const prefersDark =
-          window.matchMedia &&
-          window.matchMedia('(prefers-color-scheme: dark)').matches
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
         initial = prefersDark ? 'dark' : 'light'
       }
 
-      if (initial === 'dark') {
-        root.classList.add('dark')
-      } else {
-        root.classList.remove('dark')
-      }
+      if (initial === 'dark') root.classList.add('dark')
+      else root.classList.remove('dark')
 
       setTheme(initial)
     } catch {
-      // failsafe: blijf gewoon 'light'
       setTheme('light')
     }
   }, [])
@@ -121,9 +109,7 @@ export default function SiteHeader() {
         window.localStorage.setItem('theme', next)
         return next
       })
-    } catch {
-      // ignore storage errors
-    }
+    } catch {}
   }
 
   useEffect(() => {
@@ -131,11 +117,7 @@ export default function SiteHeader() {
       const t = e.target as Node
       if (stockRef.current && !stockRef.current.contains(t)) setStockOpen(false)
       if (intelRef.current && !intelRef.current.contains(t)) setIntelOpen(false)
-
-      // ✅ close past performance dropdown on outside click
       if (perfRef.current && !perfRef.current.contains(t)) setPerfOpen(false)
-
-      // ✅ NEW: close account dropdown on outside click
       if (accountRef.current && !accountRef.current.contains(t)) setAccountOpen(false)
     }
     document.addEventListener('click', onDoc)
@@ -173,18 +155,31 @@ export default function SiteHeader() {
   const rainbow =
     'group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-[linear-gradient(90deg,#ff004c,#ff8a00,#ffd300,#00e472,#00c3ff,#7a00ff,#ff004c)]'
 
+  // ✅ Updated list: same order as Stock tracker
+  const perfItems = [
+    { href: '/past-performance/crypto', label: 'Crypto past performance' },
+
+    { href: '/past-performance/aex', label: 'AEX past performance' },
+    { href: '/past-performance/sp500', label: 'S&P 500 past performance' },
+    { href: '/past-performance/nasdaq', label: 'NASDAQ past performance' },
+    { href: '/past-performance/dowjones', label: 'Dow Jones past performance' },
+    { href: '/past-performance/dax', label: 'DAX past performance' },
+    { href: '/past-performance/ftse100', label: 'FTSE 100 past performance' },
+    { href: '/past-performance/nikkei225', label: 'Nikkei 225 past performance' },
+    { href: '/past-performance/hangseng', label: 'Hang Seng past performance' },
+    { href: '/past-performance/sensex', label: 'Sensex past performance' },
+    { href: '/past-performance/etfs', label: 'ETFs past performance' },
+  ]
+
   return (
     <header className="bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60 border-b border-white/10 sticky top-0 z-[60]">
-      {/* Alleen hier aangepast: max-w-6xl -> max-w-screen-2xl */}
       <div className="max-w-screen-2xl mx-auto px-4 h-14 flex items-center justify-between">
         <Link
           href="/"
           className="group font-semibold tracking-tight text-slate-900 dark:text-slate-50"
           onClick={() => setOpen(false)}
         >
-          <span className={`transition-all duration-300 ${rainbow}`}>
-            SignalHub
-          </span>
+          <span className={`transition-all duration-300 ${rainbow}`}>SignalHub</span>
         </Link>
 
         {/* Desktop menu */}
@@ -197,13 +192,23 @@ export default function SiteHeader() {
           <div className="relative" ref={stockRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
-              onClick={() => { setStockOpen(v => !v); setIntelOpen(false); setPerfOpen(false) }}
-              onMouseEnter={() => { setStockOpen(true); setIntelOpen(false); setPerfOpen(false) }}
+              onClick={() => {
+                setStockOpen(v => !v)
+                setIntelOpen(false)
+                setPerfOpen(false)
+              }}
+              onMouseEnter={() => {
+                setStockOpen(true)
+                setIntelOpen(false)
+                setPerfOpen(false)
+              }}
               aria-haspopup="true"
               aria-expanded={stockOpen}
             >
               <span className={rainbow}>Stock tracker</span>
-              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70">
+                <path fill="currentColor" d="M7 10l5 5 5-5z" />
+              </svg>
             </button>
             {stockOpen && (
               <div
@@ -223,7 +228,9 @@ export default function SiteHeader() {
                   { href: '/etfs', label: 'ETFs' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>
+                      {it.label}
+                    </span>
                   </Link>
                 ))}
               </div>
@@ -234,13 +241,23 @@ export default function SiteHeader() {
           <div className="relative" ref={intelRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
-              onClick={() => { setIntelOpen(v => !v); setStockOpen(false); setPerfOpen(false) }}
-              onMouseEnter={() => { setIntelOpen(true); setStockOpen(false); setPerfOpen(false) }}
+              onClick={() => {
+                setIntelOpen(v => !v)
+                setStockOpen(false)
+                setPerfOpen(false)
+              }}
+              onMouseEnter={() => {
+                setIntelOpen(true)
+                setStockOpen(false)
+                setPerfOpen(false)
+              }}
               aria-haspopup="true"
               aria-expanded={intelOpen}
             >
               <span className={rainbow}>Market intel</span>
-              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70">
+                <path fill="currentColor" d="M7 10l5 5 5-5z" />
+              </svg>
             </button>
             {intelOpen && (
               <div
@@ -254,37 +271,48 @@ export default function SiteHeader() {
                   { href: '/intel/sectors', label: 'Sector performance' },
                 ].map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>
+                      {it.label}
+                    </span>
                   </Link>
                 ))}
               </div>
             )}
           </div>
 
-          {/* ✅ NEW: Past performance */}
+          {/* ✅ Past performance */}
           <div className="relative" ref={perfRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
-              onClick={() => { setPerfOpen(v => !v); setStockOpen(false); setIntelOpen(false) }}
-              onMouseEnter={() => { setPerfOpen(true); setStockOpen(false); setIntelOpen(false) }}
+              onClick={() => {
+                setPerfOpen(v => !v)
+                setStockOpen(false)
+                setIntelOpen(false)
+              }}
+              onMouseEnter={() => {
+                setPerfOpen(true)
+                setStockOpen(false)
+                setIntelOpen(false)
+              }}
               aria-haspopup="true"
               aria-expanded={perfOpen}
             >
               <span className={rainbow}>Past performance</span>
-              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" className="opacity-70">
+                <path fill="currentColor" d="M7 10l5 5 5-5z" />
+              </svg>
             </button>
 
             {perfOpen && (
               <div
                 onMouseLeave={() => setPerfOpen(false)}
-                className="absolute right-0 mt-2 w-60 rounded-2xl border border-white/10 bg-ink shadow-lg p-1"
+                className="absolute right-0 mt-2 w-72 rounded-2xl border border-white/10 bg-ink shadow-lg p-1 max-h-[70vh] overflow-auto"
               >
-                {[
-                  { href: '/past-performance/crypto', label: 'Crypto past performance' },
-                  { href: '/past-performance/equities', label: 'Equities past performance' },
-                ].map(it => (
+                {perfItems.map(it => (
                   <Link key={it.href} href={it.href} className="group block px-3 py-2 rounded-xl hover:bg-white/10">
-                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>{it.label}</span>
+                    <span className={`text-white/90 transition-colors group-hover:font-semibold ${rainbow}`}>
+                      {it.label}
+                    </span>
                   </Link>
                 ))}
               </div>
@@ -305,7 +333,7 @@ export default function SiteHeader() {
             <span className={`transition-colors ${rainbow}`}>About us</span>
           </Link>
 
-          {/* ✅ NEW: Account button (desktop) */}
+          {/* Account button (desktop) */}
           <div className="relative" ref={accountRef}>
             {status !== 'loading' && !session?.user ? (
               <button
@@ -335,38 +363,46 @@ export default function SiteHeader() {
                 <div className="h-px bg-white/10 my-1" />
 
                 <button
-                  onClick={() => { setAccountOpen(false); router.push('/account') }}
+                  onClick={() => {
+                    setAccountOpen(false)
+                    router.push('/account')
+                  }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
                   Settings
                 </button>
 
                 <button
-                  onClick={() => { setAccountOpen(false); router.push('/account/indicators') }}
+                  onClick={() => {
+                    setAccountOpen(false)
+                    router.push('/account/indicators')
+                  }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
                   Indicator preferences
                 </button>
 
-                {/* ✅ NEW: Favorites links */}
                 <button
-                  onClick={() => { setAccountOpen(false); router.push('/crypto/favorites') }}
+                  onClick={() => {
+                    setAccountOpen(false)
+                    router.push('/crypto/favorites')
+                  }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
                   Crypto favorites
                 </button>
 
                 <button
-                  onClick={() => { setAccountOpen(false); router.push('/equity-favorites') }}
+                  onClick={() => {
+                    setAccountOpen(false)
+                    router.push('/equity-favorites')
+                  }}
                   className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-white/90"
                 >
                   Equity favorites
                 </button>
 
-                <button
-                  disabled
-                  className="w-full text-left px-3 py-2 rounded-xl text-white/50 cursor-not-allowed"
-                >
+                <button disabled className="w-full text-left px-3 py-2 rounded-xl text-white/50 cursor-not-allowed">
                   Billing / Upgrade (later)
                 </button>
 
@@ -391,7 +427,6 @@ export default function SiteHeader() {
               aria-label="Toggle dark mode"
             >
               {theme === 'dark' ? (
-                // Sun icon (for switching back to light)
                 <svg width="18" height="18" viewBox="0 0 24 24">
                   <path
                     fill="currentColor"
@@ -399,7 +434,6 @@ export default function SiteHeader() {
                   />
                 </svg>
               ) : (
-                // Moon icon (for switching to dark)
                 <svg width="18" height="18" viewBox="0 0 24 24">
                   <path
                     fill="currentColor"
@@ -480,17 +514,22 @@ export default function SiteHeader() {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
-          {/* ✅ NEW: Sign in/out shortcut on mobile */}
           {status !== 'loading' && !session?.user ? (
             <button
-              onClick={() => { setOpen(false); signIn(undefined, { callbackUrl: router.asPath }) }}
+              onClick={() => {
+                setOpen(false)
+                signIn(undefined, { callbackUrl: router.asPath })
+              }}
               className="w-full text-left group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
             >
               <span className={rainbow}>Sign in</span>
             </button>
           ) : (
             <button
-              onClick={() => { setOpen(false); signOut({ callbackUrl: '/' }) }}
+              onClick={() => {
+                setOpen(false)
+                signOut({ callbackUrl: '/' })
+              }}
               className="w-full text-left group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
             >
               <span className={rainbow}>Sign out</span>
@@ -505,13 +544,10 @@ export default function SiteHeader() {
             <span className={rainbow}>Crypto tracker</span>
           </Link>
 
-          {/* ✅ NEW: Past performance (mobile) */}
+          {/* Past performance (mobile) */}
           <div className="rounded-xl px-3 py-2">
             <div className="text-white/70 mb-2 px-1">Past performance</div>
-            {[
-              { href: '/past-performance/crypto', label: 'Crypto past performance' },
-              { href: '/past-performance/equities', label: 'Equities past performance' },
-            ].map(it => (
+            {perfItems.map(it => (
               <Link
                 key={it.href}
                 href={it.href}
@@ -567,7 +603,6 @@ export default function SiteHeader() {
             ))}
           </div>
 
-          {/* Trump Trading */}
           <Link
             href="/trump-trading"
             className="group rounded-xl px-4 py-3 text-base hover:bg-white/10"
@@ -576,7 +611,6 @@ export default function SiteHeader() {
             <span className={rainbow}>Trump Trading</span>
           </Link>
 
-          {/* Academy */}
           <Link
             href="/academy"
             className="group rounded-xl px-4 py-3 text-base hover:bg-white/10"
