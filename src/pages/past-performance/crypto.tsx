@@ -327,114 +327,134 @@ export default function CryptoPastPerformancePage({ rows, fetchError }: PageProp
         </div>
       ) : null}
 
+      {/* ✅ UPDATED TABLE: no horizontal scroll + compact layout */}
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-[1300px] w-full text-sm">
-            <thead className="bg-black/25 text-white/70">
-              <tr>
-                <th className="text-left px-4 py-3 font-semibold">Coin</th>
-                <th className="text-left px-4 py-3 font-semibold">Last signal</th>
-                <th className="text-left px-4 py-3 font-semibold">Signal score</th>
-                <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
-                <th className="text-left px-4 py-3 font-semibold">Price 7d</th>
-                <th className="text-left px-4 py-3 font-semibold">Price 30d</th>
-                <th className="text-left px-4 py-3 font-semibold">Current</th>
-              </tr>
-            </thead>
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col style={{ width: '16%' }} /> {/* Coin */}
+            <col style={{ width: '18%' }} /> {/* Last signal */}
+            <col style={{ width: '8%' }} /> {/* Signal score */}
+            <col style={{ width: '22%' }} /> {/* Until next signal */}
+            <col style={{ width: '12%' }} /> {/* Price 7d */}
+            <col style={{ width: '12%' }} /> {/* Price 30d */}
+            <col style={{ width: '12%' }} /> {/* Current */}
+          </colgroup>
 
-            <tbody className="divide-y divide-white/10">
-              {rows.map((r) => {
-                const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
-                const show7 = show7d(r)
-                const show30 = show30d(r)
+          <thead className="bg-black/25 text-white/70">
+            <tr>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Coin</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Last signal</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Score</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Until next</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">7d</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">30d</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Current</th>
+            </tr>
+          </thead>
 
-                const d7Raw = show7 ? r.perf.d7Raw : null
-                const d30Raw = show30 ? r.perf.d30Raw : null
+          <tbody className="divide-y divide-white/10">
+            {rows.map((r) => {
+              const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
+              const show7 = show7d(r)
+              const show30 = show30d(r)
 
-                return (
-                  <tr key={r.pair} className="hover:bg-white/[0.03]">
-                    <td className="px-4 py-3">
-                      <div className="text-white/90 font-semibold">{r.coin}</div>
-                      <div className="text-xs text-white/55">{r.name}</div>
-                    </td>
+              const d7Raw = show7 ? r.perf.d7Raw : null
+              const d30Raw = show30 ? r.perf.d30Raw : null
 
-                    <td className="px-4 py-3">
-                      {r.error ? (
-                        <span className="text-red-200 text-xs">{r.error}</span>
-                      ) : r.lastSignal ? (
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-xs px-2 py-1 rounded ${
-                              r.lastSignal.status === 'BUY'
-                                ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
-                                : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
-                            }`}
-                          >
-                            → {r.lastSignal.status}
-                          </span>
-                          <span className="text-white/80">{r.lastSignal.date}</span>
+              return (
+                <tr key={r.pair} className="hover:bg-white/[0.03] align-top">
+                  {/* Coin */}
+                  <td className="px-3 py-2">
+                    <div className="text-white/90 font-semibold truncate">{r.coin}</div>
+                    <div className="text-xs text-white/55 truncate">{r.name}</div>
+                  </td>
+
+                  {/* Last signal */}
+                  <td className="px-3 py-2">
+                    {r.error ? (
+                      <span className="text-red-200 text-xs">{r.error}</span>
+                    ) : r.lastSignal ? (
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`w-fit text-xs px-2 py-1 rounded ${
+                            r.lastSignal.status === 'BUY'
+                              ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
+                              : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
+                          }`}
+                        >
+                          → {r.lastSignal.status}
+                        </span>
+                        <span className="text-xs text-white/80">{r.lastSignal.date}</span>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
+                    )}
+                  </td>
+
+                  {/* Score */}
+                  <td className="px-3 py-2">
+                    <div className="text-white/90 font-semibold tabular-nums">
+                      {r.lastSignal ? r.lastSignal.score : '—'}
+                    </div>
+                  </td>
+
+                  {/* Until next */}
+                  <td className="px-3 py-2">
+                    {r.nextSignal ? (
+                      <div className="flex flex-col gap-1">
+                        <div className={`font-semibold tabular-nums ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
+                          {fmtPct(r.nextSignal.rawReturnPct)}
                         </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-white/80">{r.lastSignal ? r.lastSignal.score : '—'}</td>
-
-                    <td className="px-4 py-3">
-                      {r.nextSignal ? (
-                        <div className="text-xs">
-                          <div className={`font-semibold ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
-                            {fmtPct(r.nextSignal.rawReturnPct)}
-                          </div>
-                          <div className="text-white/70">
-                            {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
-                          </div>
-                          <div className="text-white/55">{r.nextSignal.date}</div>
+                        <div className="text-xs text-white/70 truncate">
+                          {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
                         </div>
-                      ) : eligibleBase(r) ? (
-                        <div className="text-xs text-white/50">
-                          — <span className="ml-1">(still open · {openDays != null ? `${openDays}d` : '—'})</span>
+                        <div className="text-xs text-white/55">{r.nextSignal.date}</div>
+                      </div>
+                    ) : eligibleBase(r) ? (
+                      <div className="text-xs text-white/50">
+                        — <span className="ml-1">(still open · {openDays != null ? `${openDays}d` : '—'})</span>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">—</span>
+                    )}
+                  </td>
+
+                  {/* 7d */}
+                  <td className="px-3 py-2">
+                    <div className={`font-semibold tabular-nums ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
+                  </td>
+
+                  {/* 30d */}
+                  <td className="px-3 py-2">
+                    <div className={`font-semibold tabular-nums ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
+                  </td>
+
+                  {/* Current */}
+                  <td className="px-3 py-2">
+                    {r.current ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="text-xs text-white/85 font-semibold truncate">
+                          {r.current.status} (score {r.current.score})
                         </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">—</span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <div className={`font-semibold ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <div className={`font-semibold ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
-                    </td>
-
-                    <td className="px-4 py-3">
-                      {r.current ? (
-                        <div className="text-xs text-white/70">
-                          <div className="text-white/85 font-semibold">
-                            {r.current.status} (score {r.current.score})
-                          </div>
-                          <div>{r.current.date}</div>
-                        </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">—</span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-
-              {!rows.length ? (
-                <tr>
-                  <td className="px-4 py-8 text-white/60" colSpan={7}>
-                    No data.
+                        <div className="text-xs text-white/70">{r.current.date}</div>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">—</span>
+                    )}
                   </td>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+              )
+            })}
+
+            {!rows.length ? (
+              <tr>
+                <td className="px-3 py-6 text-white/60" colSpan={7}>
+                  No data.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </section>
     </main>
   )
