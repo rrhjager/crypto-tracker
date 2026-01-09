@@ -1,11 +1,13 @@
-import Link from 'next/link'
-import type { GetServerSideProps } from 'next'
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { AEX } from '@/lib/aex'
+import { cache5min } from '@/lib/cacheHeaders'
+import { computeScoreStatus } from '@/lib/taScore'
 
-type Status = 'BUY' | 'HOLD' | 'SELL'
+type Advice = 'BUY' | 'HOLD' | 'SELL'
 
 type NextSignal = {
   date: string
-  status: Status
+  status: Advice
   score: number
   close: number
   daysFromSignal: number
@@ -17,7 +19,7 @@ type Row = {
   symbol: string
   name: string
 
-  current: { date: string; status: Status; score: number; close: number } | null
+  current: { date: string; status: Advice; score: number; close: number } | null
   lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
 
   perf: {
@@ -32,71 +34,13 @@ type Row = {
   error?: string
 }
 
-type PageProps = {
-  rows: Row[]
-  fetchError?: string | null
+function toISODate(sec: number) {
+  return new Date(sec * 1000).toISOString().slice(0, 10)
 }
 
-function fmtPct(v: number | null) {
-  if (v == null || !Number.isFinite(v)) return '—'
-  const s = v >= 0 ? '+' : ''
-  return `${s}${v.toFixed(2)}%`
-}
-
-function fmtEur(v: number | null) {
-  if (v == null || !Number.isFinite(v)) return '—'
-  const sign = v >= 0 ? '+' : ''
-  return `${sign}€${v.toFixed(2)}`
-}
-
-function priceMoveClass(raw: number | null) {
-  if (raw == null || !Number.isFinite(raw)) return 'text-white/50'
-  if (raw > 0) return 'text-green-200'
-  if (raw < 0) return 'text-red-200'
-  return 'text-white/80'
-}
-
-function pctClassBySign(v: number | null) {
-  if (v == null || !Number.isFinite(v)) return 'text-white/50'
-  if (v > 0) return 'text-green-200'
-  if (v < 0) return 'text-red-200'
-  return 'text-white/80'
-}
-
-function median(nums: number[]) {
-  if (!nums.length) return null
-  const a = nums.slice().sort((x, y) => x - y)
-  const mid = Math.floor(a.length / 2)
-  if (a.length % 2 === 1) return a[mid]
-  return (a[mid - 1] + a[mid]) / 2
-}
-
-function mean(nums: number[]) {
-  if (!nums.length) return null
-  return nums.reduce((s, x) => s + x, 0) / nums.length
-}
-
-type Summary = {
-  nIncluded: number
-  nEligible: number
-  winRate: number | null
-  avg: number | null
-  med: number | null
-}
-
-function safeDate(d: string | null | undefined) {
-  if (!d) return null
-  const dt = new Date(d + 'T00:00:00Z')
-  if (!Number.isFinite(dt.getTime())) return null
-  return dt
-}
-
-function diffDays(fromISO: string, toISO: string) {
-  const a = safeDate(fromISO)
-  const b = safeDate(toISO)
-  if (!a || !b) return null
-  const ms = b.getTime() - a.getTime()
-  return Math.max(0, Math.round(ms / 86400000))
+function pct(from: number, to: number) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return null
+  return ((to / from) - 1) * 100
 }
 
 function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
@@ -104,378 +48,302 @@ function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
   return side === 'BUY' ? raw : -raw
 }
 
-function isValidBaseRow(r: Row) {
-  if (r.error) return false
-  if (!r.lastSignal) return false
-  if (!r.current) return false
-  if (!Number.isFinite(r.lastSignal.close) || !Number.isFinite(r.current.close)) return false
-  return true
+function smaAt(arr: number[], i: number, period: number) {
+  if (i + 1 < period) return null
+  let s = 0
+  for (let k = i - period + 1; k <= i; k++) s += arr[k]
+  return s / period
 }
 
-function buildDirectionalSummary(
-  rows: Row[],
-  getRaw: (r: Row) => number | null,
-  isEligible: (r: Row) => boolean
-): Summary {
-  const eligible = rows.filter(isEligible)
-  const alignedVals: number[] = []
+function emaSeries(arr: number[], period: number) {
+  const out: Array<number | null> = new Array(arr.length).fill(null)
+  if (arr.length < period) return out
+  const k = 2 / (period + 1)
 
-  for (const r of eligible) {
-    const side = r.lastSignal?.status
-    if (!side) continue
-    const raw = getRaw(r)
-    if (raw == null || !Number.isFinite(raw)) continue
-    const aligned = signalFromRaw(side, raw)
-    if (aligned == null || !Number.isFinite(aligned)) continue
-    alignedVals.push(aligned)
+  // seed = SMA(period)
+  let seed = 0
+  for (let i = 0; i < period; i++) seed += arr[i]
+  seed /= period
+  out[period - 1] = seed
+
+  let prev = seed
+  for (let i = period; i < arr.length; i++) {
+    const v = arr[i]
+    const next = v * k + prev * (1 - k)
+    out[i] = next
+    prev = next
   }
-
-  const nEligible = eligible.length
-  const nIncluded = alignedVals.length
-
-  if (nIncluded === 0) return { nIncluded, nEligible, winRate: null, avg: null, med: null }
-
-  const wins = alignedVals.filter(v => v > 0).length
-  return {
-    nIncluded,
-    nEligible,
-    winRate: (wins / nIncluded) * 100,
-    avg: mean(alignedVals),
-    med: median(alignedVals),
-  }
+  return out
 }
 
-function StatCard({
-  title,
-  subtitle,
-  stat,
-}: {
-  title: string
-  subtitle: string
-  stat: Summary
-}) {
-  const winTxt = stat.winRate == null ? '—' : `${stat.winRate.toFixed(0)}%`
-  const winCls =
-    stat.winRate == null
-      ? 'text-white/90'
-      : stat.winRate > 50
-      ? 'text-green-200'
-      : stat.winRate < 50
-      ? 'text-red-200'
-      : 'text-white/90'
+function rsiSeries(closes: number[], period = 14) {
+  const out: Array<number | null> = new Array(closes.length).fill(null)
+  if (closes.length < period + 1) return out
 
-  return (
-    <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
-      <div className="text-white/85 font-semibold">{title}</div>
-      <div className="text-white/55 text-xs mt-1">{subtitle}</div>
+  let gain = 0
+  let loss = 0
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i] - closes[i - 1]
+    if (ch >= 0) gain += ch
+    else loss += -ch
+  }
 
-      <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
-        <div className="flex items-center justify-end">
-          <div className="text-xs text-white/45">
-            Included · {stat.nIncluded} / {stat.nEligible}
-          </div>
-        </div>
+  let avgGain = gain / period
+  let avgLoss = loss / period
 
-        <div className={`text-lg font-extrabold mt-1 ${winCls}`}>{winTxt}</div>
+  const rs0 = avgLoss === 0 ? Infinity : avgGain / avgLoss
+  out[period] = 100 - 100 / (1 + rs0)
 
-        <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
-          <div className="flex items-baseline justify-between gap-2">
-            <div className="text-white/55">Avg</div>
-            <div className={`font-semibold ${pctClassBySign(stat.avg)}`}>{fmtPct(stat.avg)}</div>
-          </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <div className="text-white/55">Median</div>
-            <div className={`font-semibold ${pctClassBySign(stat.med)}`}>{fmtPct(stat.med)}</div>
-          </div>
-        </div>
-      </div>
+  for (let i = period + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1]
+    const g = ch > 0 ? ch : 0
+    const l = ch < 0 ? -ch : 0
 
-      <div className="mt-3 text-xs text-white/45">Win rate is directional (SELL wins when price drops).</div>
-    </div>
-  )
+    avgGain = (avgGain * (period - 1) + g) / period
+    avgLoss = (avgLoss * (period - 1) + l) / period
+
+    const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss
+    out[i] = 100 - 100 / (1 + rs)
+  }
+
+  return out
 }
 
-function ClosedPnlCard({
-  title,
-  subtitle,
-  pnl,
-  roi,
-  n,
-  totalInvested,
-}: {
-  title: string
-  subtitle: string
-  pnl: number
-  roi: number | null
-  n: number
-  totalInvested: number
-}) {
-  return (
-    <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
-      <div className="text-white/85 font-semibold">{title}</div>
-      <div className="text-white/55 text-xs mt-1">{subtitle}</div>
+function macdHistSeries(closes: number[]) {
+  const ema12 = emaSeries(closes, 12)
+  const ema26 = emaSeries(closes, 26)
 
-      <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
-        <div className="flex items-center justify-end">
-          <div className="text-xs text-white/45">Closed · {n} trades</div>
-        </div>
+  const macd: Array<number | null> = closes.map((_, i) => {
+    const a = ema12[i]
+    const b = ema26[i]
+    if (a == null || b == null) return null
+    return a - b
+  })
 
-        <div className={`text-lg font-extrabold mt-1 ${pnl >= 0 ? 'text-green-200' : 'text-red-200'}`}>
-          {fmtEur(pnl)}
-        </div>
+  // signal EMA9 on macd (needs non-null stream)
+  const macdVals: number[] = []
+  const idxMap: number[] = []
+  for (let i = 0; i < macd.length; i++) {
+    if (macd[i] != null) {
+      macdVals.push(macd[i] as number)
+      idxMap.push(i)
+    }
+  }
 
-        <div className="mt-1 text-xs text-white/70">
-          Invested: €{totalInvested.toFixed(0)} · ROI:{' '}
-          <span className={pctClassBySign(roi)}>{fmtPct(roi)}</span>
-        </div>
-      </div>
+  const sigCompact = emaSeries(macdVals, 9)
+  const signal: Array<number | null> = new Array(closes.length).fill(null)
+  for (let j = 0; j < sigCompact.length; j++) {
+    const idx = idxMap[j]
+    signal[idx] = sigCompact[j]
+  }
 
-      <div className="mt-3 text-xs text-white/45">
-        Assumption: €10 notional per signal. Exit at the moment the status changes.
-      </div>
-    </div>
-  )
+  const hist: Array<number | null> = closes.map((_, i) => {
+    const m = macd[i]
+    const s = signal[i]
+    if (m == null || s == null) return null
+    return m - s
+  })
+
+  return hist
 }
 
-export default function AexPastPerformancePage({ rows, fetchError }: PageProps) {
-  const eligibleBase = (r: Row) => isValidBaseRow(r)
+async function fetchYahooDaily(symbol: string) {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?range=2y&interval=1d&includePrePost=false&events=div%7Csplit`
 
-  const show7d = (r: Row) => {
-    if (!eligibleBase(r)) return false
-    if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 7
-    const days = diffDays(r.lastSignal!.date, r.current!.date)
-    return days != null && days >= 7
+  const r = await fetch(url, {
+    headers: {
+      accept: 'application/json',
+      // Yahoo is sometimes picky; harmless UA helps.
+      'user-agent': 'Mozilla/5.0 (SignalHub) past-performance',
+    },
+  })
+
+  if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`)
+  const j = await r.json()
+
+  const res = j?.chart?.result?.[0]
+  const ts: number[] = Array.isArray(res?.timestamp) ? res.timestamp : []
+  const quote = res?.indicators?.quote?.[0]
+  const closeRaw: Array<number | null> = Array.isArray(quote?.close) ? quote.close : []
+  const volRaw: Array<number | null> = Array.isArray(quote?.volume) ? quote.volume : []
+
+  const times: number[] = []
+  const closes: number[] = []
+  const volumes: number[] = []
+
+  for (let i = 0; i < ts.length; i++) {
+    const c = closeRaw[i]
+    const v = volRaw[i]
+    if (c == null || !Number.isFinite(c)) continue
+    times.push(ts[i])
+    closes.push(c)
+    volumes.push(v != null && Number.isFinite(v) ? v : 0)
   }
 
-  const show30d = (r: Row) => {
-    if (!eligibleBase(r)) return false
-    if (r.nextSignal && Number.isFinite(r.nextSignal.daysFromSignal)) return r.nextSignal.daysFromSignal >= 30
-    const days = diffDays(r.lastSignal!.date, r.current!.date)
-    return days != null && days >= 30
-  }
-
-  const untilRawClosed = (r: Row) => {
-    if (!eligibleBase(r)) return null
-    if (r.nextSignal?.rawReturnPct != null && Number.isFinite(r.nextSignal.rawReturnPct)) return r.nextSignal.rawReturnPct
-    return null
-  }
-
-  const sUntil = buildDirectionalSummary(rows, untilRawClosed, r => eligibleBase(r) && !!r.nextSignal)
-  const s7 = buildDirectionalSummary(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
-  const s30 = buildDirectionalSummary(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
-
-  const betEur = 10
-  let pnl = 0
-  let nClosed = 0
-
-  for (const r of rows) {
-    if (!eligibleBase(r)) continue
-    if (!r.nextSignal) continue
-    const side = r.lastSignal!.status
-    const raw = r.nextSignal.rawReturnPct
-    if (raw == null || !Number.isFinite(raw)) continue
-    const aligned = signalFromRaw(side, raw)
-    if (aligned == null || !Number.isFinite(aligned)) continue
-    pnl += (betEur * aligned) / 100
-    nClosed += 1
-  }
-
-  const totalInvested = nClosed * betEur
-  const roi = totalInvested > 0 ? (pnl / totalInvested) * 100 : null
-
-  return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-extrabold">AEX Past Performance</h1>
-        </div>
-        <Link href="/past-performance" className="text-sm text-white/70 hover:text-white">
-          ← Back
-        </Link>
-      </div>
-
-      <div className="mb-6 grid md:grid-cols-4 gap-4">
-        <StatCard
-          title="Until next signal (closed)"
-          subtitle="Directional win rate until the model changes status (closed trades only)."
-          stat={sUntil}
-        />
-        <StatCard
-          title="Price 7d"
-          subtitle="Directional win rate after 7 days (only if ≥7 days of data)."
-          stat={s7}
-        />
-        <StatCard
-          title="Price 30d"
-          subtitle="Directional win rate after 30 days (only if ≥30 days of data)."
-          stat={s30}
-        />
-        <ClosedPnlCard
-          title="€10 per signal"
-          subtitle="Directional P&L: BUY benefits from up, SELL benefits from down. Closed only."
-          pnl={pnl}
-          roi={roi}
-          n={nClosed}
-          totalInvested={totalInvested}
-        />
-      </div>
-
-      {fetchError ? (
-        <div className="mb-6 rounded-xl bg-red-500/10 ring-1 ring-red-400/30 p-4 text-red-200">
-          Failed to load: {fetchError}
-        </div>
-      ) : null}
-
-      <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
-        <table className="w-full table-fixed text-sm">
-          <colgroup>
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '18%' }} />
-            <col style={{ width: '7%' }} />
-            <col style={{ width: '21%' }} />
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '12%' }} />
-          </colgroup>
-
-          <thead className="bg-black/25 text-white/70">
-            <tr>
-              <th className="text-left px-3 py-2 text-xs font-semibold">Equity</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">Last signal</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">Score</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">Until next</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">7d</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">30d</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold">Current</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-white/10">
-            {rows.map((r) => {
-              const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
-              const show7 = show7d(r)
-              const show30 = show30d(r)
-
-              const d7Raw = show7 ? r.perf.d7Raw : null
-              const d30Raw = show30 ? r.perf.d30Raw : null
-
-              return (
-                <tr key={r.symbol} className="hover:bg-white/[0.03] align-top">
-                  <td className="px-3 py-2">
-                    <Link href={`/stocks/${encodeURIComponent(r.symbol)}`} className="group block">
-                      <div className="text-white/90 font-semibold truncate group-hover:text-white">
-                        {r.name}
-                      </div>
-                      <div className="text-xs text-white/55 truncate group-hover:text-white/70">
-                        ({r.symbol})
-                      </div>
-                    </Link>
-                  </td>
-
-                  <td className="px-3 py-2">
-                    {r.error ? (
-                      <span className="text-red-200 text-xs">{r.error}</span>
-                    ) : r.lastSignal ? (
-                      <div className="flex flex-col gap-1">
-                        <span
-                          className={`w-fit text-xs px-2 py-1 rounded ${
-                            r.lastSignal.status === 'BUY'
-                              ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
-                              : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
-                          }`}
-                        >
-                          → {r.lastSignal.status}
-                        </span>
-                        <span className="text-xs text-white/80">{r.lastSignal.date}</span>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
-                    )}
-                  </td>
-
-                  <td className="px-3 py-2">
-                    <div className="text-white/90 font-semibold tabular-nums">
-                      {r.lastSignal ? r.lastSignal.score : '—'}
-                    </div>
-                  </td>
-
-                  <td className="px-3 py-2">
-                    {r.nextSignal ? (
-                      <div className="flex flex-col gap-1">
-                        <div className={`font-semibold tabular-nums ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
-                          {fmtPct(r.nextSignal.rawReturnPct)}
-                        </div>
-                        <div className="text-xs text-white/70 truncate">
-                          {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
-                        </div>
-                        <div className="text-xs text-white/55">{r.nextSignal.date}</div>
-                      </div>
-                    ) : eligibleBase(r) ? (
-                      <div className="text-xs text-white/50">
-                        — <span className="ml-1">(still open · {openDays != null ? `${openDays}d` : '—'})</span>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">—</span>
-                    )}
-                  </td>
-
-                  <td className="px-3 py-2">
-                    <div className={`font-semibold tabular-nums ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
-                  </td>
-
-                  <td className="px-3 py-2">
-                    <div className={`font-semibold tabular-nums ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
-                  </td>
-
-                  <td className="px-3 py-2">
-                    {r.current ? (
-                      <div className="flex flex-col gap-1">
-                        <div className="text-xs text-white/85 font-semibold truncate">
-                          {r.current.status} (score {r.current.score})
-                        </div>
-                        <div className="text-xs text-white/70">{r.current.date}</div>
-                      </div>
-                    ) : (
-                      <span className="text-white/50 text-xs">—</span>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-
-            {!rows.length ? (
-              <tr>
-                <td className="px-3 py-6 text-white/60" colSpan={7}>
-                  No data.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
-    </main>
-  )
+  if (closes.length < 260) throw new Error('Not enough daily history')
+  return { times, closes, volumes }
 }
 
-export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  try {
-    const host = ctx.req.headers['x-forwarded-host'] || ctx.req.headers.host
-    const proto = (ctx.req.headers['x-forwarded-proto'] as string) || 'http'
-    const baseUrl = `${proto}://${host}`
+function computeStates(times: number[], closes: number[], volumes: number[]) {
+  const rsi = rsiSeries(closes, 14)
+  const hist = macdHistSeries(closes)
 
-    const r = await fetch(`${baseUrl}/api/past-performance/aex`, {
-      headers: { accept: 'application/json' },
+  const states: Array<{ status: Advice; score: number }> = new Array(closes.length).fill(null as any)
+
+  for (let i = 0; i < closes.length; i++) {
+    const ma50 = smaAt(closes, i, 50)
+    const ma200 = smaAt(closes, i, 200)
+    const rsi14 = rsi[i]
+    const macdHist = hist[i]
+
+    const volAvg20 = smaAt(volumes, i, 20)
+    const volRatio = volAvg20 && volAvg20 > 0 ? volumes[i] / volAvg20 : null
+
+    const { score, status } = computeScoreStatus({
+      ma: { ma50, ma200 },
+      rsi: rsi14,
+      macd: { hist: macdHist },
+      volume: { ratio: volRatio },
     })
 
-    if (!r.ok) {
-      return { props: { rows: [], fetchError: `API error: ${r.status}` } }
+    states[i] = { score, status }
+  }
+
+  return states
+}
+
+async function computeRow(symbol: string, name: string): Promise<Row> {
+  try {
+    const { times, closes, volumes } = await fetchYahooDaily(symbol)
+    const states = computeStates(times, closes, volumes)
+
+    const lastIdx = closes.length - 1
+    const cur = states[lastIdx]
+    const current = {
+      date: toISODate(times[lastIdx]),
+      status: cur.status,
+      score: cur.score,
+      close: closes[lastIdx],
     }
 
-    const json = await r.json()
-    const rows = Array.isArray(json?.rows) ? (json.rows as Row[]) : []
+    // to avoid early “junk” (no MA200 yet), start searching only after 220 bars
+    const MIN_I = 220
+    let eventIdx: number | null = null
+    let eventStatus: Advice | null = null
+    let eventScore = 50
 
-    return { props: { rows, fetchError: null } }
+    let curIdx = lastIdx
+    let curState = states[lastIdx]
+
+    for (let i = lastIdx - 1; i >= MIN_I; i--) {
+      const prevState = states[i]
+      if (curState.status !== prevState.status && (curState.status === 'BUY' || curState.status === 'SELL')) {
+        eventIdx = curIdx
+        eventStatus = curState.status
+        eventScore = curState.score
+        break
+      }
+      curIdx = i
+      curState = prevState
+    }
+
+    if (eventIdx == null || eventStatus == null) {
+      return {
+        symbol,
+        name,
+        current,
+        lastSignal: null,
+        perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+        nextSignal: null,
+      }
+    }
+
+    const side = eventStatus as 'BUY' | 'SELL'
+    const eventClose = closes[eventIdx]
+
+    const lastSignal = {
+      date: toISODate(times[eventIdx]),
+      status: side,
+      score: eventScore,
+      close: eventClose,
+    }
+
+    const d7Raw = eventIdx + 7 < closes.length ? pct(eventClose, closes[eventIdx + 7]) : null
+    const d30Raw = eventIdx + 30 < closes.length ? pct(eventClose, closes[eventIdx + 30]) : null
+
+    let nextSignal: NextSignal | null = null
+    for (let j = eventIdx + 1; j < closes.length; j++) {
+      const st = states[j]
+      if (st.status !== eventStatus) {
+        const raw = pct(eventClose, closes[j])
+        nextSignal = {
+          date: toISODate(times[j]),
+          status: st.status,
+          score: st.score,
+          close: closes[j],
+          daysFromSignal: j - eventIdx,
+          rawReturnPct: raw,
+          signalReturnPct: signalFromRaw(side, raw),
+        }
+        break
+      }
+    }
+
+    return {
+      symbol,
+      name,
+      current,
+      lastSignal,
+      perf: {
+        d7Raw,
+        d7Signal: signalFromRaw(side, d7Raw),
+        d30Raw,
+        d30Signal: signalFromRaw(side, d30Raw),
+      },
+      nextSignal,
+    }
   } catch (e: any) {
-    return { props: { rows: [], fetchError: e?.message || 'Failed to fetch' } }
+    return {
+      symbol,
+      name,
+      current: null,
+      lastSignal: null,
+      perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+      nextSignal: null,
+      error: String(e?.message || e),
+    }
+  }
+}
+
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    cache5min(res, 300, 1800)
+
+    const symbols = AEX.map(x => ({ symbol: x.symbol, name: x.name }))
+    const rows: Row[] = []
+
+    // keep it gentle for Yahoo
+    const batches = chunk(symbols, 6)
+    for (let bi = 0; bi < batches.length; bi++) {
+      const group = batches[bi]
+      const part = await Promise.all(group.map(x => computeRow(x.symbol, x.name)))
+      rows.push(...part)
+      if (bi < batches.length - 1) await new Promise(r => setTimeout(r, 250))
+    }
+
+    res.status(200).json({
+      meta: { market: 'AEX', computedAt: Date.now() },
+      rows,
+    })
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message || e) })
   }
 }
