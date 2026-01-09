@@ -210,8 +210,8 @@ function ClosedPnlCard({
       <div className="text-white/55 text-xs mt-1">{subtitle}</div>
 
       <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
-        <div className="flex items-center justify-between">
-          <div className="text-white/70 text-xs font-semibold">1x (spot)</div>
+        {/* ✅ removed "1x (spot)" */}
+        <div className="flex items-center justify-end">
           <div className="text-xs text-white/45">Closed · {n} trades</div>
         </div>
 
