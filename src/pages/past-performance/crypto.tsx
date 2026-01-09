@@ -164,6 +164,15 @@ function StatCard({
   stat: Summary
 }) {
   const winTxt = stat.winRate == null ? '—' : `${stat.winRate.toFixed(0)}%`
+  // ✅ requested: win% green above 50%, red below 50%
+  const winCls =
+    stat.winRate == null
+      ? 'text-white/90'
+      : stat.winRate > 50
+      ? 'text-green-200'
+      : stat.winRate < 50
+      ? 'text-red-200'
+      : 'text-white/90'
 
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
@@ -177,7 +186,7 @@ function StatCard({
           </div>
         </div>
 
-        <div className="text-lg font-extrabold mt-1 text-white/90">{winTxt}</div>
+        <div className={`text-lg font-extrabold mt-1 ${winCls}`}>{winTxt}</div>
 
         <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
           <div className="flex items-baseline justify-between gap-2">
@@ -327,7 +336,7 @@ export default function CryptoPastPerformancePage({ rows, fetchError }: PageProp
         </div>
       ) : null}
 
-      {/* ✅ UPDATED TABLE: no horizontal scroll + compact layout */}
+      {/* ✅ TABLE: no horizontal scroll + compact layout */}
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <table className="w-full table-fixed text-sm">
           <colgroup>
