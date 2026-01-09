@@ -49,18 +49,11 @@ function fmtEur(v: number | null) {
   return `${sign}€${v.toFixed(2)}`
 }
 
-// table colors: green if price up, red if price down
 function priceMoveClass(raw: number | null) {
   if (raw == null || !Number.isFinite(raw)) return 'text-white/50'
   if (raw > 0) return 'text-green-200'
   if (raw < 0) return 'text-red-200'
   return 'text-white/80'
-}
-
-// ✅ blocks: percentage is green if >=50%, red if <50%
-function winRateClass(winRate: number | null) {
-  if (winRate == null || !Number.isFinite(winRate)) return 'text-white/90'
-  return winRate >= 50 ? 'text-green-200' : 'text-red-200'
 }
 
 function pctClassBySign(v: number | null) {
@@ -106,7 +99,6 @@ function diffDays(fromISO: string, toISO: string) {
   return Math.max(0, Math.round(ms / 86400000))
 }
 
-// raw -> signal (BUY keeps sign, SELL flips sign)
 function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
   if (raw == null) return null
   return side === 'BUY' ? raw : -raw
@@ -153,10 +145,6 @@ function buildDirectionalSummary(
   }
 }
 
-/**
- * ✅ Same “block-in-block” style as the 4th card
- * ✅ Win-rate % colored by >=50% (green) / <50% (red)
- */
 function StatCard({
   title,
   subtitle,
@@ -167,6 +155,14 @@ function StatCard({
   stat: Summary
 }) {
   const winTxt = stat.winRate == null ? '—' : `${stat.winRate.toFixed(0)}%`
+  const winCls =
+    stat.winRate == null
+      ? 'text-white/90'
+      : stat.winRate > 50
+      ? 'text-green-200'
+      : stat.winRate < 50
+      ? 'text-red-200'
+      : 'text-white/90'
 
   return (
     <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
@@ -180,7 +176,7 @@ function StatCard({
           </div>
         </div>
 
-        <div className={`text-lg font-extrabold mt-1 ${winRateClass(stat.winRate)}`}>{winTxt}</div>
+        <div className={`text-lg font-extrabold mt-1 ${winCls}`}>{winTxt}</div>
 
         <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
           <div className="flex items-baseline justify-between gap-2">
@@ -241,7 +237,7 @@ function ClosedPnlCard({
   )
 }
 
-export default function SP500PastPerformancePage({ rows, fetchError }: PageProps) {
+export default function Sp500PastPerformancePage({ rows, fetchError }: PageProps) {
   const eligibleBase = (r: Row) => isValidBaseRow(r)
 
   const show7d = (r: Row) => {
@@ -304,7 +300,11 @@ export default function SP500PastPerformancePage({ rows, fetchError }: PageProps
           subtitle="Directional win rate until the model changes status (closed trades only)."
           stat={sUntil}
         />
-        <StatCard title="Price 7d" subtitle="Directional win rate after 7 days (only if ≥7 days of data)." stat={s7} />
+        <StatCard
+          title="Price 7d"
+          subtitle="Directional win rate after 7 days (only if ≥7 days of data)."
+          stat={s7}
+        />
         <StatCard
           title="Price 30d"
           subtitle="Directional win rate after 30 days (only if ≥30 days of data)."
@@ -327,138 +327,137 @@ export default function SP500PastPerformancePage({ rows, fetchError }: PageProps
       ) : null}
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
-        <div className="overflow-x-auto">
-          {/* ✅ Keep same column structure, but reduce min width so it fits more often (less sideways scroll) */}
-          <table className="w-full text-sm table-fixed min-w-0">
-            <colgroup>
-              <col className="w-[26%]" /> {/* Stock */}
-              <col className="w-[18%]" /> {/* Last signal */}
-              <col className="w-[10%]" /> {/* Signal score */}
-              <col className="w-[20%]" /> {/* Until next */}
-              <col className="w-[9%]" /> {/* 7d */}
-              <col className="w-[9%]" /> {/* 30d */}
-              <col className="w-[8%]" /> {/* Current */}
-            </colgroup>
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '7%' }} />
+            <col style={{ width: '21%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '12%' }} />
+          </colgroup>
 
-            <thead className="bg-black/25 text-white/70">
-              <tr>
-                <th className="text-left px-4 py-3 font-semibold">Stock</th>
-                <th className="text-left px-4 py-3 font-semibold">Last signal</th>
-                <th className="text-left px-4 py-3 font-semibold">Signal score</th>
-                <th className="text-left px-4 py-3 font-semibold">Until next signal</th>
-                <th className="text-left px-4 py-3 font-semibold">Price 7d</th>
-                <th className="text-left px-4 py-3 font-semibold">Price 30d</th>
-                <th className="text-left px-4 py-3 font-semibold">Current</th>
-              </tr>
-            </thead>
+          <thead className="bg-black/25 text-white/70">
+            <tr>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Equity</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Last signal</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Score</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Until next</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">7d</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">30d</th>
+              <th className="text-left px-3 py-2 text-xs font-semibold">Current</th>
+            </tr>
+          </thead>
 
-            <tbody className="divide-y divide-white/10">
-              {rows.map(r => {
-                const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
-                const show7 = show7d(r)
-                const show30 = show30d(r)
+          <tbody className="divide-y divide-white/10">
+            {rows.map((r) => {
+              const openDays = r.lastSignal && r.current ? diffDays(r.lastSignal.date, r.current.date) : null
+              const show7 = show7d(r)
+              const show30 = show30d(r)
 
-                const d7Raw = show7 ? r.perf.d7Raw : null
-                const d30Raw = show30 ? r.perf.d30Raw : null
+              const d7Raw = show7 ? r.perf.d7Raw : null
+              const d30Raw = show30 ? r.perf.d30Raw : null
 
-                return (
-                  <tr key={r.symbol} className="hover:bg-white/[0.03]">
-                    {/* ✅ Clickable like stock tracker */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Link
-                          href={`/stocks/${encodeURIComponent(r.symbol)}`}
-                          className="text-white/90 font-semibold hover:underline truncate"
-                        >
-                          {r.name}
-                        </Link>
-                        <span className="text-xs text-white/55 shrink-0">({r.symbol})</span>
+              return (
+                <tr key={r.symbol} className="hover:bg-white/[0.03] align-top">
+                  <td className="px-3 py-2">
+                    <Link href={`/stocks/${encodeURIComponent(r.symbol)}`} className="group block">
+                      <div className="text-white/90 font-semibold truncate group-hover:text-white">
+                        {r.name}
                       </div>
-                    </td>
+                      <div className="text-xs text-white/55 truncate group-hover:text-white/70">
+                        ({r.symbol})
+                      </div>
+                    </Link>
+                  </td>
 
-                    <td className="px-4 py-3">
-                      {r.error ? (
-                        <span className="text-red-200 text-xs">{r.error}</span>
-                      ) : r.lastSignal ? (
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-xs px-2 py-1 rounded ${
-                              r.lastSignal.status === 'BUY'
-                                ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
-                                : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
-                            }`}
-                          >
-                            → {r.lastSignal.status}
-                          </span>
-                          <span className="text-white/80">{r.lastSignal.date}</span>
+                  <td className="px-3 py-2">
+                    {r.error ? (
+                      <span className="text-red-200 text-xs">{r.error}</span>
+                    ) : r.lastSignal ? (
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`w-fit text-xs px-2 py-1 rounded ${
+                            r.lastSignal.status === 'BUY'
+                              ? 'bg-green-500/15 text-green-200 ring-1 ring-green-400/30'
+                              : 'bg-red-500/15 text-red-200 ring-1 ring-red-400/30'
+                          }`}
+                        >
+                          → {r.lastSignal.status}
+                        </span>
+                        <span className="text-xs text-white/80">{r.lastSignal.date}</span>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
+                    )}
+                  </td>
+
+                  <td className="px-3 py-2">
+                    <div className="text-white/90 font-semibold tabular-nums">
+                      {r.lastSignal ? r.lastSignal.score : '—'}
+                    </div>
+                  </td>
+
+                  <td className="px-3 py-2">
+                    {r.nextSignal ? (
+                      <div className="flex flex-col gap-1">
+                        <div className={`font-semibold tabular-nums ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
+                          {fmtPct(r.nextSignal.rawReturnPct)}
                         </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">No BUY/SELL switch found</span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-white/80">{r.lastSignal ? r.lastSignal.score : '—'}</td>
-
-                    <td className="px-4 py-3">
-                      {r.nextSignal ? (
-                        <div className="text-xs">
-                          <div className={`font-semibold ${priceMoveClass(r.nextSignal.rawReturnPct)}`}>
-                            {fmtPct(r.nextSignal.rawReturnPct)}
-                          </div>
-                          <div className="text-white/70">
-                            {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
-                          </div>
-                          <div className="text-white/55">{r.nextSignal.date}</div>
+                        <div className="text-xs text-white/70 truncate">
+                          {r.nextSignal.daysFromSignal}d → {r.nextSignal.status} (score {r.nextSignal.score})
                         </div>
-                      ) : eligibleBase(r) ? (
-                        <div className="text-xs text-white/50">
-                          — <span className="ml-1">(still open · {openDays != null ? `${openDays}d` : '—'})</span>
+                        <div className="text-xs text-white/55">{r.nextSignal.date}</div>
+                      </div>
+                    ) : eligibleBase(r) ? (
+                      <div className="text-xs text-white/50">
+                        — <span className="ml-1">(still open · {openDays != null ? `${openDays}d` : '—'})</span>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">—</span>
+                    )}
+                  </td>
+
+                  <td className="px-3 py-2">
+                    <div className={`font-semibold tabular-nums ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
+                  </td>
+
+                  <td className="px-3 py-2">
+                    <div className={`font-semibold tabular-nums ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
+                  </td>
+
+                  <td className="px-3 py-2">
+                    {r.current ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="text-xs text-white/85 font-semibold truncate">
+                          {r.current.status} (score {r.current.score})
                         </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">—</span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <div className={`font-semibold ${priceMoveClass(d7Raw)}`}>{fmtPct(d7Raw)}</div>
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <div className={`font-semibold ${priceMoveClass(d30Raw)}`}>{fmtPct(d30Raw)}</div>
-                    </td>
-
-                    <td className="px-4 py-3">
-                      {r.current ? (
-                        <div className="text-xs text-white/70">
-                          <div className="text-white/85 font-semibold truncate">
-                            {r.current.status} (score {r.current.score})
-                          </div>
-                          <div>{r.current.date}</div>
-                        </div>
-                      ) : (
-                        <span className="text-white/50 text-xs">—</span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-
-              {!rows.length ? (
-                <tr>
-                  <td className="px-4 py-8 text-white/60" colSpan={7}>
-                    No data.
+                        <div className="text-xs text-white/70">{r.current.date}</div>
+                      </div>
+                    ) : (
+                      <span className="text-white/50 text-xs">—</span>
+                    )}
                   </td>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+              )
+            })}
+
+            {!rows.length ? (
+              <tr>
+                <td className="px-3 py-6 text-white/60" colSpan={7}>
+                  No data.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </section>
     </main>
   )
 }
 
-export const getServerSideProps: GetServerSideProps<PageProps> = async ctx => {
+export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   try {
     const host = ctx.req.headers['x-forwarded-host'] || ctx.req.headers.host
     const proto = (ctx.req.headers['x-forwarded-proto'] as string) || 'http'
