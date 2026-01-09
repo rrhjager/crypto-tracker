@@ -1,89 +1,78 @@
 // src/lib/taScore.ts
-export type Status = 'BUY' | 'HOLD' | 'SELL'
+export type Advice = 'BUY' | 'HOLD' | 'SELL'
 
-export type MAStruct    = { ma50: number | null; ma200: number | null }
-export type MACDStruct  = { hist: number | null }
-export type VolumeStruct= { ratio: number | null }
-
-export function statusFromScore(score: number): Status {
-  if (score >= 66) return 'BUY'
-  if (score <= 33) return 'SELL'
-  return 'HOLD'
-}
-
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
-
-// ——— Agressiever profiel (identiek voor alle pagina’s) ———
-const AGGR = {
-  // MA: sneller naar extremen (was 0.20 spread-window; nu 0.12)
-  ma: { window: 0.12, bullBase: 62, bearBase: 38 }, // basis + range 40 blijft
-  // RSI: center 50, “gamma” wat hoger zodat extremer weegt
-  rsi: { center: 50, gamma: 1.30 },
-  // MACD: normalizeer hist t.o.v. MA50; strakker threshold
-  macd: { ref: 0.006, scale: 22 }, // 0.6% van MA50 ≈ sterk signaal
-  // Volume: center rond 1.0 met hogere gain
-  vol: { gain: 45 } // was ~50±30 → nu ±45
-}
-
-/**
- * Eén bron van waarheid voor de score (homepage, overzicht, detail).
- * Weging: MA 35% · RSI 25% · MACD 25% · Volume 15%
- */
-export function computeScoreStatus(ind: {
-  ma?: MAStruct | null
+export function computeScoreStatus(input: {
+  ma?: { ma50: number | null; ma200: number | null }
   rsi?: number | null
-  macd?: MACDStruct | null
-  volume?: VolumeStruct | null
-}): { score: number; status: Status } {
-  // --- MA (35%)
+  macd?: { hist: number | null }
+  volume?: { ratio: number | null }
+}): { score: number; status: Advice } {
+  // weights add to 1.00
+  const W_MA = 0.35
+  const W_RSI = 0.25
+  const W_MACD = 0.25
+  const W_VOL = 0.15
+
+  // smooth pull-away from 50
+  const GAMMA = 0.9
+
+  // --- MA score ---
+  // 0..100 from relative MA50 vs MA200 (trend)
   let maScore = 50
-  if (ind.ma?.ma50 != null && ind.ma?.ma200 != null) {
-    const { ma50, ma200 } = ind.ma
-    const W = Math.max(1e-9, AGGR.ma.window)
-    if (ma50 > ma200) {
-      const spread = clamp(ma50 / Math.max(1e-9, ma200) - 1, 0, AGGR.ma.window)
-      maScore = AGGR.ma.bullBase + (spread / W) * 40 // tot max 102 maar clamped later
-    } else if (ma50 < ma200) {
-      const spread = clamp(ma200 / Math.max(1e-9, ma50) - 1, 0, AGGR.ma.window)
-      maScore = AGGR.ma.bearBase - (spread / W) * 40
-    }
+  const ma50 = input.ma?.ma50
+  const ma200 = input.ma?.ma200
+  if (Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number) && (ma200 as number) > 0) {
+    const ratio = (ma50 as number) / (ma200 as number)
+    // map ratio 0.95..1.05 => 0..100 (clamped)
+    const x = Math.max(0, Math.min(1, (ratio - 0.95) / 0.10))
+    maScore = x * 100
+    maScore = maScore >= 50 ? 50 + (maScore - 50) * GAMMA : 50 - (50 - maScore) * GAMMA
   }
-  maScore = clamp(maScore, 0, 100)
 
-  // --- RSI (25%) — projecteer 30..70 op 0..100 en maak agressiever
+  // --- RSI score ---
+  // ✅ INVERTED RSI: low RSI is bullish, high RSI is bearish.
+  // We map RSI 30..70 => 0..100, then flip to 100..0.
   let rsiScore = 50
-  if (typeof ind.rsi === 'number') {
-    const base = clamp(((ind.rsi - 30) / 40) * 100, 0, 100) // 30..70 → 0..100
-    // aggressiever: boost afstand tot 50
-    const delta = (base - 50) * AGGR.rsi.gamma
-    rsiScore = clamp(50 + delta, 0, 100)
+  const rsi = input.rsi
+  if (Number.isFinite(rsi as number)) {
+    const x = Math.max(0, Math.min(1, ((rsi as number) - 30) / 40)) // 30..70 => 0..1
+    let base = x * 100 // 0..100
+    base = 100 - base // ✅ flip
+    rsiScore = base >= 50 ? 50 + (base - 50) * GAMMA : 50 - (50 - base) * GAMMA
   }
 
-  // --- MACD (25%) — normaliseer hist t.o.v. MA50
+  // --- MACD hist score ---
+  // hist positive => bullish, negative => bearish
   let macdScore = 50
-  const hist = ind.macd?.hist
-  const ref = ind.ma?.ma50 ?? null
-  if (typeof hist === 'number') {
-    if (ref && ref > 0) {
-      // rel = (hist/ma50)/ref → clamp -1..1 → 50 ± scale*rel
-      const rel = clamp((hist / ref) / Math.max(1e-9, AGGR.macd.ref), -1, 1)
-      macdScore = clamp(50 + rel * AGGR.macd.scale, 0, 100)
-    } else {
-      macdScore = hist > 0 ? 65 : hist < 0 ? 35 : 50 // iets agressiever dan 60/40
-    }
+  const hist = input.macd?.hist
+  if (Number.isFinite(hist as number)) {
+    // squash hist with tanh-ish clamp
+    const h = Math.max(-1, Math.min(1, (hist as number) / 0.02)) // scale factor
+    macdScore = (h + 1) * 50
+    macdScore = macdScore >= 50 ? 50 + (macdScore - 50) * GAMMA : 50 - (50 - macdScore) * GAMMA
   }
 
-  // --- Volume (15%) — ratio rond 1.0
+  // --- Volume ratio score ---
+  // ratio > 1 helps bullish conviction a bit; < 1 hurts a bit
   let volScore = 50
-  const ratio = ind.volume?.ratio
-  if (typeof ratio === 'number') {
-    // delta (±1) → 50 ± gain
-    const delta = clamp(ratio - 1, -1, 1)
-    volScore = clamp(50 + delta * AGGR.vol.gain, 0, 100)
+  const ratio = input.volume?.ratio
+  if (Number.isFinite(ratio as number)) {
+    const r = ratio as number
+    // map 0.5..1.5 => 0..100
+    const x = Math.max(0, Math.min(1, (r - 0.5) / 1.0))
+    volScore = x * 100
+    volScore = volScore >= 50 ? 50 + (volScore - 50) * GAMMA : 50 - (50 - volScore) * GAMMA
   }
 
-  const score = Math.round(
-    clamp(0.35 * maScore + 0.25 * rsiScore + 0.25 * macdScore + 0.15 * volScore, 0, 100)
-  )
-  return { score, status: statusFromScore(score) }
+  // weighted score
+  let score =
+    maScore * W_MA +
+    rsiScore * W_RSI +
+    macdScore * W_MACD +
+    volScore * W_VOL
+
+  score = Math.max(0, Math.min(100, score))
+  const status: Advice = score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD'
+
+  return { score: Math.round(score), status }
 }
