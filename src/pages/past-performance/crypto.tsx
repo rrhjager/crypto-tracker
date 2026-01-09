@@ -1,7 +1,5 @@
 import Link from 'next/link'
-import useSWR from 'swr'
-
-const fetcher = (url: string) => fetch(url, { cache: 'no-store' }).then(r => r.json())
+import type { GetServerSideProps } from 'next'
 
 type Status = 'BUY' | 'HOLD' | 'SELL'
 
@@ -35,6 +33,11 @@ type Row = {
   error?: string
 }
 
+type PageProps = {
+  rows: Row[]
+  fetchError?: string | null
+}
+
 function fmtPct(v: number | null) {
   if (v == null || !Number.isFinite(v)) return '—'
   const s = v >= 0 ? '+' : ''
@@ -47,7 +50,7 @@ function fmtEur(v: number | null) {
   return `${sign}€${v.toFixed(2)}`
 }
 
-// ✅ table colors: green if price up, red if price down
+// table colors: green if price up, red if price down
 function priceMoveClass(raw: number | null) {
   if (raw == null || !Number.isFinite(raw)) return 'text-white/50'
   if (raw > 0) return 'text-green-200'
@@ -55,7 +58,6 @@ function priceMoveClass(raw: number | null) {
   return 'text-white/80'
 }
 
-// ✅ summary % colors
 function pctClassBySign(v: number | null) {
   if (v == null || !Number.isFinite(v)) return 'text-white/50'
   if (v > 0) return 'text-green-200'
@@ -99,7 +101,7 @@ function diffDays(fromISO: string, toISO: string) {
   return Math.max(0, Math.round(ms / 86400000))
 }
 
-// raw -> signal (BUY keeps sign, SELL flips sign) — used internally for win rate/P&L
+// raw -> signal (BUY keeps sign, SELL flips sign)
 function signalFromRaw(side: 'BUY' | 'SELL', raw: number | null) {
   if (raw == null) return null
   return side === 'BUY' ? raw : -raw
@@ -113,11 +115,6 @@ function isValidBaseRow(r: Row) {
   return true
 }
 
-/**
- * Directional summary:
- * - SELL down counts as win (aligned > 0)
- * - Used for win rate / avg / median in the cards
- */
 function buildDirectionalSummary(
   rows: Row[],
   getRaw: (r: Row) => number | null,
@@ -210,7 +207,6 @@ function ClosedPnlCard({
       <div className="text-white/55 text-xs mt-1">{subtitle}</div>
 
       <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
-        {/* ✅ removed "1x (spot)" */}
         <div className="flex items-center justify-end">
           <div className="text-xs text-white/45">Closed · {n} trades</div>
         </div>
@@ -232,14 +228,7 @@ function ClosedPnlCard({
   )
 }
 
-export default function CryptoPastPerformancePage() {
-  const { data, error, isLoading } = useSWR<{ meta: any; rows: Row[] }>(
-    '/api/past-performance/crypto',
-    fetcher,
-    { revalidateOnFocus: false }
-  )
-
-  const rows = data?.rows || []
+export default function CryptoPastPerformancePage({ rows, fetchError }: PageProps) {
   const eligibleBase = (r: Row) => isValidBaseRow(r)
 
   const show7d = (r: Row) => {
@@ -256,19 +245,16 @@ export default function CryptoPastPerformancePage() {
     return days != null && days >= 30
   }
 
-  // Until next signal (closed only)
   const untilRawClosed = (r: Row) => {
     if (!eligibleBase(r)) return null
     if (r.nextSignal?.rawReturnPct != null && Number.isFinite(r.nextSignal.rawReturnPct)) return r.nextSignal.rawReturnPct
     return null
   }
 
-  // Summary cards (directional internally)
   const sUntil = buildDirectionalSummary(rows, untilRawClosed, r => eligibleBase(r) && !!r.nextSignal)
   const s7 = buildDirectionalSummary(rows, r => (show7d(r) ? (r.perf?.d7Raw ?? null) : null), eligibleBase)
   const s30 = buildDirectionalSummary(rows, r => (show30d(r) ? (r.perf?.d30Raw ?? null) : null), eligibleBase)
 
-  // Closed-only €10 P&L (directional)
   const betEur = 10
   let pnl = 0
   let nClosed = 0
@@ -276,14 +262,11 @@ export default function CryptoPastPerformancePage() {
   for (const r of rows) {
     if (!eligibleBase(r)) continue
     if (!r.nextSignal) continue
-
     const side = r.lastSignal!.status
     const raw = r.nextSignal.rawReturnPct
     if (raw == null || !Number.isFinite(raw)) continue
-
     const aligned = signalFromRaw(side, raw)
     if (aligned == null || !Number.isFinite(aligned)) continue
-
     pnl += (betEur * aligned) / 100
     nClosed += 1
   }
@@ -328,13 +311,11 @@ export default function CryptoPastPerformancePage() {
         />
       </div>
 
-      {error ? (
+      {fetchError ? (
         <div className="mb-6 rounded-xl bg-red-500/10 ring-1 ring-red-400/30 p-4 text-red-200">
-          Failed to load: {String((error as any)?.message || error)}
+          Failed to load: {fetchError}
         </div>
       ) : null}
-
-      {isLoading ? <div className="text-white/70">Loading…</div> : null}
 
       <section className="rounded-xl bg-white/[0.04] ring-1 ring-white/10 overflow-hidden">
         <div className="overflow-x-auto">
@@ -434,7 +415,7 @@ export default function CryptoPastPerformancePage() {
                 )
               })}
 
-              {!rows.length && !isLoading ? (
+              {!rows.length ? (
                 <tr>
                   <td className="px-4 py-8 text-white/60" colSpan={7}>
                     No data.
@@ -447,4 +428,35 @@ export default function CryptoPastPerformancePage() {
       </section>
     </main>
   )
+}
+
+export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
+  try {
+    const host = ctx.req.headers['x-forwarded-host'] || ctx.req.headers.host
+    const proto = (ctx.req.headers['x-forwarded-proto'] as string) || 'http'
+    const baseUrl = `${proto}://${host}`
+
+    const r = await fetch(`${baseUrl}/api/past-performance/crypto`, {
+      headers: {
+        // helps some deployments
+        'accept': 'application/json',
+      },
+    })
+
+    if (!r.ok) {
+      return { props: { rows: [], fetchError: `API error: ${r.status}` } }
+    }
+
+    const json = await r.json()
+    const rows = Array.isArray(json?.rows) ? (json.rows as Row[]) : []
+
+    return {
+      props: {
+        rows,
+        fetchError: null,
+      },
+    }
+  } catch (e: any) {
+    return { props: { rows: [], fetchError: e?.message || 'Failed to fetch' } }
+  }
 }
