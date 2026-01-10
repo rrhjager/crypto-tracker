@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
+import { computeScoreStatus } from '@/lib/taScore'
 
 export const config = { runtime: 'nodejs' }
 
@@ -74,7 +75,8 @@ const sma = (arr: number[], p: number): number | null => {
 
 function rsiWilder(closes: number[], period = 14): number | null {
   if (closes.length < period + 1) return null
-  let gains = 0, losses = 0
+  let gains = 0,
+    losses = 0
   for (let i = 1; i <= period; i++) {
     const d = closes[i] - closes[i - 1]
     if (d >= 0) gains += d
@@ -119,18 +121,6 @@ function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
   return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
 }
 
-// score helpers (zelfde weging als eerder)
-const adv = (v: number | null, lo: number, hi: number): Advice =>
-  v == null ? 'HOLD' : (v < lo ? 'SELL' : v > hi ? 'BUY' : 'HOLD')
-
-const scoreFrom = (ma: Advice, macd: Advice, rsi: Advice, vol: Advice) => {
-  const pts = (s: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
-  const n = (p: number) => (p + 2) / 4
-  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const agg = W_MA * n(pts(ma)) + W_MACD * n(pts(macd)) + W_RSI * n(pts(rsi)) + W_VOL * n(pts(vol))
-  return Math.round(Math.max(0, Math.min(1, agg)) * 100)
-}
-
 async function computeOne(symbol: string): Promise<SnapResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
@@ -138,9 +128,15 @@ async function computeOne(symbol: string): Promise<SnapResp> {
 
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
+
+  // (we laten dit staan als "display-status" voor MA zoals je al had)
   const maStatus: Advice | undefined =
     typeof ma50 === 'number' && typeof ma200 === 'number'
-      ? (ma50 > ma200 ? 'BUY' : ma50 < ma200 ? 'SELL' : 'HOLD')
+      ? ma50 > ma200
+        ? 'BUY'
+        : ma50 < ma200
+          ? 'SELL'
+          : 'HOLD'
       : undefined
 
   const rsi = rsiWilder(closes, 14)
@@ -150,15 +146,13 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const last20 = vols.slice(-20)
   const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
   const ratio =
-    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0
-      ? volume / avg20d
-      : null
+    typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volume / avg20d : null
 
   // prijs/dag
   const last = closes.length ? closes[closes.length - 1] : null
   const prev = closes.length > 1 ? closes[closes.length - 2] : null
-  const change = (last != null && prev != null) ? last - prev : null
-  const changePct = (change != null && prev) ? (change / prev * 100) : null
+  const change = last != null && prev != null ? last - prev : null
+  const changePct = change != null && prev ? (change / prev) * 100 : null
 
   // ✨ 7/30 bars terug (≈ 7/30 trading days)
   const pctFromBars = (n: number) =>
@@ -166,13 +160,13 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const ret7Pct = pctFromBars(7)
   const ret30Pct = pctFromBars(30)
 
-  // score
-  const macdStatus: Advice = (macd != null && signal != null)
-    ? (macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD')
-    : 'HOLD'
-  const rsiStatus: Advice = rsi == null ? 'HOLD' : rsi < 30 ? 'BUY' : rsi > 70 ? 'SELL' : 'HOLD'
-  const volStatus: Advice = adv(ratio, 0.8, 1.2)
-  const score = scoreFrom(maStatus ?? 'HOLD', macdStatus, rsiStatus, volStatus)
+  // ✅ BELANGRIJK: score berekenen met dezelfde engine als crypto (taScore.ts)
+  const { score } = computeScoreStatus({
+    ma: { ma50, ma200 },
+    rsi,
+    macd: { hist },
+    volume: { ratio },
+  })
 
   return {
     symbol,
@@ -203,8 +197,8 @@ export default async function handler(
         listRaw
           .split(',')
           .map(s => s.trim().toUpperCase())
-          .filter(Boolean),
-      ),
+          .filter(Boolean)
+      )
     )
 
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
@@ -224,13 +218,16 @@ export default async function handler(
         })
 
         // fallback als er echt niets terugkomt uit KV/computeOne
-        return data ?? {
-          symbol: sym,
-          ma: { ma50: null, ma200: null },
-          rsi: null,
-          macd: { macd: null, signal: null, hist: null },
-          volume: { volume: null, avg20d: null, ratio: null },
-        }
+        return (
+          data ?? {
+            symbol: sym,
+            ma: { ma50: null, ma200: null },
+            rsi: null,
+            macd: { macd: null, signal: null, hist: null },
+            volume: { volume: null, avg20d: null, ratio: null },
+            score: 50,
+          }
+        )
       } catch (err) {
         // Defensief: één kapotte ticker mag de hele batch niet slopen
         if (process.env.NODE_ENV !== 'production') {
@@ -243,6 +240,7 @@ export default async function handler(
           rsi: null,
           macd: { macd: null, signal: null, hist: null },
           volume: { volume: null, avg20d: null, ratio: null },
+          score: 50,
         }
       }
     })
