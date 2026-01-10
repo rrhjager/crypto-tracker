@@ -50,10 +50,15 @@ export function computeScoreStatus(ind: {
   }
   maScore = clamp(maScore, 0, 100)
 
-  // --- RSI (25%) — projecteer 30..70 op 0..100 en maak agressiever
+  // --- RSI (25%) — contrarian (oversold = bullish, overbought = bearish)
   let rsiScore = 50
   if (typeof ind.rsi === 'number') {
-    const base = clamp(((ind.rsi - 30) / 40) * 100, 0, 100) // 30..70 → 0..100
+    // ✅ fix: de oude mapping draaide RSI om (hoog RSI werd bullish).
+    // We willen:
+    // - RSI ≤ 30  => bullish => 100
+    // - RSI = 50  => neutraal => 50
+    // - RSI ≥ 70  => bearish => 0
+    const base = clamp(((70 - ind.rsi) / 40) * 100, 0, 100) // 30..70 → 100..0
     // aggressiever: boost afstand tot 50
     const delta = (base - 50) * AGGR.rsi.gamma
     rsiScore = clamp(50 + delta, 0, 100)
