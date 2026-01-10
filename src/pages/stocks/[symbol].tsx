@@ -6,15 +6,20 @@ import useSWR from 'swr'
 import ScoreBadge from '@/components/ScoreBadge'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
-const toPtsFromStatus = (s?: Advice) => (s === 'BUY' ? 2 : s === 'SELL' ? -2 : 0)
 const statusFromScore = (score: number): Advice => (score >= 66 ? 'BUY' : score <= 33 ? 'SELL' : 'HOLD')
 
 type SnapItem = {
   symbol: string
-  ma?:    { ma50: number | null; ma200: number | null; status?: Advice }
-  rsi?:   { period: number; rsi: number | null; status?: Advice }
-  macd?:  { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
-  volume?:{ volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+  score?: number | null
+
+  ma?: { ma50: number | null; ma200: number | null; status?: Advice }
+
+  // snapshot-list kan historisch 2 vormen hebben (we maken het tolerant):
+  rsi?: number | null | { period?: number; rsi: number | null; status?: Advice }
+
+  macd?: { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
+
+  volume?: { volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
 }
 type SnapResp = { items: SnapItem[]; updatedAt?: number }
 type ScoreResp = { symbol: string; score: number | null }
@@ -24,138 +29,167 @@ const fetcher = async <T,>(url: string): Promise<T> => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
+
 function fmt(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 }
 
-function normalizeAndDecorate(raw?: SnapItem) {
-  if (!raw) return null as any
-  const ma50 = raw.ma?.ma50 ?? null
-  const ma200 = raw.ma?.ma200 ?? null
-  const rsiNum = raw.rsi?.rsi ?? null
-  const rsiPeriod = raw.rsi?.period ?? 14
-  const macdVal = raw.macd?.macd ?? null
-  const macdSig = raw.macd?.signal ?? null
-  const macdHist = raw.macd?.hist ?? null
-  const volNow = raw.volume?.volume ?? null
-  const volAvg = raw.volume?.avg20d ?? null
-  const volRatio =
-    raw.volume?.ratio ??
-    (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && (volAvg as number)!==0
-      ? Number(volNow)/Number(volAvg)
-      : null)
-
-  const maStatus: Advice =
-    raw.ma?.status ??
-    ((Number.isFinite(ma50 as number) && Number.isFinite(ma200 as number))
-      ? (Number(ma50) > Number(ma200) ? 'BUY' : Number(ma50) < Number(ma200) ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  const rsiStatus: Advice =
-    raw.rsi?.status ??
-    (Number.isFinite(rsiNum as number)
-      ? (Number(rsiNum) >= 60 ? 'BUY' : Number(rsiNum) <= 40 ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  const macdStatus: Advice =
-    raw.macd?.status ??
-    (Number.isFinite(macdHist as number)
-      ? (Number(macdHist) > 0 ? 'BUY' : Number(macdHist) < 0 ? 'SELL' : 'HOLD')
-      : (Number.isFinite(macdVal as number) && Number.isFinite(macdSig as number)
-          ? (Number(macdVal) > Number(macdSig) ? 'BUY' : Number(macdVal) < Number(macdSig) ? 'SELL' : 'HOLD')
-          : 'HOLD'))
-
-  const volStatus: Advice =
-    raw.volume?.status ??
-    (Number.isFinite(volRatio as number)
-      ? (Number(volRatio) >= 1.2 ? 'BUY' : Number(volRatio) <= 0.8 ? 'SELL' : 'HOLD')
-      : 'HOLD')
-
-  return {
-    symbol: raw.symbol,
-    ma: { ma50, ma200, status: maStatus as Advice },
-    rsi: { period: rsiPeriod, rsi: rsiNum, status: rsiStatus as Advice },
-    macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus as Advice },
-    volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus as Advice },
-  }
+function toAexYahooSymbol(raw: string): string {
+  const s = String(raw || '').trim().toUpperCase()
+  if (!s) return ''
+  // als iemand al .AS of een andere suffix meegeeft: laat staan
+  if (s.includes('.')) return s
+  return `${s}.AS`
 }
 
-// Zelfde weging als op de lijsten
-function computeLocalScoreFromStatuses(it: ReturnType<typeof normalizeAndDecorate> | null): number | null {
-  if (!it) return null
-  const toNorm = (p: number) => (p + 2) / 4
-  const W_MA = 0.40, W_MACD = 0.30, W_RSI = 0.20, W_VOL = 0.10
-  const pMA   = toPtsFromStatus(it.ma?.status)
-  const pMACD = toPtsFromStatus(it.macd?.status)
-  const pRSI  = toPtsFromStatus(it.rsi?.status)
-  const pVOL  = toPtsFromStatus(it.volume?.status)
-  const agg = W_MA*toNorm(pMA) + W_MACD*toNorm(pMACD) + W_RSI*toNorm(pRSI) + W_VOL*toNorm(pVOL)
-  const score = Math.round(Math.max(0, Math.min(1, agg)) * 100)
-  return Number.isFinite(score) ? score : null
+function stripAexSuffix(sym: string) {
+  return sym.replace(/\.AS$/i, '')
+}
+
+function pillClass(s?: Advice) {
+  return `badge ${s === 'BUY' ? 'badge-buy' : s === 'SELL' ? 'badge-sell' : 'badge-hold'}`
+}
+
+// Display statuses consistent with (momentum) scoring engine
+function statusMA(ma50?: number | null, ma200?: number | null): Advice {
+  if (ma50 == null || ma200 == null) return 'HOLD'
+  if (ma50 > ma200) return 'BUY'
+  if (ma50 < ma200) return 'SELL'
+  return 'HOLD'
+}
+function statusRSI(r?: number | null): Advice {
+  if (r == null) return 'HOLD'
+  if (r > 70) return 'BUY'
+  if (r < 30) return 'SELL'
+  return 'HOLD'
+}
+function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
+  if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
+  if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
+    return macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD'
+  return 'HOLD'
+}
+function statusVolume(ratio?: number | null): Advice {
+  if (ratio == null) return 'HOLD'
+  if (ratio > 1.2) return 'BUY'
+  if (ratio < 0.8) return 'SELL'
+  return 'HOLD'
+}
+
+function normalize(item?: SnapItem | null) {
+  if (!item) return null
+
+  const ma50 = item.ma?.ma50 ?? null
+  const ma200 = item.ma?.ma200 ?? null
+
+  const rsiObj = typeof item.rsi === 'object' && item.rsi ? (item.rsi as any) : null
+  const rsiVal: number | null =
+    typeof item.rsi === 'number' ? item.rsi : (rsiObj?.rsi ?? null)
+  const rsiPeriod: number = rsiObj?.period ?? 14
+
+  const macdVal = item.macd?.macd ?? null
+  const macdSig = item.macd?.signal ?? null
+  const macdHist = item.macd?.hist ?? null
+
+  const volNow = item.volume?.volume ?? null
+  const volAvg = item.volume?.avg20d ?? null
+  const volRatio =
+    item.volume?.ratio ??
+    (Number.isFinite(volNow as number) && Number.isFinite(volAvg as number) && Number(volAvg) !== 0
+      ? Number(volNow) / Number(volAvg)
+      : null)
+
+  // status (display) — consistent thresholds
+  const maStatus: Advice = item.ma?.status ?? statusMA(ma50, ma200)
+  const rsiStatus: Advice = (rsiObj?.status as Advice) ?? statusRSI(rsiVal)
+  const macdStatus: Advice = item.macd?.status ?? statusMACD(macdHist, macdVal, macdSig)
+  const volStatus: Advice = item.volume?.status ?? statusVolume(volRatio)
+
+  const snapScore =
+    typeof item.score === 'number' && Number.isFinite(item.score) ? Math.round(item.score) : null
+
+  return {
+    symbol: item.symbol,
+    score: snapScore,
+    ma: { ma50, ma200, status: maStatus },
+    rsi: { period: rsiPeriod, rsi: rsiVal, status: rsiStatus },
+    macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus },
+    volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus },
+  }
 }
 
 export default function StockDetail() {
   const router = useRouter()
-  const sym = String(router.query.symbol || '').toUpperCase()
+  const raw = String(router.query.symbol || '')
+  const sym = toAexYahooSymbol(raw)
 
-  // 1) Snapshot voor 1 symbool (zoals SP500 detail)
+  // 1) Snapshot-list voor 1 symbool (incl. indicatoren + (na stap 3) score)
   const { data: snap, error: snapErr } = useSWR<SnapResp>(
     sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
     fetcher,
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
-  const itemNorm = normalizeAndDecorate(snap?.items?.[0])
+  const item = normalize(snap?.items?.[0] ?? null)
 
-  // 2) Centrale score (lichtgewicht)
+  // 2) Centrale score (lichtgewicht, canonical)
   const { data: serverScoreData } = useSWR<ScoreResp>(
     sym ? `/api/indicators/score/${encodeURIComponent(sym)}` : null,
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
   )
-  const serverScore = Number.isFinite(serverScoreData?.score as number)
-    ? Math.round(Number(serverScoreData!.score))
-    : null
+  const serverScore =
+    typeof serverScoreData?.score === 'number' && Number.isFinite(serverScoreData.score)
+      ? Math.round(serverScoreData.score)
+      : null
 
-  // 3) Combineer lokale en server score
-  const fallbackScore = computeLocalScoreFromStatuses(itemNorm)
+  // 3) Combineer: server score → snapshot score → 50
+  const fallbackScore = item?.score ?? null
   const score = serverScore ?? fallbackScore ?? 50
   const scoreStatus: Advice = statusFromScore(score)
 
-  const ma   = itemNorm?.ma
-  const rsi  = itemNorm?.rsi
-  const macd = itemNorm?.macd
-  const vol  = itemNorm?.volume
+  const ma = item?.ma
+  const rsi = item?.rsi
+  const macd = item?.macd
+  const vol = item?.volume
 
   return (
     <>
-      <Head><title>{sym.replace('.AS','')} — SignalHub</title></Head>
+      <Head>
+        <title>{stripAexSuffix(sym)} — SignalHub</title>
+      </Head>
+
       <main className="min-h-screen">
         {/* Header met totaalscore */}
         <section className="max-w-6xl mx-auto px-4 pt-16 pb-8">
           <div className="flex items-center justify-between gap-3">
-            <h1 className="hero">{sym.replace('.AS','')}</h1>
+            <h1 className="hero">{stripAexSuffix(sym)}</h1>
             <div className="origin-left scale-95">
               <ScoreBadge score={score} />
             </div>
           </div>
+
           <div className="mt-1 text-sm text-white/60">
             Overall signal: <span className="font-medium">{scoreStatus}</span>
             {serverScore == null && fallbackScore != null && (
-              <span className="ml-2 opacity-70">(preview via local calc)</span>
+              <span className="ml-2 opacity-70">(preview via snapshot)</span>
             )}
           </div>
         </section>
 
         {/* Indicatorblokken */}
         <section className="max-w-6xl mx-auto px-4 pb-16">
-          {snapErr && <div className="mb-3 text-red-500 text-sm">Fout bij laden: {String((snapErr as any)?.message || snapErr)}</div>}
+          {snapErr && (
+            <div className="mb-3 text-red-500 text-sm">
+              Fout bij laden: {String((snapErr as any)?.message || snapErr)}
+            </div>
+          )}
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* MA */}
             <div className="table-card p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="font-semibold">MA50 vs MA200 (Golden/Death Cross)</div>
-                <span className={`badge ${ma?.status==='BUY'?'badge-buy':ma?.status==='SELL'?'badge-sell':'badge-hold'}`}>{ma?.status || 'HOLD'}</span>
+                <span className={pillClass(ma?.status)}>{ma?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">
                 MA50: {fmt(ma?.ma50)} · MA200: {fmt(ma?.ma200)}
@@ -166,7 +200,7 @@ export default function StockDetail() {
             <div className="table-card p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="font-semibold">RSI ({rsi?.period ?? 14})</div>
-                <span className={`badge ${rsi?.status==='BUY'?'badge-buy':rsi?.status==='SELL'?'badge-sell':'badge-hold'}`}>{rsi?.status || 'HOLD'}</span>
+                <span className={pillClass(rsi?.status)}>{rsi?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">RSI: {fmt(rsi?.rsi)}</div>
             </div>
@@ -175,7 +209,7 @@ export default function StockDetail() {
             <div className="table-card p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="font-semibold">MACD (12/26/9)</div>
-                <span className={`badge ${macd?.status==='BUY'?'badge-buy':macd?.status==='SELL'?'badge-sell':'badge-hold'}`}>{macd?.status || 'HOLD'}</span>
+                <span className={pillClass(macd?.status)}>{macd?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">
                 MACD: {fmt(macd?.macd)} · Signal: {fmt(macd?.signal)} · Hist: {fmt(macd?.hist)}
@@ -186,7 +220,7 @@ export default function StockDetail() {
             <div className="table-card p-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="font-semibold">Volume vs 20d Average</div>
-                <span className={`badge ${vol?.status==='BUY'?'badge-buy':vol?.status==='SELL'?'badge-sell':'badge-hold'}`}>{vol?.status || 'HOLD'}</span>
+                <span className={pillClass(vol?.status)}>{vol?.status || 'HOLD'}</span>
               </div>
               <div className="text-sm text-white/80">
                 Vol: {fmt(vol?.volume, 0)} · Ave(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
@@ -195,8 +229,12 @@ export default function StockDetail() {
           </div>
 
           <div className="mt-6 flex gap-3">
-            <Link href="/stocks" className="btn">← Back to AEX list</Link>
-            <Link href="/" className="btn-secondary">Go to homepage</Link>
+            <Link href="/stocks" className="btn">
+              ← Back to AEX list
+            </Link>
+            <Link href="/" className="btn-secondary">
+              Go to homepage
+            </Link>
           </div>
         </section>
       </main>

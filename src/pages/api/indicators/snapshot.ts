@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
 import { computeScoreStatus } from '@/lib/taScore'
+import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
 
 export const config = { runtime: 'nodejs' }
 
@@ -67,69 +68,16 @@ function normVolumes(ohlc: any): number[] {
   return []
 }
 
-const sma = (arr: number[], p: number): number | null => {
-  if (!Array.isArray(arr) || arr.length < p) return null
-  const s = arr.slice(-p)
-  return s.reduce((a, b) => a + b, 0) / p
-}
-
-function rsiWilder(closes: number[], period = 14): number | null {
-  if (closes.length < period + 1) return null
-  let gains = 0,
-    losses = 0
-  for (let i = 1; i <= period; i++) {
-    const d = closes[i] - closes[i - 1]
-    if (d >= 0) gains += d
-    else losses -= d
-  }
-  let avgGain = gains / period
-  let avgLoss = losses / period
-  for (let i = period + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1]
-    const g = d > 0 ? d : 0
-    const l = d < 0 ? -d : 0
-    avgGain = (avgGain * (period - 1) + g) / period
-    avgLoss = (avgLoss * (period - 1) + l) / period
-  }
-  if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  const v = 100 - 100 / (1 + rs)
-  return Number.isFinite(v) ? v : null
-}
-
-function emaLast(arr: number[], period: number): number | null {
-  if (arr.length < period) return null
-  const k = 2 / (period + 1)
-  let ema = arr.slice(0, period).reduce((a, b) => a + b, 0) / period
-  for (let i = period; i < arr.length; i++) ema = arr[i] * k + ema * (1 - k)
-  return ema
-}
-
-function macdLast(arr: number[], fast = 12, slow = 26, signal = 9) {
-  if (arr.length < slow + signal) return { macd: null, signal: null, hist: null }
-  const series: number[] = []
-  for (let i = slow; i <= arr.length; i++) {
-    const slice = arr.slice(0, i)
-    const f = emaLast(slice, fast)
-    const s = emaLast(slice, slow)
-    if (f != null && s != null) series.push(f - s)
-  }
-  if (series.length < signal) return { macd: null, signal: null, hist: null }
-  const m = series[series.length - 1]
-  const sig = emaLast(series, signal)
-  const h = sig != null ? m - sig : null
-  return { macd: m ?? null, signal: sig ?? null, hist: h ?? null }
-}
-
 async function computeOne(symbol: string): Promise<SnapResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
   const vols = normVolumes(ohlc)
 
+  // ✅ shared TA helpers (zelfde basis als we straks voor crypto afdwingen)
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
 
-  // (we laten dit staan als "display-status" voor MA zoals je al had)
+  // display-status voor MA (zoals je al had)
   const maStatus: Advice | undefined =
     typeof ma50 === 'number' && typeof ma200 === 'number'
       ? ma50 > ma200
@@ -140,17 +88,16 @@ async function computeOne(symbol: string): Promise<SnapResp> {
       : undefined
 
   const rsi = rsiWilder(closes, 14)
-  const { macd, signal, hist } = macdLast(closes, 12, 26, 9)
+  const { macd, signal, hist } = macdCalc(closes, 12, 26, 9)
 
-  const volume = vols.length ? vols[vols.length - 1] : null
-  const last20 = vols.slice(-20)
-  const avg20d = last20.length === 20 ? last20.reduce((a, b) => a + b, 0) / 20 : null
+  const volume = vols.length ? (vols[vols.length - 1] ?? null) : null
+  const avg20d = avgVolume(vols, 20)
   const ratio =
     typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volume / avg20d : null
 
   // prijs/dag
-  const last = closes.length ? closes[closes.length - 1] : null
-  const prev = closes.length > 1 ? closes[closes.length - 2] : null
+  const last = closes.length ? (closes[closes.length - 1] ?? null) : null
+  const prev = closes.length > 1 ? (closes[closes.length - 2] ?? null) : null
   const change = last != null && prev != null ? last - prev : null
   const changePct = change != null && prev ? (change / prev) * 100 : null
 
@@ -160,7 +107,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const ret7Pct = pctFromBars(7)
   const ret30Pct = pctFromBars(30)
 
-  // ✅ BELANGRIJK: score berekenen met dezelfde engine als crypto (taScore.ts)
+  // ✅ score met dezelfde engine als crypto (taScore.ts)
   const { score } = computeScoreStatus({
     ma: { ma50, ma200 },
     rsi,
@@ -203,7 +150,7 @@ export default async function handler(
 
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
-    // Step C: vervang Promise.all door een concurrency pool (burst-proof)
+    // burst-proof concurrency pool
     const items = await pool(symbols, 8, async (sym) => {
       const key = `ind:snapshot:${sym}:${RANGE}`
       const snapKey = `ind:snap:all:${sym}`
@@ -217,7 +164,6 @@ export default async function handler(
           return v
         })
 
-        // fallback als er echt niets terugkomt uit KV/computeOne
         return (
           data ?? {
             symbol: sym,
@@ -229,7 +175,6 @@ export default async function handler(
           }
         )
       } catch (err) {
-        // Defensief: één kapotte ticker mag de hele batch niet slopen
         if (process.env.NODE_ENV !== 'production') {
           // eslint-disable-next-line no-console
           console.error('[snapshot-error]', sym, err)
@@ -245,7 +190,6 @@ export default async function handler(
       }
     })
 
-    // Debug-info: welke symbols hebben wél / geen score?
     const symbolsWithScore = items
       .filter(it => typeof it.score === 'number' && Number.isFinite(it.score))
       .map(it => it.symbol)
@@ -266,9 +210,7 @@ export default async function handler(
       console.log('[snapshot-debug]', debug)
     }
 
-    // Korte CDN-cache met stale-while-revalidate
     res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300')
-
     return res.status(200).json({ items, _debug: debug })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
