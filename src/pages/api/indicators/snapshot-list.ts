@@ -15,6 +15,7 @@ import { FTSE100 } from '@/lib/ftse100'
 import { NIKKEI225 } from '@/lib/nikkei225'
 import { HANGSENG } from '@/lib/hangseng'
 import { SENSEX } from '@/lib/sensex'
+import { ETFS } from '@/lib/etfs'
 
 export const config = { runtime: 'nodejs' }
 
@@ -36,9 +37,10 @@ const EDGE_MAX_AGE = 30
 const KV_TTL_SEC = 600
 const RANGE: YahooRange = '1y'
 
-// bump deze als je caching wil breken na score-wijziging
-const KV_VER = 'v3'
+// bump als je caching wil breken na score-wijziging
+const KV_VER = 'v4'
 
+// ----- static lists for ?market= -----
 const STATIC_CONS = {
   AEX,
   'S&P 500': SP500,
@@ -49,6 +51,7 @@ const STATIC_CONS = {
   'Nikkei 225': NIKKEI225,
   'Hang Seng': HANGSENG,
   Sensex: SENSEX,
+  ETFS,
 } as const
 
 const listForMarket = (mkt?: string) => {
@@ -61,7 +64,7 @@ const listForMarket = (mkt?: string) => {
 type Bar = { close?: number; c?: number; volume?: number; v?: number }
 
 const closes = (arr: any): number[] =>
-  (Array.isArray(arr)
+  Array.isArray(arr)
     ? (arr as Bar[])
         .map(b => (typeof b.close === 'number' ? b.close : typeof b.c === 'number' ? b.c : null))
         .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
@@ -69,10 +72,10 @@ const closes = (arr: any): number[] =>
       ? (arr.closes as any[]).filter((n: any): n is number => typeof n === 'number' && Number.isFinite(n))
       : Array.isArray(arr?.c)
         ? (arr.c as any[]).filter((n: any): n is number => typeof n === 'number' && Number.isFinite(n))
-        : [])
+        : []
 
 const volumes = (arr: any): number[] =>
-  (Array.isArray(arr)
+  Array.isArray(arr)
     ? (arr as Bar[])
         .map(b => (typeof b.volume === 'number' ? b.volume : typeof b.v === 'number' ? b.v : null))
         .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
@@ -80,35 +83,7 @@ const volumes = (arr: any): number[] =>
       ? (arr.volumes as any[]).filter((n: any): n is number => typeof n === 'number' && Number.isFinite(n))
       : Array.isArray(arr?.v)
         ? (arr.v as any[]).filter((n: any): n is number => typeof n === 'number' && Number.isFinite(n))
-        : [])
-
-const statusMA = (ma50: number | null, ma200: number | null): Advice => {
-  if (ma50 == null || ma200 == null) return 'HOLD'
-  if (ma50 > ma200) return 'BUY'
-  if (ma50 < ma200) return 'SELL'
-  return 'HOLD'
-}
-
-const statusRSI = (r: number | null): Advice => {
-  if (r == null) return 'HOLD'
-  if (r > 70) return 'SELL'
-  if (r < 30) return 'BUY'
-  return 'HOLD'
-}
-
-const statusMACD = (hist: number | null): Advice => {
-  if (hist == null) return 'HOLD'
-  if (hist > 0) return 'BUY'
-  if (hist < 0) return 'SELL'
-  return 'HOLD'
-}
-
-const statusVOL = (ratio: number | null): Advice => {
-  if (ratio == null) return 'HOLD'
-  if (ratio > 1.2) return 'BUY'
-  if (ratio < 0.8) return 'SELL'
-  return 'HOLD'
-}
+        : []
 
 /* ---------- compute ---------- */
 async function computeOne(symbol: string): Promise<SnapItem> {
@@ -118,38 +93,59 @@ async function computeOne(symbol: string): Promise<SnapItem> {
 
   const ma50 = sma(cs, 50)
   const ma200 = sma(cs, 200)
-
   const rsi = rsiWilder(cs, 14)
 
   const m = macdCalc(cs, 12, 26, 9)
+  const macd = m?.macd ?? null
+  const signal = m?.signal ?? null
   const hist = m?.hist ?? null
 
-  const volNow = vs.length ? vs.at(-1)! : null
+  const volNow = vs.length ? (vs.at(-1) ?? null) : null
   const avg20d = avgVolume(vs, 20)
   const ratio =
     typeof volNow === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volNow / avg20d : null
 
-  const maS = statusMA(ma50 ?? null, ma200 ?? null)
-  const rsiS = statusRSI(rsi ?? null)
-  const macdS = statusMACD(hist)
-  const volS = statusVOL(ratio)
-
+  // ✅ EXACT dezelfde engine & inputs als crypto + snapshot.ts
   const overall = computeScoreStatus({
     ma: { ma50: ma50 ?? null, ma200: ma200 ?? null },
     rsi: rsi ?? null,
-    macd: { hist },
-    volume: { ratio },
+    macd: { hist: hist ?? null },
+    volume: { ratio: ratio ?? null },
   })
 
-  const score = Number.isFinite(overall.score) ? overall.score : 50
-  const status: Advice = overall.status
+  const score = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
+  const status: Advice =
+    overall.status === 'BUY' || overall.status === 'SELL' || overall.status === 'HOLD'
+      ? overall.status
+      : 'HOLD'
+
+  // ✅ per-indicator statuses óók uit dezelfde engine (dus consistent met crypto)
+  const maStatus: Advice =
+    overall.ma?.status === 'BUY' || overall.ma?.status === 'SELL' || overall.ma?.status === 'HOLD'
+      ? overall.ma.status
+      : 'HOLD'
+
+  const rsiStatus: Advice =
+    overall.rsi?.status === 'BUY' || overall.rsi?.status === 'SELL' || overall.rsi?.status === 'HOLD'
+      ? overall.rsi.status
+      : 'HOLD'
+
+  const macdStatus: Advice =
+    overall.macd?.status === 'BUY' || overall.macd?.status === 'SELL' || overall.macd?.status === 'HOLD'
+      ? overall.macd.status
+      : 'HOLD'
+
+  const volStatus: Advice =
+    overall.volume?.status === 'BUY' || overall.volume?.status === 'SELL' || overall.volume?.status === 'HOLD'
+      ? overall.volume.status
+      : 'HOLD'
 
   return {
     symbol,
-    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maS },
-    rsi: { period: 14, rsi: rsi ?? null, status: rsiS },
-    macd: { macd: m?.macd ?? null, signal: m?.signal ?? null, hist: m?.hist ?? null, status: macdS },
-    volume: { volume: volNow ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volS },
+    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
+    rsi: { period: 14, rsi: rsi ?? null, status: rsiStatus },
+    macd: { macd, signal, hist, status: macdStatus },
+    volume: { volume: volNow ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volStatus },
     score,
     status,
   }
@@ -179,7 +175,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const market = String(req.query.market || '').trim()
 
     let symbols: string[] = []
-
     if (rawSyms) {
       symbols = rawSyms.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     } else if (market) {
@@ -191,6 +186,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     if (!symbols.length) return res.status(200).json({ items: [], updatedAt: Date.now() })
     if (symbols.length > 60) symbols = symbols.slice(0, 60)
 
+    // cache-key
     const keyId = symbols.join(',')
     const kvKey = `ind:snap:list:${KV_VER}:${RANGE}:${keyId}`
 
