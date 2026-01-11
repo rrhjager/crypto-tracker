@@ -38,7 +38,7 @@ const KV_TTL_SEC = 600
 const RANGE: YahooRange = '1y'
 
 // bump als je caching wil breken na score-wijziging
-const KV_VER = 'v4'
+const KV_VER = 'v5'
 
 // ----- static lists for ?market= -----
 const STATIC_CONS = {
@@ -85,6 +85,32 @@ const volumes = (arr: any): number[] =>
         ? (arr.v as any[]).filter((n: any): n is number => typeof n === 'number' && Number.isFinite(n))
         : []
 
+// per-indicator badge statuses (UI). Score komt uit computeScoreStatus (crypto-identiek).
+const statusMA = (ma50: number | null, ma200: number | null): Advice => {
+  if (ma50 == null || ma200 == null) return 'HOLD'
+  if (ma50 > ma200) return 'BUY'
+  if (ma50 < ma200) return 'SELL'
+  return 'HOLD'
+}
+const statusRSI = (r: number | null): Advice => {
+  if (r == null) return 'HOLD'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
+  return 'HOLD'
+}
+const statusMACD = (hist: number | null): Advice => {
+  if (hist == null) return 'HOLD'
+  if (hist > 0) return 'BUY'
+  if (hist < 0) return 'SELL'
+  return 'HOLD'
+}
+const statusVOL = (ratio: number | null): Advice => {
+  if (ratio == null) return 'HOLD'
+  if (ratio > 1.2) return 'BUY'
+  if (ratio < 0.8) return 'SELL'
+  return 'HOLD'
+}
+
 /* ---------- compute ---------- */
 async function computeOne(symbol: string): Promise<SnapItem> {
   const o = await getYahooDailyOHLC(symbol, RANGE)
@@ -105,7 +131,7 @@ async function computeOne(symbol: string): Promise<SnapItem> {
   const ratio =
     typeof volNow === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volNow / avg20d : null
 
-  // ✅ EXACT dezelfde engine & inputs als crypto + snapshot.ts
+  // ✅ EXACT dezelfde inputs als crypto-light/indicators.ts gebruikt
   const overall = computeScoreStatus({
     ma: { ma50: ma50 ?? null, ma200: ma200 ?? null },
     rsi: rsi ?? null,
@@ -113,39 +139,31 @@ async function computeOne(symbol: string): Promise<SnapItem> {
     volume: { ratio: ratio ?? null },
   })
 
-  const score = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
+  const score =
+    typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
+
+  // ✅ status exact zoals crypto: gebruik overall.status als die BUY/SELL/HOLD is, anders derive
   const status: Advice =
     overall.status === 'BUY' || overall.status === 'SELL' || overall.status === 'HOLD'
       ? overall.status
-      : 'HOLD'
+      : score >= 66
+        ? 'BUY'
+        : score <= 33
+          ? 'SELL'
+          : 'HOLD'
 
-  // ✅ per-indicator statuses óók uit dezelfde engine (dus consistent met crypto)
-  const maStatus: Advice =
-    overall.ma?.status === 'BUY' || overall.ma?.status === 'SELL' || overall.ma?.status === 'HOLD'
-      ? overall.ma.status
-      : 'HOLD'
-
-  const rsiStatus: Advice =
-    overall.rsi?.status === 'BUY' || overall.rsi?.status === 'SELL' || overall.rsi?.status === 'HOLD'
-      ? overall.rsi.status
-      : 'HOLD'
-
-  const macdStatus: Advice =
-    overall.macd?.status === 'BUY' || overall.macd?.status === 'SELL' || overall.macd?.status === 'HOLD'
-      ? overall.macd.status
-      : 'HOLD'
-
-  const volStatus: Advice =
-    overall.volume?.status === 'BUY' || overall.volume?.status === 'SELL' || overall.volume?.status === 'HOLD'
-      ? overall.volume.status
-      : 'HOLD'
+  // UI statuses (los van score-engine)
+  const maS = statusMA(ma50 ?? null, ma200 ?? null)
+  const rsiS = statusRSI(rsi ?? null)
+  const macdS = statusMACD(hist)
+  const volS = statusVOL(ratio)
 
   return {
     symbol,
-    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maStatus },
-    rsi: { period: 14, rsi: rsi ?? null, status: rsiStatus },
-    macd: { macd, signal, hist, status: macdStatus },
-    volume: { volume: volNow ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volStatus },
+    ma: { ma50: ma50 ?? null, ma200: ma200 ?? null, status: maS },
+    rsi: { period: 14, rsi: rsi ?? null, status: rsiS },
+    macd: { macd, signal, hist, status: macdS },
+    volume: { volume: volNow ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volS },
     score,
     status,
   }
@@ -175,6 +193,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const market = String(req.query.market || '').trim()
 
     let symbols: string[] = []
+
     if (rawSyms) {
       symbols = rawSyms.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     } else if (market) {
@@ -186,7 +205,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     if (!symbols.length) return res.status(200).json({ items: [], updatedAt: Date.now() })
     if (symbols.length > 60) symbols = symbols.slice(0, 60)
 
-    // cache-key
     const keyId = symbols.join(',')
     const kvKey = `ind:snap:list:${KV_VER}:${RANGE}:${keyId}`
 
