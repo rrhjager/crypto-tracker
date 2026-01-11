@@ -11,12 +11,17 @@ export const config = { runtime: 'nodejs' }
 const TTL_SEC = 300
 const RANGE: '1y' | '2y' = '1y'
 
+type Advice = 'BUY' | 'HOLD' | 'SELL'
 type Bar = { close?: number; c?: number; volume?: number; v?: number }
 
 type ScoreResp = {
   symbol: string
   score: number | null
-  status?: 'BUY' | 'HOLD' | 'SELL'
+  status?: Advice
+}
+
+function isAdvice(x: any): x is Advice {
+  return x === 'BUY' || x === 'HOLD' || x === 'SELL'
 }
 
 function normCloses(ohlc: any): number[] {
@@ -49,6 +54,7 @@ function normVolumes(ohlc: any): number[] {
   return []
 }
 
+// ✅ 1-op-1 met crypto: computeScoreStatus({ ma, rsi, macd:{hist}, volume:{ratio} })
 async function computeScore(symbol: string): Promise<ScoreResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
@@ -74,10 +80,13 @@ async function computeScore(symbol: string): Promise<ScoreResp> {
     volume: { ratio },
   })
 
+  const scoreRaw = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
+  const score = Math.round(scoreRaw)
+
   return {
     symbol,
-    score: Number.isFinite(overall.score) ? overall.score : 50,
-    status: overall.status,
+    score,
+    status: overall.status as Advice,
   }
 }
 
@@ -89,33 +98,38 @@ export default async function handler(
     const symbol = String(req.query.symbol || '').toUpperCase().trim()
     if (!symbol) return res.status(400).json({ error: 'Missing symbol' })
 
-    // Als je snapshot.ts dit al opslaat, kunnen we KV hergebruiken
+    // snapshot.ts gebruikt deze key ook voor “full snapshot”
     const kvKey = `ind:snap:all:${symbol}`
 
+    // 1) Probeer KV (als snapshot.ts al gerund heeft)
     try {
       const snap = await kvGetJSON<any>(kvKey)
       const fresh = snap && typeof snap.updatedAt === 'number' && (Date.now() - snap.updatedAt) < TTL_SEC * 1000
       const cachedScore = snap?.value?.score
       const cachedStatus = snap?.value?.status
+
       if (fresh && Number.isFinite(cachedScore)) {
         res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=120')
         return res.status(200).json({
           symbol,
           score: Math.round(Number(cachedScore)),
-          status: cachedStatus,
+          status: isAdvice(cachedStatus) ? cachedStatus : undefined,
         })
       }
     } catch {}
 
+    // 2) Compute (zelfde scoring als crypto) + schrijf terug naar KV
     const computed = await computeScore(symbol)
 
-    // Schrijf terug zodat detailpagina's en lijsten dezelfde bron kunnen gebruiken
     try {
-      await kvSetJSON(
-        kvKey,
-        { updatedAt: Date.now(), value: { score: computed.score, status: computed.status } },
-        TTL_SEC
-      )
+      // ✅ merge: behoud eventuele extra velden die snapshot.ts al had opgeslagen
+      const existing = await kvGetJSON<any>(kvKey).catch(() => null)
+      const nextValue =
+        existing && typeof existing === 'object' && existing.value && typeof existing.value === 'object'
+          ? { ...existing.value, score: computed.score, status: computed.status }
+          : { score: computed.score, status: computed.status }
+
+      await kvSetJSON(kvKey, { updatedAt: Date.now(), value: nextValue }, TTL_SEC)
     } catch {}
 
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=120')
