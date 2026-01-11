@@ -57,18 +57,22 @@ function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds were inverted (must match engine/UI convention)
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
     return macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD'
   return 'HOLD'
 }
+
 function statusVolume(ratio?: number | null): Advice {
   if (ratio == null) return 'HOLD'
   if (ratio > 1.2) return 'BUY'
@@ -83,8 +87,7 @@ function normalize(item?: SnapItem | null) {
   const ma200 = item.ma?.ma200 ?? null
 
   const rsiObj = typeof item.rsi === 'object' && item.rsi ? (item.rsi as any) : null
-  const rsiVal: number | null =
-    typeof item.rsi === 'number' ? item.rsi : (rsiObj?.rsi ?? null)
+  const rsiVal: number | null = typeof item.rsi === 'number' ? item.rsi : (rsiObj?.rsi ?? null)
   const rsiPeriod: number = rsiObj?.period ?? 14
 
   const macdVal = item.macd?.macd ?? null
