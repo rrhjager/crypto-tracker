@@ -2,7 +2,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
+
+// ✅ unified score engine (same as crypto-light/indicators.ts)
 import { computeScoreStatus } from '@/lib/taScore'
+
+// ✅ shared TA helpers (same as crypto-light/indicators.ts)
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
 
 export const config = { runtime: 'nodejs' }
@@ -13,7 +17,7 @@ const RANGE: '1y' | '2y' = '1y'
 
 type Advice = 'BUY' | 'SELL' | 'HOLD'
 
-// ✅ uitgebreid: Yahoo kan close/volume óf c/v hebben
+// Yahoo kan close/volume óf c/v hebben
 type Bar = { close?: number; c?: number; volume?: number; v?: number }
 
 type SnapResp = {
@@ -47,16 +51,34 @@ type ApiResp = {
   _debug?: DebugInfo
 }
 
-// ✅ sluit aan op snapshot-list/score: accepteer close/c en closes[]
+// ---------- typed fallbacks (voorkomt TS union errors) ----------
+function coerceAdvice(x: any): Advice {
+  return x === 'BUY' || x === 'SELL' || x === 'HOLD' ? x : 'HOLD'
+}
+
+function emptySnap(symbol: string): SnapResp {
+  return {
+    symbol,
+    price: null,
+    change: null,
+    changePct: null,
+    ret7Pct: null,
+    ret30Pct: null,
+    ma: { ma50: null, ma200: null, status: 'HOLD' },
+    rsi: null,
+    macd: { macd: null, signal: null, hist: null },
+    volume: { volume: null, avg20d: null, ratio: null },
+    score: 50,
+    status: 'HOLD',
+  }
+}
+
+// ---------- normalizers ----------
 function normCloses(ohlc: any): number[] {
   if (Array.isArray(ohlc)) {
     return (ohlc as Bar[])
       .map(b =>
-        typeof b?.close === 'number'
-          ? b.close
-          : typeof b?.c === 'number'
-            ? b.c
-            : null
+        typeof b?.close === 'number' ? b.close : typeof b?.c === 'number' ? b.c : null
       )
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
   }
@@ -69,16 +91,11 @@ function normCloses(ohlc: any): number[] {
   return []
 }
 
-// ✅ sluit aan op snapshot-list/score: accepteer volume/v en volumes[]
 function normVolumes(ohlc: any): number[] {
   if (Array.isArray(ohlc)) {
     return (ohlc as Bar[])
       .map(b =>
-        typeof b?.volume === 'number'
-          ? b.volume
-          : typeof b?.v === 'number'
-            ? b.v
-            : null
+        typeof b?.volume === 'number' ? b.volume : typeof b?.v === 'number' ? b.v : null
       )
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
   }
@@ -91,16 +108,16 @@ function normVolumes(ohlc: any): number[] {
   return []
 }
 
+// ---------- compute ----------
 async function computeOne(symbol: string): Promise<SnapResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
   const vols = normVolumes(ohlc)
 
-  // ✅ TA via ta-light (zelfde libs als crypto)
   const ma50 = sma(closes, 50)
   const ma200 = sma(closes, 200)
 
-  // display-status MA (alleen UI, niet score-engine)
+  // UI-only display status (score komt uit computeScoreStatus)
   const maStatus: Advice | undefined =
     ma50 != null && ma200 != null
       ? ma50 > ma200
@@ -111,6 +128,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
       : undefined
 
   const rsi = rsiWilder(closes, 14)
+
   const m = macdCalc(closes, 12, 26, 9)
   const macd = m?.macd ?? null
   const signal = m?.signal ?? null
@@ -121,7 +139,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const ratio =
     typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volume / avg20d : null
 
-  // prijs/dag
+  // price/day
   const last = closes.length ? (closes.at(-1) ?? null) : null
   const prev = closes.length > 1 ? (closes.at(-2) ?? null) : null
   const change = last != null && prev != null ? last - prev : null
@@ -135,7 +153,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const ret7Pct = pctFromBars(7)
   const ret30Pct = pctFromBars(30)
 
-  // ✅ exact dezelfde score-engine inputs als crypto
+  // ✅ EXACT dezelfde scoring-inputs als crypto-light/indicators.ts
   const overall = computeScoreStatus({
     ma: { ma50: ma50 ?? null, ma200: ma200 ?? null },
     rsi: rsi ?? null,
@@ -144,8 +162,11 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   })
 
   const score =
-    typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
-  const status: Advice = overall.status
+    typeof (overall as any)?.score === 'number' && Number.isFinite((overall as any).score)
+      ? (overall as any).score
+      : 50
+
+  const status: Advice = coerceAdvice((overall as any)?.status)
 
   return {
     symbol,
@@ -163,6 +184,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   }
 }
 
+// ---------- handler ----------
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResp | { error: string }>
@@ -181,47 +203,28 @@ export default async function handler(
     )
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
-    const items = await pool(symbols, 8, async (sym) => {
+    // ✅ forceer returntype => altijd SnapResp[], geen union
+    const items: SnapResp[] = await pool<string, SnapResp>(symbols, 8, async (sym) => {
       const key = `ind:snapshot:${sym}:${RANGE}`
       const snapKey = `ind:snap:all:${sym}`
 
       try {
         const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
           const v = await computeOne(sym)
-
-          // ✅ KV “source of truth” voor score endpoint + andere consumers
+          // KV “source of truth” voor score endpoint + andere consumers
           try {
             await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
           } catch {}
-
           return v
         })
 
-        return (
-          data ?? {
-            symbol: sym,
-            ma: { ma50: null, ma200: null },
-            rsi: null,
-            macd: { macd: null, signal: null, hist: null },
-            volume: { volume: null, avg20d: null, ratio: null },
-            score: 50,
-            status: 'HOLD',
-          }
-        )
+        return data ?? emptySnap(sym)
       } catch (err) {
         if (process.env.NODE_ENV !== 'production') {
           // eslint-disable-next-line no-console
           console.error('[snapshot-error]', sym, err)
         }
-        return {
-          symbol: sym,
-          ma: { ma50: null, ma200: null },
-          rsi: null,
-          macd: { macd: null, signal: null, hist: null },
-          volume: { volume: null, avg20d: null, ratio: null },
-          score: 50,
-          status: 'HOLD',
-        }
+        return emptySnap(sym)
       }
     })
 
