@@ -33,19 +33,22 @@ const fetcher = async <T,>(url: string): Promise<T> => {
   return r.json()
 }
 
-// Display statuses consistent with (momentum) scoring engine
+// Display statuses consistent with scoring UI convention
 function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds were inverted (must match AEX/SP500/NASDAQ + crypto display)
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
@@ -140,16 +143,18 @@ export default function StockDetail() {
     (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-white text-gray-900">
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
         <header className="space-y-1">
           <div className="flex items-center justify-between">
-            <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
+            <h1 className="hero text-gray-900">{meta?.name || 'Onbekend aandeel'}</h1>
             <ScoreBadge score={totalScore} />
           </div>
-          <p className="sub">
-            {symbol} · {totalStatus}
-            {serverScore == null && fallbackScore != null && <span className="ml-2 opacity-70">(preview via snapshot)</span>}
+          <p className="sub text-gray-600">
+            {symbol} · <span className="font-medium">{totalStatus}</span>
+            {serverScore == null && fallbackScore != null && (
+              <span className="ml-2 opacity-70">(preview via snapshot)</span>
+            )}
           </p>
         </header>
 
@@ -164,8 +169,8 @@ export default function StockDetail() {
                   ? `Fout: ${err}`
                   : ma
                     ? (ma.ma50 != null && ma.ma200 != null
-                      ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
-                      : 'Nog onvoldoende data om MA50/MA200 te bepalen')
+                        ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
+                        : 'Nog onvoldoende data om MA50/MA200 te bepalen')
                     : '—'
             }
           />

@@ -33,19 +33,22 @@ const fetcher = async <T,>(url: string): Promise<T> => {
   return r.json()
 }
 
-// Display statuses consistent with (momentum) scoring engine
+// Display statuses consistent with scoring UI convention
 function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds were inverted (must match AEX/SP500/NASDAQ/Dow + crypto display)
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
@@ -104,7 +107,7 @@ export default function StockDetail() {
   const symbol = String(router.query.symbol || '').toUpperCase()
   const meta = useMemo(() => DAX.find(t => t.symbol === symbol), [symbol])
 
-  // 1) snapshot-list (indicatoren + (na API-fix) score)
+  // 1) snapshot-list (indicatoren + score)
   const { data, error, isLoading } = useSWR<SnapResp>(
     symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
     fetcher,
@@ -149,30 +152,32 @@ export default function StockDetail() {
           </div>
           <p className="sub">
             {symbol} · {totalStatus}
-            {serverScore == null && fallbackScore != null && <span className="ml-2 opacity-70">(preview via snapshot)</span>}
+            {serverScore == null && fallbackScore != null && (
+              <span className="ml-2 opacity-70">(preview via snapshot)</span>
+            )}
           </p>
         </header>
 
         <div className="grid md:grid-cols-2 gap-4">
           <StockIndicatorCard
             title="MA50 vs MA200 (Golden/Death Cross)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : ma?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
                 : err
                   ? `Fout: ${err}`
                   : ma
-                    ? (ma.ma50 != null && ma.ma200 != null
+                    ? ma.ma50 != null && ma.ma200 != null
                       ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
-                      : 'Nog onvoldoende data om MA50/MA200 te bepalen')
+                      : 'Nog onvoldoende data om MA50/MA200 te bepalen'
                     : '—'
             }
           />
 
           <StockIndicatorCard
             title={`RSI (${rsi?.period ?? 14})`}
-            status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : rsi?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
@@ -186,7 +191,7 @@ export default function StockDetail() {
 
           <StockIndicatorCard
             title="MACD (12/26/9)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : macd?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
@@ -200,7 +205,7 @@ export default function StockDetail() {
 
           <StockIndicatorCard
             title="Volume vs 20d Average"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : vol20?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'

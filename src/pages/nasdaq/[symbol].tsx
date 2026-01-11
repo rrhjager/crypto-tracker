@@ -37,19 +37,22 @@ const fetcher = async <T,>(url: string): Promise<T> => {
   return r.json()
 }
 
-// Display statuses consistent with (momentum) scoring engine
+// Display statuses consistent with scoring UI convention
 function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds were inverted (should match AEX/SP500 + common RSI meaning)
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
@@ -137,7 +140,6 @@ export default function StockDetail() {
   const totalScore = serverScore ?? fallbackScore ?? 50
   const overallStatus = statusFromScore(totalScore)
 
-  // helpers voor tekstjes
   const fmt = (v: number | null | undefined, d = 2) =>
     (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
@@ -165,13 +167,15 @@ export default function StockDetail() {
             title="MA50 vs MA200 (Golden/Death Cross)"
             status={loading ? 'HOLD' : errMsg ? 'HOLD' : (ma?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              errMsg ? `Fout: ${errMsg}` :
-              ma
-                ? (ma.ma50 != null && ma.ma200 != null
-                  ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
-                  : 'Nog onvoldoende data om MA50/MA200 te bepalen')
-                : '—'
+              loading
+                ? 'Bezig met ophalen...'
+                : errMsg
+                  ? `Fout: ${errMsg}`
+                  : ma
+                    ? (ma.ma50 != null && ma.ma200 != null
+                        ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
+                        : 'Nog onvoldoende data om MA50/MA200 te bepalen')
+                    : '—'
             }
           />
 
@@ -179,11 +183,13 @@ export default function StockDetail() {
             title={`RSI (${rsi?.period ?? 14})`}
             status={loading ? 'HOLD' : errMsg ? 'HOLD' : (rsi?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              errMsg ? `Fout: ${errMsg}` :
-              rsi && rsi.rsi != null
-                ? `RSI: ${fmt(rsi.rsi)}`
-                : 'Onvoldoende data voor RSI'
+              loading
+                ? 'Bezig met ophalen...'
+                : errMsg
+                  ? `Fout: ${errMsg}`
+                  : rsi && rsi.rsi != null
+                    ? `RSI: ${fmt(rsi.rsi)}`
+                    : 'Onvoldoende data voor RSI'
             }
           />
 
@@ -191,11 +197,13 @@ export default function StockDetail() {
             title="MACD (12/26/9)"
             status={loading ? 'HOLD' : errMsg ? 'HOLD' : (macd?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              errMsg ? `Fout: ${errMsg}` :
-              macd && macd.macd != null && macd.signal != null
-                ? `MACD: ${fmt(macd.macd, 4)} — Signal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
-                : 'Onvoldoende data voor MACD'
+              loading
+                ? 'Bezig met ophalen...'
+                : errMsg
+                  ? `Fout: ${errMsg}`
+                  : macd && macd.macd != null && macd.signal != null
+                    ? `MACD: ${fmt(macd.macd, 4)} — Signal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
+                    : 'Onvoldoende data voor MACD'
             }
           />
 
@@ -203,11 +211,13 @@ export default function StockDetail() {
             title="Volume vs 20d Average"
             status={loading ? 'HOLD' : errMsg ? 'HOLD' : (vol20?.status || 'HOLD')}
             note={
-              loading ? 'Bezig met ophalen...' :
-              errMsg ? `Fout: ${errMsg}` :
-              vol20 && vol20.volume != null && vol20.avg20d != null
-                ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
-                : 'Onvoldoende data voor volume'
+              loading
+                ? 'Bezig met ophalen...'
+                : errMsg
+                  ? `Fout: ${errMsg}`
+                  : vol20 && vol20.volume != null && vol20.avg20d != null
+                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
+                    : 'Onvoldoende data voor volume'
             }
           />
         </div>

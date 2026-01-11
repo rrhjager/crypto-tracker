@@ -41,12 +41,15 @@ function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds must match crypto display convention
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
@@ -102,7 +105,7 @@ function normalize(item?: SnapItem | null) {
 
 export default function StockDetail() {
   const router = useRouter()
-  const symbol = (router.query.symbol as string) || ''
+  const symbol = String(router.query.symbol || '').trim()
   const meta = useMemo(() => SENSEX.find(t => t.symbol === symbol), [symbol])
 
   // 1) snapshot-list (indicatoren + (na API-fix) score)
@@ -149,9 +152,7 @@ export default function StockDetail() {
               <h1 className="hero text-[22px] md:text-[26px]">{meta?.name || 'Onbekend aandeel'}</h1>
               <p className="sub text-gray-500 text-[12px]">
                 {symbol} · {advice}
-                {serverScore == null && fallbackScore != null && (
-                  <span className="ml-2 opacity-70">(preview via snapshot)</span>
-                )}
+                {serverScore == null && fallbackScore != null && <span className="ml-2 opacity-70">(preview via snapshot)</span>}
               </p>
             </div>
 
@@ -164,7 +165,7 @@ export default function StockDetail() {
         <div className="grid md:grid-cols-2 gap-3.5">
           <StockIndicatorCard
             title="MA50 vs MA200 (Golden/Death Cross)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : ma?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
@@ -180,7 +181,7 @@ export default function StockDetail() {
 
           <StockIndicatorCard
             title={`RSI (${rsi?.period ?? 14})`}
-            status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : rsi?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
@@ -194,7 +195,7 @@ export default function StockDetail() {
 
           <StockIndicatorCard
             title="MACD (12/26/9)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : macd?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'
@@ -208,7 +209,7 @@ export default function StockDetail() {
 
           <StockIndicatorCard
             title="Volume vs 20d Average"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
+            status={loading ? 'HOLD' : err ? 'HOLD' : vol20?.status || 'HOLD'}
             note={
               loading
                 ? 'Bezig met ophalen...'

@@ -50,25 +50,29 @@ function pillClass(s?: Advice) {
   return `badge ${s === 'BUY' ? 'badge-buy' : s === 'SELL' ? 'badge-sell' : 'badge-hold'}`
 }
 
-// Display statuses consistent with (momentum) scoring engine
+// Display statuses consistent with scoring UI convention
 function statusMA(ma50?: number | null, ma200?: number | null): Advice {
   if (ma50 == null || ma200 == null) return 'HOLD'
   if (ma50 > ma200) return 'BUY'
   if (ma50 < ma200) return 'SELL'
   return 'HOLD'
 }
+
+// ✅ FIX: RSI thresholds were inverted
 function statusRSI(r?: number | null): Advice {
   if (r == null) return 'HOLD'
-  if (r > 70) return 'BUY'
-  if (r < 30) return 'SELL'
+  if (r > 70) return 'SELL'
+  if (r < 30) return 'BUY'
   return 'HOLD'
 }
+
 function statusMACD(hist?: number | null, macd?: number | null, signal?: number | null): Advice {
   if (hist != null && Number.isFinite(hist)) return hist > 0 ? 'BUY' : hist < 0 ? 'SELL' : 'HOLD'
   if (macd != null && signal != null && Number.isFinite(macd) && Number.isFinite(signal))
     return macd > signal ? 'BUY' : macd < signal ? 'SELL' : 'HOLD'
   return 'HOLD'
 }
+
 function statusVolume(ratio?: number | null): Advice {
   if (ratio == null) return 'HOLD'
   if (ratio > 1.2) return 'BUY'
