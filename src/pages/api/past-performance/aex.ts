@@ -6,9 +6,7 @@ import { cache5min } from '@/lib/cacheHeaders'
 import { getOrRefreshSnap, snapKey } from '@/lib/kvSnap'
 import { AEX } from '@/lib/aex'
 import { computeScoreStatus, Status as UiStatus } from '@/lib/taScore'
-
-// ✅ exact same source chain + indicator calc as equities snapshot engine
-import { fetchMarketDataFor, computeIndicators } from '@/lib/pastPerformance/indicatorsExact'
+import { fetchMarketDataForEquity, computeIndicators } from '@/lib/pastPerformance/equityIndicatorsExact'
 
 type Status = UiStatus // 'BUY' | 'HOLD' | 'SELL'
 
@@ -39,8 +37,7 @@ type Row = {
 
   nextSignal: NextSignal | null
 
-  // optional extra (safe for UI to ignore)
-  untilNext?: {
+  untilNext: {
     days: number | null
     mfeSignal: number | null
     maeSignal: number | null
@@ -50,7 +47,7 @@ type Row = {
 }
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
-const toISODate = (unixSec: number) => new Date(unixSec * 1000).toISOString().slice(0, 10)
+const toISODate = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 
 function pct(from: number, to: number) {
   if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return null
@@ -62,20 +59,21 @@ function signalAlign(status: 'BUY' | 'SELL', raw: number | null): number | null 
   return status === 'BUY' ? raw : -raw
 }
 
-function toAexYahooSymbol(raw: string) {
+function toAexYahooSymbol(raw: string): string {
   const s = String(raw || '').trim().toUpperCase()
   if (!s) return ''
   if (s.includes('.')) return s
   return `${s}.AS`
 }
 
-async function computeOne(symbolRaw: string, name: string): Promise<Row> {
-  const symbol = toAexYahooSymbol(symbolRaw)
+async function computeOne(rawSymbol: string, name: string): Promise<Row> {
+  const symbol = String(rawSymbol || '').trim().toUpperCase()
+  const yahooSymbol = toAexYahooSymbol(symbol)
 
-  const LOOKBACK = 900
+  const LOOKBACK_MIN = 260 // need enough for MA200 + room for signals
   const WINDOW = 200
 
-  const got = await fetchMarketDataFor(symbol, { range: '2y', limit: LOOKBACK })
+  const got = await fetchMarketDataForEquity(yahooSymbol, { range: '2y', interval: '1d' })
   if (got.ok === false) {
     return {
       symbol,
@@ -92,7 +90,7 @@ async function computeOne(symbolRaw: string, name: string): Promise<Row> {
   const { times, closes, volumes } = got.data
   const n = Math.min(times.length, closes.length, volumes.length)
 
-  if (n < WINDOW + 2) {
+  if (n < Math.max(LOOKBACK_MIN, WINDOW + 2)) {
     return {
       symbol,
       name,
@@ -106,13 +104,13 @@ async function computeOne(symbolRaw: string, name: string): Promise<Row> {
     }
   }
 
+  // ✅ EXACTLY like crypto: calcAt(i) uses ONLY last 200 candles ending at i
   const calcAt = (i: number): { status: Status; score: number } => {
     const from = i - (WINDOW - 1)
     const cWin = closes.slice(from, i + 1)
     const vWin = volumes.slice(from, i + 1)
 
     const ind = computeIndicators(cWin, vWin)
-
     const { score, status } = computeScoreStatus({
       ma: { ma50: ind.ma.ma50, ma200: ind.ma.ma200 },
       rsi: ind.rsi,
@@ -199,10 +197,10 @@ async function computeOne(symbolRaw: string, name: string): Promise<Row> {
     }
   }
 
-  // ✅ Only show horizon returns if the signal actually lasted that long
+  // ✅ Only show horizon returns if the signal stayed active long enough
   const lastedAtLeast = (days: number) => !nextSignal || nextSignal.daysFromSignal >= days
-  const d7Raw = (eventIdx + 7 < n && lastedAtLeast(7)) ? pct(eventClose, closes[eventIdx + 7]) : null
-  const d30Raw = (eventIdx + 30 < n && lastedAtLeast(30)) ? pct(eventClose, closes[eventIdx + 30]) : null
+  const d7Raw = eventIdx + 7 < n && lastedAtLeast(7) ? pct(eventClose, closes[eventIdx + 7]) : null
+  const d30Raw = eventIdx + 30 < n && lastedAtLeast(30) ? pct(eventClose, closes[eventIdx + 30]) : null
 
   // ✅ MFE/MAE until next signal (direction-aligned)
   let mfe: number | null = null
@@ -235,7 +233,7 @@ async function computeOne(symbolRaw: string, name: string): Promise<Row> {
     },
     nextSignal,
     untilNext: {
-      days: nextSignal ? nextSignal.daysFromSignal : (n - 1 - eventIdx),
+      days: nextSignal ? nextSignal.daysFromSignal : n - 1 - eventIdx,
       mfeSignal: mfe,
       maeSignal: mae,
     },
@@ -249,25 +247,22 @@ function chunk<T>(arr: T[], size: number) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method && req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
-
   try {
     cache5min(res, 300, 1800)
 
-    // bump key so you don't keep old KV payload
-    const kvKey = snapKey.custom('pastperf:aex:v4')
+    const kvKey = snapKey.custom('pastperf:aex:v3') // keep in sync with crypto style
 
     const compute = async () => {
       const symbols = AEX.map(x => ({ symbol: x.symbol, name: x.name }))
-
       const rows: Row[] = []
-      const batches = chunk(symbols, 3) // gentle for Yahoo
 
+      // gentle to Yahoo
+      const batches = chunk(symbols, 6)
       for (let bi = 0; bi < batches.length; bi++) {
         const group = batches[bi]
         const part = await Promise.all(group.map(x => computeOne(x.symbol, x.name)))
         rows.push(...part)
-        if (bi < batches.length - 1) await sleep(650)
+        if (bi < batches.length - 1) await sleep(300)
       }
 
       return {
@@ -275,7 +270,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           market: 'AEX',
           computedAt: Date.now(),
           note:
-            'Equities past performance uses the same Yahoo daily source (getYahooDailyOHLC) and the same ta-light indicator functions as /api/indicators/snapshot.ts. Signals/scores are computed via lib/taScore.computeScoreStatus() on a rolling 200-candle window, matching crypto past-performance logic.',
+            'Signals use the exact same indicator calculation approach as crypto past-performance: DAILY candles, rolling 200-candle window per day, score/status computed ONLY via lib/taScore.computeScoreStatus(). 7d/30d returns are only shown if the signal stayed active that long. Signal return is direction-aligned (SELL flips sign). Includes MFE/MAE until next signal.',
         },
         rows,
       }
@@ -284,6 +279,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data } = await getOrRefreshSnap(kvKey, compute)
     return res.status(200).json(data)
   } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+    return res.status(500).json({ error: e?.message || 'Internal error' })
   }
 }
