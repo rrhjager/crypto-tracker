@@ -151,7 +151,10 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
 
   for (let i = lastIdx - 1; i >= WINDOW - 1; i--) {
     const prevState = calcAt(i)
-    if (curState.status !== prevState.status && (curState.status === 'BUY' || curState.status === 'SELL')) {
+    if (
+      curState.status !== prevState.status &&
+      (curState.status === 'BUY' || curState.status === 'SELL')
+    ) {
       eventIdx = curIdx
       eventScore = curState.score
       eventStatus = curState.status
@@ -212,8 +215,9 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
   // ✅ Only show horizon returns if the signal actually lasted that long
   const lastedAtLeast = (days: number) => !nextSignal || nextSignal.daysFromSignal >= days
 
-  const d7Raw = (eventIdx + 7 < n && lastedAtLeast(7)) ? pct(eventClose, closes[eventIdx + 7]) : null
-  const d30Raw = (eventIdx + 30 < n && lastedAtLeast(30)) ? pct(eventClose, closes[eventIdx + 30]) : null
+  const d7Raw = eventIdx + 7 < n && lastedAtLeast(7) ? pct(eventClose, closes[eventIdx + 7]) : null
+  const d30Raw =
+    eventIdx + 30 < n && lastedAtLeast(30) ? pct(eventClose, closes[eventIdx + 30]) : null
 
   // ✅ MFE/MAE until next signal (direction-aligned)
   // Range: from day AFTER signal (eventIdx+1) up to next signal day (inclusive),
@@ -235,7 +239,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
   }
 
   const untilNext = {
-    days: nextSignal ? nextSignal.daysFromSignal : (n - 1 - eventIdx),
+    days: nextSignal ? nextSignal.daysFromSignal : n - 1 - eventIdx,
     mfeSignal: mfe,
     maeSignal: mae,
   }
@@ -280,7 +284,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (let bi = 0; bi < batches.length; bi++) {
         const group = batches[bi]
-        const groupRows = await Promise.all(group.map(async (pair) => (await computeOne(pair)).row))
+        const groupRows = await Promise.all(group.map(async pair => (await computeOne(pair)).row))
         rows.push(...groupRows)
 
         if (bi < batches.length - 1) await sleep(650)
