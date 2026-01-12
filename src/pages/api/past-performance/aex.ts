@@ -197,6 +197,20 @@ async function computeOne(rawSymbol: string, name: string): Promise<Row> {
     }
   }
 
+  // ✅ CHANGE: if still open, count it "as of now" (so winrate includes open positions)
+  if (!nextSignal) {
+    const raw = pct(eventClose, closes[lastIdx])
+    nextSignal = {
+      date: toISODate(times[lastIdx]),
+      status: current.status,
+      score: current.score,
+      close: closes[lastIdx],
+      daysFromSignal: lastIdx - eventIdx,
+      rawReturnPct: raw,
+      signalReturnPct: signalAlign(signalSide, raw),
+    }
+  }
+
   // ✅ Only show horizon returns if the signal stayed active long enough
   const lastedAtLeast = (days: number) => !nextSignal || nextSignal.daysFromSignal >= days
   const d7Raw = eventIdx + 7 < n && lastedAtLeast(7) ? pct(eventClose, closes[eventIdx + 7]) : null
