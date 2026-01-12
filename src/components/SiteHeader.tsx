@@ -280,7 +280,17 @@ export default function SiteHeader() {
             )}
           </div>
 
-          {/* ✅ Past performance */}
+          {/* Trump Trading */}
+          <Link href="/trump-trading" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>Trump Trading</span>
+          </Link>
+
+          {/* separator */}
+          <span className="text-white/30 select-none" aria-hidden>
+            |
+          </span>
+
+          {/* ✅ Past performance (moved to the right of Trump Trading) */}
           <div className="relative" ref={perfRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
@@ -318,11 +328,6 @@ export default function SiteHeader() {
               </div>
             )}
           </div>
-
-          {/* Trump Trading */}
-          <Link href="/trump-trading" className="group text-white/80 hover:text-white transition">
-            <span className={`transition-colors ${rainbow}`}>Trump Trading</span>
-          </Link>
 
           {/* Academy */}
           <Link href="/academy" className="group text-white/80 hover:text-white transition">
