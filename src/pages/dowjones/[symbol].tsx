@@ -1,4 +1,5 @@
 // src/pages/dowjones/[symbol].tsx
+import Head from 'next/head'
 import { useRouter } from 'next/router'
 import Link from 'next/link'
 import { useMemo } from 'react'
@@ -143,98 +144,100 @@ export default function StockDetail() {
     (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
 
   return (
-    <main className="min-h-screen bg-white text-gray-900">
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-        <header className="space-y-1">
-          <div className="flex items-center justify-between">
-            <h1 className="hero text-gray-900">{meta?.name || 'Onbekend aandeel'}</h1>
-            <ScoreBadge score={totalScore} />
-          </div>
-          <p className="sub text-gray-600">
-            {symbol} · <span className="font-medium">{totalStatus}</span>
-            {serverScore == null && fallbackScore != null && (
-              <span className="ml-2 opacity-70">(preview via snapshot)</span>
-            )}
-          </p>
-        </header>
+    <>
+      <Head>
+        <title>{symbol} — SignalHub</title>
+      </Head>
 
-        <div className="grid md:grid-cols-2 gap-4">
-          <StockIndicatorCard
-            title="MA50 vs MA200 (Golden/Death Cross)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : ma
-                    ? (ma.ma50 != null && ma.ma200 != null
+      {/* ✅ Dark-mode correct: no hardcoded bg-white/text-gray */}
+      <main className="min-h-screen">
+        <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+          <header className="space-y-1">
+            <div className="flex items-center justify-between">
+              <h1 className="hero">{meta?.name || 'Onbekend aandeel'}</h1>
+              <ScoreBadge score={totalScore} />
+            </div>
+            <p className="sub">
+              {symbol} · <span className="font-medium">{totalStatus}</span>
+              {serverScore == null && fallbackScore != null && (
+                <span className="ml-2 opacity-70">(preview via snapshot)</span>
+              )}
+            </p>
+          </header>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <StockIndicatorCard
+              title="MA50 vs MA200 (Golden/Death Cross)"
+              status={loading ? 'HOLD' : err ? 'HOLD' : (ma?.status || 'HOLD')}
+              note={
+                loading
+                  ? 'Bezig met ophalen...'
+                  : err
+                    ? `Fout: ${err}`
+                    : ma
+                      ? ma.ma50 != null && ma.ma200 != null
                         ? `MA50: ${fmt(ma.ma50)} — MA200: ${fmt(ma.ma200)}`
-                        : 'Nog onvoldoende data om MA50/MA200 te bepalen')
-                    : '—'
-            }
-          />
+                        : 'Nog onvoldoende data om MA50/MA200 te bepalen'
+                      : '—'
+              }
+            />
 
-          <StockIndicatorCard
-            title={`RSI (${rsi?.period ?? 14})`}
-            status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : rsi && rsi.rsi != null
-                    ? `RSI: ${fmt(rsi.rsi)}`
-                    : 'Onvoldoende data voor RSI'
-            }
-          />
+            <StockIndicatorCard
+              title={`RSI (${rsi?.period ?? 14})`}
+              status={loading ? 'HOLD' : err ? 'HOLD' : (rsi?.status || 'HOLD')}
+              note={
+                loading
+                  ? 'Bezig met ophalen...'
+                  : err
+                    ? `Fout: ${err}`
+                    : rsi && rsi.rsi != null
+                      ? `RSI: ${fmt(rsi.rsi)}`
+                      : 'Onvoldoende data voor RSI'
+              }
+            />
 
-          <StockIndicatorCard
-            title="MACD (12/26/9)"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : macd && macd.macd != null && macd.signal != null
-                    ? `MACD: ${fmt(macd.macd, 4)} — Signal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
-                    : 'Onvoldoende data voor MACD'
-            }
-          />
+            <StockIndicatorCard
+              title="MACD (12/26/9)"
+              status={loading ? 'HOLD' : err ? 'HOLD' : (macd?.status || 'HOLD')}
+              note={
+                loading
+                  ? 'Bezig met ophalen...'
+                  : err
+                    ? `Fout: ${err}`
+                    : macd && macd.macd != null && macd.signal != null
+                      ? `MACD: ${fmt(macd.macd, 4)} — Signal: ${fmt(macd.signal, 4)} — Hist: ${fmt(macd.hist ?? 0, 4)}`
+                      : 'Onvoldoende data voor MACD'
+              }
+            />
 
-          <StockIndicatorCard
-            title="Volume vs 20d Average"
-            status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
-            note={
-              loading
-                ? 'Bezig met ophalen...'
-                : err
-                  ? `Fout: ${err}`
-                  : vol20 && vol20.volume != null && vol20.avg20d != null
-                    ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
-                    : 'Onvoldoende data voor volume'
-            }
-          />
+            <StockIndicatorCard
+              title="Volume vs 20d Average"
+              status={loading ? 'HOLD' : err ? 'HOLD' : (vol20?.status || 'HOLD')}
+              note={
+                loading
+                  ? 'Bezig met ophalen...'
+                  : err
+                    ? `Fout: ${err}`
+                    : vol20 && vol20.volume != null && vol20.avg20d != null
+                      ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(
+                          vol20.avg20d
+                        ).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
+                      : 'Onvoldoende data voor volume'
+              }
+            />
+          </div>
+
+          {/* ✅ Use same button classes as AEX pages */}
+          <div className="mt-6 flex gap-3">
+            <Link href="/dowjones" className="btn">
+              ← Back to Dow Jones list
+            </Link>
+            <Link href="/" className="btn-secondary">
+              Go to homepage
+            </Link>
+          </div>
         </div>
-
-        <div className="flex gap-3">
-          <Link
-            href="/dowjones"
-            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
-          >
-            <span aria-hidden>←</span>
-            <span>Back to Dow Jones list</span>
-          </Link>
-
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
-          >
-            Go to homepage
-          </Link>
-        </div>
-      </div>
-    </main>
+      </main>
+    </>
   )
 }
