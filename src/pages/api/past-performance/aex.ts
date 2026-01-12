@@ -1,61 +1,62 @@
-import type { NextApiRequest, NextApiResponse } from 'next'
-import { kvGetJSON, kvSetJSON } from '@/lib/kv'
-import { getYahooDailyOHLC, type YahooRange } from '@/lib/providers/quote'
-import { buildEquityExactSeries, type EquityScorePoint } from '@/lib/pastPerformance/equityIndicatorsExact'
-
+// src/pages/api/past-performance/aex.ts
 export const config = { runtime: 'nodejs' }
 
-type Resp = {
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { cache5min } from '@/lib/cacheHeaders'
+import { getOrRefreshSnap, snapKey } from '@/lib/kvSnap'
+import { AEX } from '@/lib/aex'
+import { computeScoreStatus, Status as UiStatus } from '@/lib/taScore'
+import { fetchMarketDataForEquity, computeIndicators } from '@/lib/pastPerformance/equityIndicatorsExact'
+
+type Status = UiStatus // 'BUY' | 'HOLD' | 'SELL'
+
+type NextSignal = {
+  date: string
+  status: Status
+  score: number
+  close: number
+  daysFromSignal: number
+  rawReturnPct: number | null
+  signalReturnPct: number | null
+}
+
+type Row = {
   symbol: string
-  range: YahooRange
-  updatedAt: number
-  points: Array<{
-    i: number
-    score: number
-    status: 'BUY' | 'HOLD' | 'SELL'
-    ma50: number | null
-    ma200: number | null
-    rsi14: number | null
-    macd: { macd: number | null; signal: number | null; hist: number | null }
-    volume: { volume: number | null; avg20d: number | null; ratio: number | null }
-  }>
+  name: string
+  source?: string
+
+  current: { date: string; status: Status; score: number; close: number } | null
+  lastSignal: { date: string; status: 'BUY' | 'SELL'; score: number; close: number } | null
+
+  perf: {
+    d7Raw: number | null
+    d7Signal: number | null
+    d30Raw: number | null
+    d30Signal: number | null
+  }
+
+  nextSignal: NextSignal | null
+
+  untilNext: {
+    days: number | null
+    mfeSignal: number | null
+    maeSignal: number | null
+  }
+
+  error?: string
 }
 
-const EDGE_MAX_AGE = 60
-const KV_TTL_SEC = 600
-const RANGE: YahooRange = '1y'
-const KV_VER = 'v1'
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+const toISODate = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 
-type Bar = { close?: number; c?: number; volume?: number; v?: number }
-
-function normCloses(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.close === 'number' ? b.close : typeof b?.c === 'number' ? b.c : null))
-      .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  if (ohlc && Array.isArray(ohlc.closes)) {
-    return (ohlc.closes as any[]).filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  if (ohlc && Array.isArray(ohlc.c)) {
-    return (ohlc.c as any[]).filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  return []
+function pct(from: number, to: number) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return null
+  return ((to / from) - 1) * 100
 }
 
-function normVolumes(ohlc: any): number[] {
-  if (Array.isArray(ohlc)) {
-    return (ohlc as Bar[])
-      .map(b => (typeof b?.volume === 'number' ? b.volume : typeof b?.v === 'number' ? b.v : null))
-      .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  if (ohlc && Array.isArray(ohlc.volumes)) {
-    return (ohlc.volumes as any[]).filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  if (ohlc && Array.isArray(ohlc.v)) {
-    return (ohlc.v as any[]).filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-  }
-  return []
+function signalAlign(status: 'BUY' | 'SELL', raw: number | null): number | null {
+  if (raw == null) return null
+  return status === 'BUY' ? raw : -raw
 }
 
 function toAexYahooSymbol(raw: string): string {
@@ -65,72 +66,219 @@ function toAexYahooSymbol(raw: string): string {
   return `${s}.AS`
 }
 
-function pickSymbol(req: NextApiRequest): string {
-  // 1) /api/past-performance/aex/ASML  -> req.query.symbol = ['ASML']
-  const fromPath =
-    Array.isArray(req.query.symbol) ? req.query.symbol[0] : typeof req.query.symbol === 'string' ? req.query.symbol : ''
+async function computeOne(rawSymbol: string, name: string): Promise<Row> {
+  const symbol = String(rawSymbol || '').trim().toUpperCase()
+  const yahooSymbol = toAexYahooSymbol(symbol)
 
-  // 2) /api/past-performance/aex?symbol=ASML
-  const fromQuery =
-    typeof req.query.ticker === 'string'
-      ? req.query.ticker
-      : typeof req.query.s === 'string'
-        ? req.query.s
-        : typeof req.query.symbol === 'string'
-          ? req.query.symbol
-          : ''
+  const LOOKBACK_MIN = 260 // need enough for MA200 + room for signals
+  const WINDOW = 200
 
-  const raw = fromPath || fromQuery
-  return toAexYahooSymbol(raw)
+  const got = await fetchMarketDataForEquity(yahooSymbol, { range: '2y', interval: '1d' })
+  if (got.ok === false) {
+    return {
+      symbol,
+      name,
+      current: null,
+      lastSignal: null,
+      perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+      nextSignal: null,
+      untilNext: { days: null, mfeSignal: null, maeSignal: null },
+      error: got.error,
+    }
+  }
+
+  const { times, closes, volumes } = got.data
+  const n = Math.min(times.length, closes.length, volumes.length)
+
+  if (n < Math.max(LOOKBACK_MIN, WINDOW + 2)) {
+    return {
+      symbol,
+      name,
+      source: got.source,
+      current: null,
+      lastSignal: null,
+      perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+      nextSignal: null,
+      untilNext: { days: null, mfeSignal: null, maeSignal: null },
+      error: 'Not enough history',
+    }
+  }
+
+  // ✅ EXACTLY like crypto: calcAt(i) uses ONLY last 200 candles ending at i
+  const calcAt = (i: number): { status: Status; score: number } => {
+    const from = i - (WINDOW - 1)
+    const cWin = closes.slice(from, i + 1)
+    const vWin = volumes.slice(from, i + 1)
+
+    const ind = computeIndicators(cWin, vWin)
+    const { score, status } = computeScoreStatus({
+      ma: { ma50: ind.ma.ma50, ma200: ind.ma.ma200 },
+      rsi: ind.rsi,
+      macd: { hist: ind.macd.hist },
+      volume: { ratio: ind.volume.ratio },
+    })
+
+    return { score, status }
+  }
+
+  // Current
+  const lastIdx = n - 1
+  const cur = calcAt(lastIdx)
+  const current = {
+    date: toISODate(times[lastIdx]),
+    status: cur.status,
+    score: cur.score,
+    close: closes[lastIdx],
+  }
+
+  // Find most recent transition INTO BUY or SELL
+  let eventIdx: number | null = null
+  let eventScore = 50
+  let eventStatus: Status | null = null
+
+  let curIdx = lastIdx
+  let curState = cur
+
+  for (let i = lastIdx - 1; i >= WINDOW - 1; i--) {
+    const prevState = calcAt(i)
+    if (curState.status !== prevState.status && (curState.status === 'BUY' || curState.status === 'SELL')) {
+      eventIdx = curIdx
+      eventScore = curState.score
+      eventStatus = curState.status
+      break
+    }
+    curIdx = i
+    curState = prevState
+  }
+
+  if (eventIdx == null || eventStatus == null) {
+    return {
+      symbol,
+      name,
+      source: got.source,
+      current,
+      lastSignal: null,
+      perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
+      nextSignal: null,
+      untilNext: { days: null, mfeSignal: null, maeSignal: null },
+    }
+  }
+
+  const signalSide = eventStatus as 'BUY' | 'SELL'
+  const eventClose = closes[eventIdx]
+
+  const lastSignal = {
+    date: toISODate(times[eventIdx]),
+    status: signalSide,
+    score: eventScore,
+    close: eventClose,
+  }
+
+  // Find first day AFTER signal where status changes away from BUY/SELL
+  let nextSignal: NextSignal | null = null
+  let endIdxExclusive = n
+
+  for (let j = eventIdx + 1; j < n; j++) {
+    if (j < WINDOW - 1) continue
+    const st = calcAt(j)
+    if (st.status !== eventStatus) {
+      const raw = pct(eventClose, closes[j])
+      nextSignal = {
+        date: toISODate(times[j]),
+        status: st.status,
+        score: st.score,
+        close: closes[j],
+        daysFromSignal: j - eventIdx,
+        rawReturnPct: raw,
+        signalReturnPct: signalAlign(signalSide, raw),
+      }
+      endIdxExclusive = j + 1
+      break
+    }
+  }
+
+  // ✅ Only show horizon returns if the signal stayed active long enough
+  const lastedAtLeast = (days: number) => !nextSignal || nextSignal.daysFromSignal >= days
+  const d7Raw = eventIdx + 7 < n && lastedAtLeast(7) ? pct(eventClose, closes[eventIdx + 7]) : null
+  const d30Raw = eventIdx + 30 < n && lastedAtLeast(30) ? pct(eventClose, closes[eventIdx + 30]) : null
+
+  // ✅ MFE/MAE until next signal (direction-aligned)
+  let mfe: number | null = null
+  let mae: number | null = null
+
+  const scanFrom = eventIdx + 1
+  const scanTo = Math.min(endIdxExclusive - 1, n - 1)
+
+  if (scanFrom <= scanTo) {
+    for (let k = scanFrom; k <= scanTo; k++) {
+      const raw = pct(eventClose, closes[k])
+      const sig = signalAlign(signalSide, raw)
+      if (sig == null) continue
+      if (mfe == null || sig > mfe) mfe = sig
+      if (mae == null || sig < mae) mae = sig
+    }
+  }
+
+  return {
+    symbol,
+    name,
+    source: got.source,
+    current,
+    lastSignal,
+    perf: {
+      d7Raw,
+      d7Signal: signalAlign(signalSide, d7Raw),
+      d30Raw,
+      d30Signal: signalAlign(signalSide, d30Raw),
+    },
+    nextSignal,
+    untilNext: {
+      days: nextSignal ? nextSignal.daysFromSignal : n - 1 - eventIdx,
+      mfeSignal: mfe,
+      maeSignal: mae,
+    },
+  }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
-  res.setHeader('Cache-Control', `public, s-maxage=${EDGE_MAX_AGE}, stale-while-revalidate=300`)
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
 
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const symbol = pickSymbol(req)
-    if (!symbol) {
-      return res.status(400).json({ error: 'Missing symbol (use /aex/ASML or ?symbol=ASML)' })
-    }
+    cache5min(res, 300, 1800)
 
-    const kvKey = `pp:aex:${KV_VER}:${RANGE}:${symbol}`
-    try {
-      const cached = await kvGetJSON<Resp>(kvKey)
-      if (cached && cached.symbol === symbol && Array.isArray(cached.points) && cached.points.length) {
-        return res.status(200).json(cached)
+    const kvKey = snapKey.custom('pastperf:aex:v3') // keep in sync with crypto style
+
+    const compute = async () => {
+      const symbols = AEX.map(x => ({ symbol: x.symbol, name: x.name }))
+      const rows: Row[] = []
+
+      // gentle to Yahoo
+      const batches = chunk(symbols, 6)
+      for (let bi = 0; bi < batches.length; bi++) {
+        const group = batches[bi]
+        const part = await Promise.all(group.map(x => computeOne(x.symbol, x.name)))
+        rows.push(...part)
+        if (bi < batches.length - 1) await sleep(300)
       }
-    } catch {}
 
-    const ohlc = await getYahooDailyOHLC(symbol, RANGE)
-    const closes = normCloses(ohlc)
-    const volumes = normVolumes(ohlc)
-
-    if (!closes.length) {
-      const empty: Resp = { symbol, range: RANGE, updatedAt: Date.now(), points: [] }
-      return res.status(200).json(empty)
+      return {
+        meta: {
+          market: 'AEX',
+          computedAt: Date.now(),
+          note:
+            'Signals use the exact same indicator calculation approach as crypto past-performance: DAILY candles, rolling 200-candle window per day, score/status computed ONLY via lib/taScore.computeScoreStatus(). 7d/30d returns are only shown if the signal stayed active that long. Signal return is direction-aligned (SELL flips sign). Includes MFE/MAE until next signal.',
+        },
+        rows,
+      }
     }
 
-    const series: EquityScorePoint[] = buildEquityExactSeries(closes, volumes)
-
-    const points = series.map((p, i) => ({
-      i,
-      score: p.score,
-      status: p.status,
-      ma50: p.ma50,
-      ma200: p.ma200,
-      rsi14: p.rsi14,
-      macd: p.macd,
-      volume: p.volume,
-    }))
-
-    const payload: Resp = { symbol, range: RANGE, updatedAt: Date.now(), points }
-
-    try {
-      await kvSetJSON(kvKey, payload, KV_TTL_SEC)
-    } catch {}
-
-    return res.status(200).json(payload)
+    const { data } = await getOrRefreshSnap(kvKey, compute)
+    return res.status(200).json(data)
   } catch (e: any) {
-    return res.status(500).json({ error: String(e?.message || e) })
+    return res.status(500).json({ error: e?.message || 'Internal error' })
   }
 }
