@@ -1,3 +1,6 @@
+// src/pages/api/past-performance/dowjones.ts
+export const config = { runtime: 'nodejs' }
+
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { DOWJONES } from '@/lib/dowjones'
 import { cache5min } from '@/lib/cacheHeaders'
@@ -155,7 +158,6 @@ async function fetchYahooDaily(symbol: string) {
   const r = await fetch(url, {
     headers: {
       accept: 'application/json',
-      // Yahoo is sometimes picky; harmless UA helps.
       'user-agent': 'Mozilla/5.0 (SignalHub) past-performance',
     },
   })
@@ -228,7 +230,6 @@ async function computeRow(symbol: string, name: string): Promise<Row> {
       close: closes[lastIdx],
     }
 
-    // to avoid early “junk” (no MA200 yet), start searching only after 220 bars
     const MIN_I = 220
     let eventIdx: number | null = null
     let eventStatus: Advice | null = null
@@ -291,6 +292,20 @@ async function computeRow(symbol: string, name: string): Promise<Row> {
       }
     }
 
+    // ✅ CHANGE ONLY: if still open, count it "as of now" (so winrate includes open positions)
+    if (!nextSignal) {
+      const raw = pct(eventClose, closes[lastIdx])
+      nextSignal = {
+        date: toISODate(times[lastIdx]),
+        status: current.status,
+        score: current.score,
+        close: closes[lastIdx],
+        daysFromSignal: lastIdx - eventIdx,
+        rawReturnPct: raw,
+        signalReturnPct: signalFromRaw(side, raw),
+      }
+    }
+
     return {
       symbol,
       name,
@@ -330,7 +345,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbols = DOWJONES.map(x => ({ symbol: x.symbol, name: x.name }))
     const rows: Row[] = []
 
-    // keep it gentle for Yahoo
     const batches = chunk(symbols, 6)
     for (let bi = 0; bi < batches.length; bi++) {
       const group = batches[bi]

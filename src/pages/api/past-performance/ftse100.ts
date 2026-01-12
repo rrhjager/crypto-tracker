@@ -1,3 +1,6 @@
+// src/pages/api/past-performance/ftse100.ts
+export const config = { runtime: 'nodejs' }
+
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { FTSE100 } from '@/lib/ftse100'
 import { cache5min } from '@/lib/cacheHeaders'
@@ -284,6 +287,20 @@ async function computeRow(symbol: string, name: string): Promise<Row> {
           signalReturnPct: signalFromRaw(side, raw),
         }
         break
+      }
+    }
+
+    // ✅ CHANGE ONLY: if still open, count it "as of now" (so winrate includes open positions)
+    if (!nextSignal) {
+      const raw = pct(eventClose, closes[lastIdx])
+      nextSignal = {
+        date: toISODate(times[lastIdx]),
+        status: current.status,
+        score: current.score,
+        close: closes[lastIdx],
+        daysFromSignal: lastIdx - eventIdx,
+        rawReturnPct: raw,
+        signalReturnPct: signalFromRaw(side, raw),
       }
     }
 
