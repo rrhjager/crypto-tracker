@@ -1,4 +1,3 @@
-// src/pages/api/past-performance/aex.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC, type YahooRange } from '@/lib/providers/quote'
@@ -10,7 +9,6 @@ type Resp = {
   symbol: string
   range: YahooRange
   updatedAt: number
-  // aligned arrays (same length, same index)
   points: Array<{
     i: number
     score: number
@@ -68,9 +66,22 @@ function toAexYahooSymbol(raw: string): string {
 }
 
 function pickSymbol(req: NextApiRequest): string {
-  // allow: ?symbol=ASML or /api/past-performance/aex?symbol=ASML
-  const q = String(req.query.symbol || '').trim()
-  return toAexYahooSymbol(q)
+  // 1) /api/past-performance/aex/ASML  -> req.query.symbol = ['ASML']
+  const fromPath =
+    Array.isArray(req.query.symbol) ? req.query.symbol[0] : typeof req.query.symbol === 'string' ? req.query.symbol : ''
+
+  // 2) /api/past-performance/aex?symbol=ASML
+  const fromQuery =
+    typeof req.query.ticker === 'string'
+      ? req.query.ticker
+      : typeof req.query.s === 'string'
+        ? req.query.s
+        : typeof req.query.symbol === 'string'
+          ? req.query.symbol
+          : ''
+
+  const raw = fromPath || fromQuery
+  return toAexYahooSymbol(raw)
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp | { error: string }>) {
@@ -78,7 +89,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   try {
     const symbol = pickSymbol(req)
-    if (!symbol) return res.status(400).json({ error: 'Missing ?symbol= (e.g. ASML)' })
+    if (!symbol) {
+      return res.status(400).json({ error: 'Missing symbol (use /aex/ASML or ?symbol=ASML)' })
+    }
 
     const kvKey = `pp:aex:${KV_VER}:${RANGE}:${symbol}`
     try {
@@ -88,14 +101,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     } catch {}
 
-    // 1) Fetch OHLC (daily)
     const ohlc = await getYahooDailyOHLC(symbol, RANGE)
     const closes = normCloses(ohlc)
     const volumes = normVolumes(ohlc)
 
-    if (!closes.length) return res.status(200).json({ symbol, range: RANGE, updatedAt: Date.now(), points: [] })
+    if (!closes.length) {
+      const empty: Resp = { symbol, range: RANGE, updatedAt: Date.now(), points: [] }
+      return res.status(200).json(empty)
+    }
 
-    // 2) Build exact series (same scoring engine as /api/indicators/score/[symbol])
     const series: EquityScorePoint[] = buildEquityExactSeries(closes, volumes)
 
     const points = series.map((p, i) => ({
