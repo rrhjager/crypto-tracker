@@ -290,7 +290,7 @@ export default function SiteHeader() {
             |
           </span>
 
-          {/* ✅ Past performance (moved to the right of Trump Trading) */}
+          {/* ✅ Past performance (right of Trump Trading) */}
           <div className="relative" ref={perfRef}>
             <button
               className="group text-white/80 hover:text-white transition inline-flex items-center gap-1"
@@ -329,14 +329,20 @@ export default function SiteHeader() {
             )}
           </div>
 
+          {/* About us */}
+          <Link href="/about" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>About us</span>
+          </Link>
+
           {/* Academy */}
           <Link href="/academy" className="group text-white/80 hover:text-white transition">
             <span className={`transition-colors ${rainbow}`}>Academy</span>
           </Link>
 
-          <Link href="/about" className="group text-white/80 hover:text-white transition">
-            <span className={`transition-colors ${rainbow}`}>About us</span>
-          </Link>
+          {/* ✅ separator between Academy and login circle */}
+          <span className="text-white/30 select-none" aria-hidden>
+            |
+          </span>
 
           {/* Account button (desktop) */}
           <div className="relative" ref={accountRef}>
