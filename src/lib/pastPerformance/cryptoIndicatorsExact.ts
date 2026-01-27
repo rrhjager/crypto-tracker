@@ -337,3 +337,123 @@ export async function fetchMarketDataFor(symUSDT: string, opts?: { limit?: numbe
 
   return { ok: false, error: 'No source returned data' }
 }
+
+/* =======================================================================================
+   NEW (additive only): helpers to compute "enter after N days -> until next status" metrics
+   Nothing above was changed in signature/behavior; below is safe to import where needed.
+======================================================================================= */
+
+export type Side = 'BUY' | 'SELL'
+
+export type SignalTrade = {
+  symbol: string
+  side: Side
+  startTs: number // ms
+  endTs?: number  // ms (undefined = still open)
+}
+
+// Directional return: BUY wins on price up, SELL wins on price down.
+export function directionalReturn(side: Side, entry: number, exit: number) {
+  const raw = exit / entry - 1
+  return side === 'BUY' ? raw : -raw
+}
+
+// Binary search: first index i where times[i] >= ts
+function lowerBound(times: number[], ts: number) {
+  let lo = 0, hi = times.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (times[mid] < ts) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/**
+ * Returns the close price at the first candle whose timestamp is >= ts.
+ * Assumes MarketData.times is sorted ascending (it is in okx/bitfinex/coingecko fetchers above).
+ */
+export function priceAtOrAfter(data: MarketData, ts: number): number | null {
+  const times = data?.times
+  const closes = data?.closes
+  if (!times || !closes || times.length === 0 || closes.length === 0) return null
+  const i = lowerBound(times, ts)
+  if (i < 0 || i >= closes.length) return null
+  const p = closes[i]
+  return Number.isFinite(p) && p > 0 ? p : null
+}
+
+export type EnterAfterDaysUntilNextRow = {
+  symbol: string
+  side: Side
+  entryTs: number
+  exitTs: number
+  entry: number
+  exit: number
+  ret: number // directional
+}
+
+export type EnterAfterDaysUntilNextResult = {
+  delayDays: number
+  included: number
+  wins: number
+  winrate: number | null
+  avg: number | null
+  median: number | null
+  rows: EnterAfterDaysUntilNextRow[]
+}
+
+/**
+ * Compute: enter at (start + delayDays) and exit at endTs (next status change), closed trades only.
+ * Excludes trades shorter than delayDays, and any trade missing entry/exit price.
+ */
+export function computeEnterAfterDaysUntilNext(
+  trades: SignalTrade[],
+  marketBySymbol: Record<string, MarketData>,
+  delayDays = 7
+): EnterAfterDaysUntilNextResult {
+  const delayMs = Math.max(0, delayDays) * 24 * 60 * 60 * 1000
+  const rows: EnterAfterDaysUntilNextRow[] = []
+
+  for (const t of trades) {
+    if (!t?.symbol || !t?.side || !Number.isFinite(t.startTs)) continue
+    if (!t.endTs || !Number.isFinite(t.endTs)) continue // closed only
+
+    const entryTs = t.startTs + delayMs
+    const exitTs = t.endTs
+
+    if (entryTs >= exitTs) continue // duration < delay
+
+    const md = marketBySymbol[t.symbol]
+    if (!md) continue
+
+    const entry = priceAtOrAfter(md, entryTs)
+    const exit = priceAtOrAfter(md, exitTs)
+    if (entry == null || exit == null) continue
+
+    const ret = directionalReturn(t.side, entry, exit)
+
+    rows.push({ symbol: t.symbol, side: t.side, entryTs, exitTs, entry, exit, ret })
+  }
+
+  const included = rows.length
+  const wins = rows.reduce((acc, r) => acc + (r.ret > 0 ? 1 : 0), 0)
+
+  let avg: number | null = null
+  let median: number | null = null
+  if (included > 0) {
+    avg = rows.reduce((s, r) => s + r.ret, 0) / included
+    const sorted = [...rows].sort((a, b) => a.ret - b.ret)
+    median = sorted[Math.floor(included / 2)]?.ret ?? null
+  }
+
+  return {
+    delayDays,
+    included,
+    wins,
+    winrate: included ? wins / included : null,
+    avg,
+    median,
+    rows,
+  }
+}
