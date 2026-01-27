@@ -33,8 +33,27 @@ type Row = {
   error?: string
 }
 
+type Summary = {
+  nIncluded: number
+  nEligible: number
+  winRate: number | null
+  avg: number | null
+  med: number | null
+}
+
+// ✅ NEW: stats coming from API (enter after 7d -> until next)
+type EnterAfter7dUntilNextStats = {
+  eligible: number
+  included: number
+  winrate: number | null // 0..1
+  avg: number | null     // pct points
+  median: number | null  // pct points
+}
+
 type PageProps = {
   rows: Row[]
+  // ✅ NEW (additive): optional stats blob from API
+  enterAfter7dUntilNextStats?: EnterAfter7dUntilNextStats | null
   fetchError?: string | null
 }
 
@@ -76,14 +95,6 @@ function median(nums: number[]) {
 function mean(nums: number[]) {
   if (!nums.length) return null
   return nums.reduce((s, x) => s + x, 0) / nums.length
-}
-
-type Summary = {
-  nIncluded: number
-  nEligible: number
-  winRate: number | null
-  avg: number | null
-  med: number | null
 }
 
 function safeDate(d: string | null | undefined) {
@@ -205,6 +216,65 @@ function StatCard({
   )
 }
 
+// ✅ NEW: same visual style as StatCard but fed by API stats
+function StatCardFromApi({
+  title,
+  subtitle,
+  stat,
+}: {
+  title: string
+  subtitle: string
+  stat: EnterAfter7dUntilNextStats | null | undefined
+}) {
+  const nIncluded = stat?.included ?? 0
+  const nEligible = stat?.eligible ?? 0
+
+  const winPct = stat?.winrate == null ? null : stat.winrate * 100
+  const winTxt = winPct == null ? '—' : `${winPct.toFixed(0)}%`
+
+  const winCls =
+    winPct == null
+      ? 'text-white/90'
+      : winPct > 50
+      ? 'text-green-200'
+      : winPct < 50
+      ? 'text-red-200'
+      : 'text-white/90'
+
+  const avg = stat?.avg ?? null
+  const med = stat?.median ?? null
+
+  return (
+    <div className="rounded-2xl bg-white/[0.04] ring-1 ring-white/10 p-4">
+      <div className="text-white/85 font-semibold">{title}</div>
+      <div className="text-white/55 text-xs mt-1">{subtitle}</div>
+
+      <div className="mt-3 rounded-xl bg-black/20 ring-1 ring-white/10 p-3">
+        <div className="flex items-center justify-end">
+          <div className="text-xs text-white/45">
+            Included · {nIncluded} / {nEligible}
+          </div>
+        </div>
+
+        <div className={`text-lg font-extrabold mt-1 ${winCls}`}>{winTxt}</div>
+
+        <div className="mt-1 grid grid-cols-2 gap-3 text-xs">
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-white/55">Avg</div>
+            <div className={`font-semibold ${pctClassBySign(avg)}`}>{fmtPct(avg)}</div>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-white/55">Median</div>
+            <div className={`font-semibold ${pctClassBySign(med)}`}>{fmtPct(med)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 text-xs text-white/45">Win rate is directional (SELL wins when price drops).</div>
+    </div>
+  )
+}
+
 function ClosedPnlCard({
   title,
   subtitle,
@@ -247,7 +317,11 @@ function ClosedPnlCard({
   )
 }
 
-export default function CryptoPastPerformancePage({ rows, fetchError }: PageProps) {
+export default function CryptoPastPerformancePage({
+  rows,
+  fetchError,
+  enterAfter7dUntilNextStats,
+}: PageProps) {
   const eligibleBase = (r: Row) => isValidBaseRow(r)
 
   const show7d = (r: Row) => {
@@ -308,12 +382,20 @@ export default function CryptoPastPerformancePage({ rows, fetchError }: PageProp
         </Link>
       </div>
 
-      <div className="mb-6 grid md:grid-cols-4 gap-4">
+      {/* ✅ NEW: 5 cards now (additive) */}
+      <div className="mb-6 grid md:grid-cols-5 gap-4">
         <StatCard
           title="Until next signal (closed)"
           subtitle="Directional win rate until the model changes status (closed trades only)."
           stat={sUntil}
         />
+
+        <StatCardFromApi
+          title="Enter after 7d → Until next (closed)"
+          subtitle="Directional win rate if you enter 7 days after the signal and exit when the model changes status (closed trades only)."
+          stat={enterAfter7dUntilNextStats ?? null}
+        />
+
         <StatCard
           title="Price 7d"
           subtitle="Directional win rate after 7 days (only if ≥7 days of data)."
@@ -496,8 +578,14 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     const json = await r.json()
     const rows = Array.isArray(json?.rows) ? (json.rows as Row[]) : []
 
-    return { props: { rows, fetchError: null } }
+    // ✅ NEW (additive): pull stats if present
+    const enterAfter7dUntilNextStats =
+      json?.enterAfter7dUntilNextStats && typeof json.enterAfter7dUntilNextStats === 'object'
+        ? (json.enterAfter7dUntilNextStats as EnterAfter7dUntilNextStats)
+        : null
+
+    return { props: { rows, enterAfter7dUntilNextStats, fetchError: null } }
   } catch (e: any) {
-    return { props: { rows: [], fetchError: e?.message || 'Failed to fetch' } }
+    return { props: { rows: [], enterAfter7dUntilNextStats: null, fetchError: e?.message || 'Failed to fetch' } }
   }
 }

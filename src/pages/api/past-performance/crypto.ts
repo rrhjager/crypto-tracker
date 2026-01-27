@@ -54,6 +54,18 @@ type Row = {
     maeSignal: number | null // max adverse excursion (worst)
   }
 
+  // ✅ NEW (additive): enter AFTER 7 days, exit at next status change (closed only)
+  // Filled only when there is a nextSignal and the original signal lasted >= 7 days.
+  enterAfter7dUntilNext: {
+    entryDate: string
+    entryClose: number
+    exitDate: string
+    exitClose: number
+    daysFromEntry: number
+    rawReturnPct: number | null
+    signalReturnPct: number | null
+  } | null
+
   error?: string
 }
 
@@ -89,6 +101,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
         untilNext: { days: null, mfeSignal: null, maeSignal: null },
+        enterAfter7dUntilNext: null,
         error: err,
       },
     }
@@ -109,6 +122,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
         untilNext: { days: null, mfeSignal: null, maeSignal: null },
+        enterAfter7dUntilNext: null,
         error: 'Not enough history',
       },
     }
@@ -176,6 +190,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         perf: { d7Raw: null, d7Signal: null, d30Raw: null, d30Signal: null },
         nextSignal: null,
         untilNext: { days: null, mfeSignal: null, maeSignal: null },
+        enterAfter7dUntilNext: null,
       },
     }
   }
@@ -191,6 +206,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
 
   // Find first day AFTER signal where status changes away from BUY/SELL
   let nextSignal: NextSignal | null = null
+  let nextIdx: number | null = null
   let endIdxExclusive = n // if no next signal, holding period runs to last candle
 
   for (let j = eventIdx + 1; j < n; j++) {
@@ -207,6 +223,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
         rawReturnPct: raw,
         signalReturnPct: signalAlign(signalSide, raw),
       }
+      nextIdx = j
       endIdxExclusive = j + 1 // include day j in the scan range below
       break
     }
@@ -244,6 +261,28 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
     maeSignal: mae,
   }
 
+  // ✅ NEW: enter AFTER 7 days, exit at next status change (closed only)
+  let enterAfter7dUntilNext: Row['enterAfter7dUntilNext'] = null
+  if (nextIdx != null) {
+    const daysFromSignal = nextIdx - eventIdx
+    const entryIdx = eventIdx + 7
+    // must have lasted >= 7d and have entry candle
+    if (daysFromSignal >= 7 && entryIdx < n && entryIdx <= nextIdx) {
+      const entryClose = closes[entryIdx]
+      const exitClose = closes[nextIdx]
+      const raw = pct(entryClose, exitClose)
+      enterAfter7dUntilNext = {
+        entryDate: toISODate(times[entryIdx]),
+        entryClose,
+        exitDate: toISODate(times[nextIdx]),
+        exitClose,
+        daysFromEntry: nextIdx - entryIdx,
+        rawReturnPct: raw,
+        signalReturnPct: signalAlign(signalSide, raw),
+      }
+    }
+  }
+
   return {
     row: {
       coin,
@@ -260,6 +299,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
       },
       nextSignal,
       untilNext,
+      enterAfter7dUntilNext,
     },
   }
 }
@@ -270,11 +310,17 @@ function chunk<T>(arr: T[], size: number) {
   return out
 }
 
+function median(nums: number[]) {
+  if (!nums.length) return null
+  const a = [...nums].sort((x, y) => x - y)
+  return a[Math.floor(a.length / 2)] ?? null
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:v3') // bump: horizons filtered + untilNext stats
+    const kvKey = snapKey.custom('pastperf:crypto:v4') // bump: add enterAfter7dUntilNext metric
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]
@@ -290,14 +336,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (bi < batches.length - 1) await sleep(650)
       }
 
+      // ✅ NEW: Aggregate stats for "Enter after 7d → Until next status (closed)"
+      const elig = rows
+        .map(r => r.enterAfter7dUntilNext?.signalReturnPct)
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+
+      const eligible = rows.filter(r => r.enterAfter7dUntilNext != null).length
+      const included = elig.length
+      const wins = elig.filter(v => v > 0).length
+
+      const enterAfter7dUntilNextStats = {
+        eligible, // rows where metric is applicable (closed + lasted >=7d + has entry/exit)
+        included, // should match eligible; kept separate for safety
+        winrate: included ? wins / included : null, // 0..1
+        avg: included ? elig.reduce((s, x) => s + x, 0) / included : null, // in pct points
+        median: median(elig), // in pct points
+      }
+
       return {
         meta: {
           computedAt: Date.now(),
           note:
             'Signals use the exact same indicator calculation as crypto-light/indicators (copied unchanged) and the exact same score/status via lib/taScore.computeScoreStatus(). Signals are evaluated on DAILY candles with a rolling 200-candle window. 7d/30d returns are only shown if the signal stayed active for at least that many days. "Signal return" is direction-aligned: BUY = long return, SELL = short/avoid return (sign flipped). "MFE/MAE" show the best/worst direction-aligned move until the next signal.',
-          horizons: ['7d (if active)', '30d (if active)', 'until next signal', 'MFE/MAE until next signal'],
+          horizons: [
+            '7d (if active)',
+            '30d (if active)',
+            'until next signal',
+            'MFE/MAE until next signal',
+            'ENTER after 7d → until next signal (closed)',
+          ],
         },
         rows,
+        // ✅ NEW top-level field
+        enterAfter7dUntilNextStats,
       }
     }
 
