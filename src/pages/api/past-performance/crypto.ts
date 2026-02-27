@@ -142,7 +142,7 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
       volume: { ratio: ind.volume.ratio },
       trend: ind.trend,
       volatility: ind.volatility,
-    })
+    }, { market: 'CRYPTO' })
 
     return { score, status }
   }

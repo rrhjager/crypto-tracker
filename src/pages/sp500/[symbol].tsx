@@ -155,7 +155,7 @@ export default function Sp500StockDetail() {
 
   // 1) Snapshot-list voor 1 symbool (indicatoren + (na API-fix) score)
   const { data, error } = useSWR<SnapResp>(
-    sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}` : null,
+    sym ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(sym)}&market=SP500` : null,
     fetcher,
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
@@ -170,7 +170,7 @@ export default function Sp500StockDetail() {
 
   // 2) Centrale score (canonical)
   const { data: serverScoreData } = useSWR<ScoreResp>(
-    sym ? `/api/indicators/score/${encodeURIComponent(sym)}` : null,
+    sym ? `/api/indicators/score/${encodeURIComponent(sym)}?market=SP500` : null,
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
   )

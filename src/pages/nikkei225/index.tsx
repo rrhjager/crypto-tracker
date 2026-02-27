@@ -152,7 +152,7 @@ export default function Nikkei225() {
         const groups = chunk(symbols, CHUNK)
         const parts = await pool(groups, 4, async (group, gi) => {
           if (gi) await sleep(80)
-          const url = `/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
+          const url = `/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}&market=NIKKEI225`
           const r = await fetch(url, { cache: 'no-store' })
           if (!r.ok) throw new Error(`HTTP ${r.status} @ snapshot[${gi}]`)
           const j: { items: SnapItem[] } = await r.json()

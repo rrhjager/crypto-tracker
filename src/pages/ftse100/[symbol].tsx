@@ -134,7 +134,7 @@ export default function FTSEStockDetail() {
 
   // 1) snapshot-list (indicatoren + (na API-fix) score)
   const { data, error, isLoading } = useSWR<SnapResp>(
-    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
+    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}&market=FTSE100` : null,
     fetcher,
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
@@ -149,7 +149,7 @@ export default function FTSEStockDetail() {
 
   // 2) canonical score
   const { data: serverScoreData } = useSWR<ScoreResp>(
-    symbol ? `/api/indicators/score/${encodeURIComponent(symbol)}` : null,
+    symbol ? `/api/indicators/score/${encodeURIComponent(symbol)}?market=FTSE100` : null,
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
   )

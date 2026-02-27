@@ -69,7 +69,7 @@ async function computeOneHistory(pair: string) {
       volume: { ratio: ind.volume.ratio },
       trend: ind.trend,
       volatility: ind.volatility,
-    })
+    }, { market: 'CRYPTO' })
 
     statusArr[i] = status
   }

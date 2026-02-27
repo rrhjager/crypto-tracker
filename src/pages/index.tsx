@@ -9,6 +9,7 @@ import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
+import { HC_MARKET_META, HC_MARKET_ORDER, horizonLabel, type HCMarketResult, type HCResponse } from '@/lib/highConfidence'
 
 import { SP500 } from '@/lib/sp500'
 import { NASDAQ } from '@/lib/nasdaq'
@@ -53,7 +54,7 @@ type HomeSnapshot = {
 }
 
 type Briefing = { advice: string }
-type HomeProps = { snapshot: HomeSnapshot | null; briefing: Briefing | null }
+type HomeProps = { snapshot: HomeSnapshot | null; briefing: Briefing | null; highConfidence: HCResponse | null }
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -393,6 +394,13 @@ export default function Homepage(props: HomeProps) {
   )
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
+  const [highConf, setHighConf] = useState<HCResponse | null>(
+    props.highConfidence ?? getCache<HCResponse>('home:high-confidence') ?? null
+  )
+  const [loadingHighConf, setLoadingHighConf] = useState(
+    !(props.highConfidence?.markets?.length || getCache<HCResponse>('home:high-confidence')?.markets?.length)
+  )
+  const [highConfErr, setHighConfErr] = useState<string | null>(null)
 
   // AI briefing state (SSR + client fallback)
   const [briefing, setBriefing] = useState<string>(props.briefing?.advice || '')
@@ -464,6 +472,39 @@ export default function Homepage(props: HomeProps) {
       } catch {}
     })()
     return () => { stop = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- HIGH CONFIDENCE ---------- */
+  useEffect(() => {
+    let aborted = false
+    async function load(force = false) {
+      if (!force && highConf?.markets?.length) {
+        setLoadingHighConf(false)
+      }
+      try {
+        if (!aborted) {
+          setLoadingHighConf(true)
+          setHighConfErr(null)
+        }
+        const r = await fetch('/api/market/high-confidence?targetWinrate=0.8&minCoverage=0.12&minTrades=8', { cache: 'no-store' })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const data = (await r.json()) as HCResponse
+        if (aborted) return
+        setHighConf(data)
+        setCache('home:high-confidence', data)
+      } catch (e: any) {
+        if (aborted) return
+        setHighConfErr(String(e?.message || e))
+      } finally {
+        if (!aborted) setLoadingHighConf(false)
+      }
+    }
+    load()
+    const id = setInterval(() => load(true), 5 * 60_000)
+    return () => {
+      aborted = true
+      clearInterval(id)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- NEWS warm-up (SWR prime) ---------- */
@@ -597,7 +638,7 @@ export default function Homepage(props: HomeProps) {
               volume: ind?.volume,
               trend: ind?.trend,
               volatility: ind?.volatility,
-            } as any)
+            } as any, { market: 'CRYPTO' })
             if (Number.isFinite(score)) {
               const s = Math.round(Number(score))
               scoreMap.set(ind.symbol, s)
@@ -780,6 +821,41 @@ export default function Homepage(props: HomeProps) {
 
   const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
   const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
+  const fmtRatioPct = (v: number | null | undefined, d = 1) =>
+    Number.isFinite(v as number) ? `${((v as number) * 100).toFixed(d)}%` : '—'
+  const fmtRetPct = (v: number | null | undefined, d = 2) =>
+    Number.isFinite(v as number) ? `${(Number(v) >= 0 ? '+' : '')}${Number(v).toFixed(d)}%` : '—'
+
+  const adviceRows = useMemo(() => {
+    const byMarket = new Map<string, HCMarketResult>((highConf?.markets || []).map(m => [m.market, m]))
+    return HC_MARKET_ORDER.map((market) => {
+      const found = byMarket.get(market) || null
+      const recommendation = found?.recommendation || null
+      return {
+        market,
+        label: HC_MARKET_META[market].label,
+        href: HC_MARKET_META[market].href,
+        recommendation,
+        advice: recommendation?.meetsTarget ? 'ACTIEF' : 'WACHT',
+      }
+    })
+  }, [highConf])
+
+  const certaintyRows = useMemo(() => {
+    return adviceRows
+      .filter(r => r.recommendation?.meetsTarget)
+      .sort((a, b) => {
+        const aa = a.recommendation!
+        const bb = b.recommendation!
+        if (bb.winrate !== aa.winrate) return bb.winrate - aa.winrate
+        return bb.avgReturnPct - aa.avgReturnPct
+      })
+  }, [adviceRows])
+  const waitingRows = useMemo(
+    () => adviceRows.filter(r => !r.recommendation?.meetsTarget),
+    [adviceRows]
+  )
+  const generatedAt = highConf?.meta?.generatedAt ? new Date(highConf.meta.generatedAt).toLocaleString('nl-NL') : null
 
   /* ---------------- render ---------------- */
   return (
@@ -874,7 +950,162 @@ export default function Homepage(props: HomeProps) {
               >
                 Trump Trading
               </Link>
+
+              <Link
+                href="/high-confidence"
+                className="px-4 py-2 rounded-full text-sm font-medium transition
+                           bg-emerald-100 text-emerald-900 hover:bg-emerald-200
+                           dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30"
+              >
+                High-Confidence
+              </Link>
             </div>
+          </div>
+        </section>
+
+        {/* HIGH CONFIDENCE ADVICE */}
+        <section className="mb-8 overflow-hidden rounded-3xl border border-emerald-300/40 bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 p-5 shadow-[0_20px_70px_-30px_rgba(0,128,128,0.35)] dark:border-emerald-500/30 dark:from-emerald-950/35 dark:via-cyan-950/25 dark:to-slate-950">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white">High-Confidence Advies (80% target)</h2>
+              <p className="text-[12px] text-slate-700/80 dark:text-white/65">
+                Alle markten krijgen advies. Alleen `meetsTarget = true` wordt als actieve zekerheid gemarkeerd.
+              </p>
+            </div>
+            <Link
+              href="/high-confidence"
+              className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-[12px] font-medium text-emerald-800 hover:bg-emerald-500/20 dark:text-emerald-200"
+            >
+              Volledig overzicht
+            </Link>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
+            <span className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-1 text-emerald-900 dark:text-emerald-200">
+              Actief: {certaintyRows.length}/{adviceRows.length}
+            </span>
+            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
+              Wacht: {waitingRows.length}
+            </span>
+            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
+              Gem. winrate: {fmtRatioPct(highConf?.summary?.avgWinrate ?? null)}
+            </span>
+            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
+              Gem. return: {fmtRetPct(highConf?.summary?.avgReturnPct ?? null)}
+            </span>
+            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
+              Laatste update: {generatedAt || '—'}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-emerald-400/35 bg-white/70 p-3 dark:border-emerald-500/35 dark:bg-white/5">
+              <div className="text-[11px] text-slate-600 dark:text-white/55">Actieve zekerheden</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{certaintyRows.length}</div>
+              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Direct tradebaar</div>
+            </div>
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. coverage</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{fmtRatioPct(highConf?.summary?.avgCoverage ?? null)}</div>
+              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Signalen boven cutoff</div>
+            </div>
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="text-[11px] text-slate-600 dark:text-white/55">Doel gehaald</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{highConf?.summary?.marketsMeetingTarget ?? 0}/{highConf?.summary?.markets ?? adviceRows.length}</div>
+              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Markten met meetsTarget</div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-emerald-500/25 bg-white/75 p-4 dark:bg-white/5">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Actieve zekerheden</h3>
+              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Alleen markten met `meetsTarget = true`.</p>
+
+              {highConfErr && <div className="text-[12px] text-rose-500 dark:text-rose-300 mb-2">Fout: {highConfErr}</div>}
+              {loadingHighConf ? (
+                <div className="text-[12px] text-slate-600 dark:text-white/65">Berekenen…</div>
+              ) : certaintyRows.length === 0 ? (
+                <div className="text-[12px] text-slate-600 dark:text-white/65">Geen markt haalt nu het target. Advies: wachten.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {certaintyRows.map((r) => {
+                    const rec = r.recommendation!
+                    return (
+                      <li key={`hc-ok-${r.market}`}>
+                        <Link
+                          href={r.href}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 transition hover:bg-emerald-500/15"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-[13px] text-slate-900 dark:text-white">{r.label}</span>
+                              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
+                            </div>
+                            <div className="text-[11px] text-slate-700/80 dark:text-white/65">
+                              {horizonLabel(rec.horizon)} • cutoff {rec.cutoff} • {rec.trades} setups • meetsTarget: ja
+                            </div>
+                          </div>
+                          <div className="text-right text-[11px]">
+                            <div className="font-semibold text-emerald-800 dark:text-emerald-200">{fmtRatioPct(rec.winrate)}</div>
+                            <div className="text-slate-700/80 dark:text-white/60">{fmtRetPct(rec.avgReturnPct)}</div>
+                          </div>
+                        </Link>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-300/40 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Advies per markt</h3>
+              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Iedere markt krijgt advies: `ACTIEF` of `WACHT`.</p>
+              <ul className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
+                {adviceRows.map((r) => (
+                  <li key={`hc-advice-${r.market}`}>
+                    <Link href={r.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium text-slate-900 dark:text-white">{r.label}</div>
+                        <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
+                          {r.recommendation
+                            ? `${horizonLabel(r.recommendation.horizon)} • cutoff ${r.recommendation.cutoff} • win ${fmtRatioPct(r.recommendation.winrate)} • target ${r.recommendation.meetsTarget ? 'ja' : 'nee'}`
+                            : 'Onvoldoende data • target nee'}
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          r.advice === 'ACTIEF'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                        }`}
+                      >
+                        {r.advice}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-300/40 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Wachtlijst</h3>
+            <p className="mb-3 text-[11px] text-slate-700/80 dark:text-white/60">Deze markten zijn nu niet actief.</p>
+            {waitingRows.length === 0 ? (
+              <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst, alle markten zijn actief.</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {waitingRows.map((r) => (
+                  <Link
+                    key={`hc-wait-home-${r.market}`}
+                    href={r.href}
+                    className="rounded-full border border-slate-300/60 bg-white/70 px-3 py-1 text-[11px] font-medium text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
+                  >
+                    {r.label}
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -1152,15 +1383,21 @@ const BriefingText: React.FC<{ text: string }> = ({ text }) => {
 export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
   try {
     const base =
-      BASE_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+      process.env.NODE_ENV === 'development'
+        ? 'http://localhost:3000'
+        : (BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
 
     const resSnap = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
+    const resHighConf = await fetch(
+      `${base}/api/market/high-confidence?targetWinrate=0.8&minCoverage=0.12&minTrades=8`,
+      { cache: 'no-store' }
+    )
+    const highConfidence = resHighConf.ok ? (await resHighConf.json() as HCResponse) : null
 
     // Step B: briefing niet meer in SSR (client fallback blijft)
-    return { props: { snapshot, briefing: null } }
+    return { props: { snapshot, briefing: null, highConfidence } }
   } catch {
-    return { props: { snapshot: null, briefing: null } }
+    return { props: { snapshot: null, briefing: null, highConfidence: null } }
   }
 }

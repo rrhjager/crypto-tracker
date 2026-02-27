@@ -135,7 +135,7 @@ export default function StockDetail() {
 
   // 1) snapshot-list (indicatoren + (na API-fix) score)
   const { data, error, isLoading } = useSWR<SnapResp>(
-    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}` : null,
+    symbol ? `/api/indicators/snapshot-list?symbols=${encodeURIComponent(symbol)}&market=DOWJONES` : null,
     fetcher,
     { refreshInterval: 30_000, revalidateOnFocus: false }
   )
@@ -150,7 +150,7 @@ export default function StockDetail() {
 
   // 2) canonical score
   const { data: serverScoreData } = useSWR<ScoreResp>(
-    symbol ? `/api/indicators/score/${encodeURIComponent(symbol)}` : null,
+    symbol ? `/api/indicators/score/${encodeURIComponent(symbol)}?market=DOWJONES` : null,
     fetcher,
     { refreshInterval: 60_000, revalidateOnFocus: false }
   )

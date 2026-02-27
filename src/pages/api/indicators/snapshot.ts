@@ -4,7 +4,8 @@ import { kvRefreshIfStale, kvSetJSON } from '@/lib/kv'
 import { getYahooDailyOHLC } from '@/lib/providers/quote'
 
 // ✅ unified score engine (same as crypto-light/indicators.ts)
-import { computeScoreStatus } from '@/lib/taScore'
+import { computeScoreStatus, normalizeScoreMode } from '@/lib/taScore'
+import { resolveScoreMarket } from '@/lib/marketResolver'
 
 // ✅ shared TA helpers (same as crypto-light/indicators.ts)
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
@@ -15,6 +16,7 @@ export const config = { runtime: 'nodejs' }
 const TTL_SEC = 300
 const REVALIDATE_SEC = 20
 const RANGE: '1y' | '2y' = '1y'
+const SCORE_VER = 'v2'
 
 type Advice = 'BUY' | 'SELL' | 'HOLD'
 
@@ -114,7 +116,7 @@ function normVolumes(ohlc: any): number[] {
 }
 
 // ---------- compute ----------
-async function computeOne(symbol: string): Promise<SnapResp> {
+async function computeOne(symbol: string, marketHint?: string, modeHint?: string): Promise<SnapResp> {
   const ohlc = await getYahooDailyOHLC(symbol, RANGE)
   const closes = normCloses(ohlc)
   const vols = normVolumes(ohlc)
@@ -168,7 +170,7 @@ async function computeOne(symbol: string): Promise<SnapResp> {
     volume: { ratio: ratio ?? null },
     trend,
     volatility,
-  })
+  }, { market: resolveScoreMarket(marketHint, symbol, 'DEFAULT'), mode: modeHint })
 
   const score =
     typeof (overall as any)?.score === 'number' && Number.isFinite((overall as any).score)
@@ -212,19 +214,27 @@ export default async function handler(
           .filter(Boolean)
       )
     )
+    const marketHint = String(req.query.market || '').trim()
+    const modeHint = String(req.query.mode || '').trim()
     if (symbols.length === 0) return res.status(400).json({ error: 'No valid symbols' })
 
     // ✅ forceer returntype => altijd SnapResp[], geen union
     const items: SnapResp[] = await pool<string, SnapResp>(symbols, 8, async (sym) => {
-      const key = `ind:snapshot:${sym}:${RANGE}`
-      const snapKey = `ind:snap:all:${sym}`
+      const resolvedMarket = resolveScoreMarket(marketHint, sym, 'DEFAULT')
+      const resolvedMode = normalizeScoreMode(modeHint)
+      const key = `ind:snapshot:${SCORE_VER}:${resolvedMarket}:${resolvedMode}:${sym}:${RANGE}`
+      const snapKey = `ind:snap:all:${sym}:${resolvedMarket}:${resolvedMode}`
 
       try {
         const data = await kvRefreshIfStale<SnapResp>(key, TTL_SEC, REVALIDATE_SEC, async () => {
-          const v = await computeOne(sym)
+          const v = await computeOne(sym, resolvedMarket, resolvedMode)
           // KV “source of truth” voor score endpoint + andere consumers
           try {
-            await kvSetJSON(snapKey, { updatedAt: Date.now(), value: v }, TTL_SEC)
+            await kvSetJSON(
+              snapKey,
+              { updatedAt: Date.now(), value: { ...v, scoreVersion: SCORE_VER, scoreMarket: resolvedMarket, scoreMode: resolvedMode } },
+              TTL_SEC
+            )
           } catch {}
           return v
         })

@@ -315,9 +315,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbolsParam = String(req.query.symbols || '').trim()
     if (!symbolsParam) return res.status(400).json({ error: 'Missing ?symbols=BTCUSDT,ETHUSDT' })
     const debug = String(req.query.debug || '') === '1'
+    const mode = String(req.query.mode || '').trim()
 
     // ✅ bump versie zodat KV cache zeker vernieuwt na deze wijziging
-    const kvKey = snapKey.cryptoInd('v4:' + encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
+    const kvKey = snapKey.cryptoInd('v6:' + encodeURIComponent(symbolsParam) + ':m=' + encodeURIComponent(mode || 'standard') + (debug ? ':dbg1' : ''))
 
     const compute = async () => {
       const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -345,7 +346,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 volume: { ratio: ind.volume?.ratio ?? null },
                 trend: ind.trend ?? null,
                 volatility: { stdev20: ind.volatility?.stdev20 ?? null },
-              })
+              }, { market: 'CRYPTO', mode })
 
               const score = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
               const status: UiStatus =

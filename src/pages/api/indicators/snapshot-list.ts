@@ -3,7 +3,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { getYahooDailyOHLC, type YahooRange } from '@/lib/providers/quote'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
-import { computeScoreStatus } from '@/lib/taScore'
+import { computeScoreStatus, normalizeScoreMode } from '@/lib/taScore'
+import { resolveScoreMarket } from '@/lib/marketResolver'
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
 import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 
@@ -41,18 +42,24 @@ const KV_TTL_SEC = 600
 const RANGE: YahooRange = '1y'
 
 // bump als je caching wil breken na score-wijziging
-const KV_VER = 'v6'
+const KV_VER = 'v7'
 
 // ----- static lists for ?market= -----
 const STATIC_CONS = {
   AEX,
+  SP500,
   'S&P 500': SP500,
   NASDAQ,
+  DOWJONES,
   'Dow Jones': DOWJONES,
   DAX: DAX_FULL,
+  FTSE100,
   'FTSE 100': FTSE100,
+  NIKKEI225,
   'Nikkei 225': NIKKEI225,
+  HANGSENG,
   'Hang Seng': HANGSENG,
+  SENSEX,
   Sensex: SENSEX,
   ETFS,
 } as const
@@ -115,7 +122,7 @@ const statusVOL = (ratio: number | null): Advice => {
 }
 
 /* ---------- compute ---------- */
-async function computeOne(symbol: string): Promise<SnapItem> {
+async function computeOne(symbol: string, marketHint?: string, modeHint?: string): Promise<SnapItem> {
   const o = await getYahooDailyOHLC(symbol, RANGE)
   const cs = closes(o)
   const vs = volumes(o)
@@ -144,7 +151,7 @@ async function computeOne(symbol: string): Promise<SnapItem> {
     volume: { ratio: ratio ?? null },
     trend,
     volatility,
-  })
+  }, { market: resolveScoreMarket(marketHint, symbol, 'DEFAULT'), mode: modeHint })
 
   const score =
     typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
@@ -200,6 +207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     const rawSyms = String(req.query.symbols || '').trim()
     const market = String(req.query.market || '').trim()
+    const mode = String(req.query.mode || '').trim()
 
     let symbols: string[] = []
 
@@ -215,7 +223,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     if (symbols.length > 60) symbols = symbols.slice(0, 60)
 
     const keyId = symbols.join(',')
-    const kvKey = `ind:snap:list:${KV_VER}:${RANGE}:${keyId}`
+    const resolvedMode = normalizeScoreMode(mode)
+    const resolvedMarket = market || 'AUTO'
+    const kvKey = `ind:snap:list:${KV_VER}:${RANGE}:${resolvedMarket}:${resolvedMode}:${keyId}`
 
     try {
       const cached = await kvGetJSON<Resp>(kvKey)
@@ -224,7 +234,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     } catch {}
 
-    const items = await pool(symbols, 8, async (sym) => computeOne(sym))
+    const items = await pool(symbols, 8, async (sym) => computeOne(sym, market, resolvedMode))
 
     const updatedAt = Date.now()
     try {

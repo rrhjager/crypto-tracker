@@ -536,7 +536,7 @@ function PageInner() {
         volume: ind?.volume,
         trend: ind?.trend,
         volatility: ind?.volatility,
-      } as any)
+      } as any, { market: 'CRYPTO' })
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 

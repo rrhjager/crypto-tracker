@@ -78,6 +78,18 @@ function marketList(label: MarketLabel) {
   return []
 }
 
+function marketKeyForLabel(label: MarketLabel): MarketKey {
+  if (label === 'AEX') return 'AEX'
+  if (label === 'S&P 500') return 'SP500'
+  if (label === 'NASDAQ') return 'NASDAQ'
+  if (label === 'Dow Jones') return 'DOWJONES'
+  if (label === 'DAX') return 'DAX'
+  if (label === 'FTSE 100') return 'FTSE100'
+  if (label === 'Nikkei 225') return 'NIKKEI225'
+  if (label === 'Hang Seng') return 'HANGSENG'
+  return 'SENSEX'
+}
+
 // ======================
 // Warmup helpers (blijven bestaan; breekt niets)
 // ======================
@@ -133,7 +145,7 @@ async function warmMarkets(origin: string, keys: MarketKey[]) {
     const groups = chunk(symbols, CHUNK)
     const parts = await pool(groups, 3, async (group, gi) => {
       if (gi) await sleep(80)
-      const url = `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}`
+      const url = `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(group.join(','))}&market=${encodeURIComponent(key)}`
       const r = await fetch(url, { cache: 'no-store' })
       if (!r.ok) throw new Error(`snapshot warm ${key}[${gi}] HTTP ${r.status}`)
       const j = (await r.json()) as { items?: any[] }
@@ -225,8 +237,9 @@ async function buildSnapshot(origin: string): Promise<Snapshot> {
     const symbols = list.map((x: any) => x.symbol).slice(0, 60)
     if (!symbols.length) return { label, best: null, worst: null }
 
+    const marketKey = marketKeyForLabel(label)
     const snapResp = await fetchJSON<{ items?: { symbol: string; score?: number | null }[] }>(
-      `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(symbols.join(','))}`,
+      `${origin}/api/indicators/snapshot?symbols=${encodeURIComponent(symbols.join(','))}&market=${encodeURIComponent(marketKey)}`,
     )
 
     const rawRows = (snapResp?.items || []) as { symbol: string; score?: number | null }[]
@@ -322,7 +335,7 @@ async function buildSnapshot(origin: string): Promise<Snapshot> {
   const cryptoRows: { symbol: string; name: string; score: number }[] = (cryptoResp?.results || [])
     .map((row: any) => {
       const found = pairs.find(p => p.pair === row.symbol)
-      const { score } = computeScoreStatus(row as any)
+      const { score } = computeScoreStatus(row as any, { market: 'CRYPTO' })
       if (typeof score !== 'number' || !Number.isFinite(score)) return null
       return {
         symbol: found?.c.symbol || row.symbol,

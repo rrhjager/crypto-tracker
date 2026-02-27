@@ -1,5 +1,19 @@
 // src/lib/taScore.ts
 export type Status = 'BUY' | 'HOLD' | 'SELL'
+export type ScoreMarket =
+  | 'DEFAULT'
+  | 'CRYPTO'
+  | 'AEX'
+  | 'DAX'
+  | 'DOWJONES'
+  | 'ETFS'
+  | 'FTSE100'
+  | 'HANGSENG'
+  | 'NASDAQ'
+  | 'NIKKEI225'
+  | 'SENSEX'
+  | 'SP500'
+export type ScoreMode = 'STANDARD' | 'HIGH_CONF'
 
 export type MAStruct    = { ma50: number | null; ma200: number | null }
 export type MACDStruct  = { hist: number | null }
@@ -14,6 +28,130 @@ export function statusFromScore(score: number): Status {
 }
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+
+type WeightKey = 'ma' | 'rsi' | 'macd' | 'vol' | 'trend' | 'volReg' | 'consensus'
+
+type MarketProfile = {
+  thresholds: { buy: number; sell: number; minConfidence: number }
+  weightMult?: Partial<Record<WeightKey, number>>
+}
+
+const BASE_WEIGHTS: Record<WeightKey, number> = {
+  ma: 0.24,
+  rsi: 0.16,
+  macd: 0.16,
+  vol: 0.10,
+  trend: 0.18,
+  volReg: 0.08,
+  consensus: 0.08,
+}
+
+const MARKET_PROFILES: Record<ScoreMarket, MarketProfile> = {
+  DEFAULT: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.50 },
+  },
+  CRYPTO: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.48 },
+    weightMult: { trend: 1.08, volReg: 0.95, vol: 0.95, consensus: 1.04 },
+  },
+  AEX: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.50 },
+  },
+  DAX: {
+    thresholds: { buy: 67, sell: 33, minConfidence: 0.56 },
+    weightMult: { trend: 1.10, consensus: 1.10, vol: 0.80, volReg: 1.05 },
+  },
+  DOWJONES: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.54 },
+    weightMult: { trend: 1.08, consensus: 1.08, vol: 0.85 },
+  },
+  ETFS: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.54 },
+    weightMult: { trend: 1.08, consensus: 1.08, vol: 0.82, volReg: 1.06 },
+  },
+  FTSE100: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.50 },
+    weightMult: { trend: 1.05, consensus: 1.05, vol: 0.88 },
+  },
+  HANGSENG: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.53 },
+    weightMult: { trend: 1.09, consensus: 1.08, vol: 0.84, volReg: 1.05 },
+  },
+  NASDAQ: {
+    thresholds: { buy: 67, sell: 33, minConfidence: 0.57 },
+    weightMult: { trend: 1.12, consensus: 1.12, vol: 0.78, volReg: 1.06 },
+  },
+  NIKKEI225: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.51 },
+    weightMult: { trend: 1.06, consensus: 1.06, vol: 0.88 },
+  },
+  SENSEX: {
+    thresholds: { buy: 66, sell: 33, minConfidence: 0.50 },
+  },
+  SP500: {
+    thresholds: { buy: 67, sell: 33, minConfidence: 0.57 },
+    weightMult: { trend: 1.12, consensus: 1.10, vol: 0.80, volReg: 1.06 },
+  },
+}
+
+const MARKET_ALIASES: Record<string, ScoreMarket> = {
+  DEFAULT: 'DEFAULT',
+  CRYPTO: 'CRYPTO',
+  COIN: 'CRYPTO',
+  COINS: 'CRYPTO',
+  AEX: 'AEX',
+  DAX: 'DAX',
+  DOWJONES: 'DOWJONES',
+  'DOW JONES': 'DOWJONES',
+  DOW_JONES: 'DOWJONES',
+  ETFS: 'ETFS',
+  ETFSCORE: 'ETFS',
+  FTSE100: 'FTSE100',
+  'FTSE 100': 'FTSE100',
+  FTSE_100: 'FTSE100',
+  HANGSENG: 'HANGSENG',
+  'HANG SENG': 'HANGSENG',
+  HANG_SENG: 'HANGSENG',
+  NASDAQ: 'NASDAQ',
+  NIKKEI225: 'NIKKEI225',
+  'NIKKEI 225': 'NIKKEI225',
+  NIKKEI_225: 'NIKKEI225',
+  SENSEX: 'SENSEX',
+  SP500: 'SP500',
+  'S&P500': 'SP500',
+  'S&P 500': 'SP500',
+  S_P_500: 'SP500',
+}
+
+const MODE_ALIASES: Record<string, ScoreMode> = {
+  STANDARD: 'STANDARD',
+  NORMAL: 'STANDARD',
+  STD: 'STANDARD',
+  HIGH_CONF: 'HIGH_CONF',
+  HIGHCONF: 'HIGH_CONF',
+  HIGH: 'HIGH_CONF',
+  HC: 'HIGH_CONF',
+}
+
+export function normalizeScoreMarket(input?: string | ScoreMarket | null): ScoreMarket | null {
+  if (!input) return null
+  const raw = String(input).trim().toUpperCase()
+  if (!raw) return null
+  if (MARKET_ALIASES[raw]) return MARKET_ALIASES[raw]
+  const normalized = raw.replace(/[^\w& ]+/g, '').replace(/\s+/g, ' ').trim()
+  if (MARKET_ALIASES[normalized]) return MARKET_ALIASES[normalized]
+  return null
+}
+
+export function normalizeScoreMode(input?: string | ScoreMode | null): ScoreMode {
+  if (!input) return 'STANDARD'
+  const raw = String(input).trim().toUpperCase()
+  if (!raw) return 'STANDARD'
+  return MODE_ALIASES[raw] ?? 'STANDARD'
+}
+
+const weightFor = (market: ScoreMarket, key: WeightKey) =>
+  BASE_WEIGHTS[key] * (MARKET_PROFILES[market].weightMult?.[key] ?? 1)
 
 // ——— Agressiever profiel (identiek voor alle pagina’s) ———
 const AGGR = {
@@ -46,7 +184,11 @@ export function computeScoreStatus(ind: {
   volume?: VolumeStruct | null
   trend?: TrendStruct | null
   volatility?: VolatilityStruct | null
-}): { score: number; status: Status } {
+}, ctx?: { market?: string | ScoreMarket | null; mode?: string | ScoreMode | null }): { score: number; status: Status; confidence: number; market: ScoreMarket; mode: ScoreMode } {
+  const market = normalizeScoreMarket(ctx?.market) ?? 'DEFAULT'
+  const mode = normalizeScoreMode(ctx?.mode)
+  const profile = MARKET_PROFILES[market]
+
   // --- MA (24%)
   let maScore = 50
   let hasMA = false
@@ -160,19 +302,48 @@ export function computeScoreStatus(ind: {
     consensusScore = clamp(50 + avgDir * AGGR.consensus.gain, 0, 100)
   }
 
-  const parts: Array<{ w: number; v: number }> = []
-  if (hasMA) parts.push({ w: 0.24, v: maScore })
-  if (hasRSI) parts.push({ w: 0.16, v: rsiScore })
-  if (hasMACD) parts.push({ w: 0.16, v: macdScore })
-  if (hasVOL) parts.push({ w: 0.10, v: volScore })
-  if (hasTrend) parts.push({ w: 0.18, v: trendScore })
-  if (hasVolReg) parts.push({ w: 0.08, v: volRegScore })
-  if (hasConsensus) parts.push({ w: 0.08, v: consensusScore })
+  const parts: Array<{ key: WeightKey; w: number; v: number }> = []
+  if (hasMA) parts.push({ key: 'ma', w: weightFor(market, 'ma'), v: maScore })
+  if (hasRSI) parts.push({ key: 'rsi', w: weightFor(market, 'rsi'), v: rsiScore })
+  if (hasMACD) parts.push({ key: 'macd', w: weightFor(market, 'macd'), v: macdScore })
+  if (hasVOL) parts.push({ key: 'vol', w: weightFor(market, 'vol'), v: volScore })
+  if (hasTrend) parts.push({ key: 'trend', w: weightFor(market, 'trend'), v: trendScore })
+  if (hasVolReg) parts.push({ key: 'volReg', w: weightFor(market, 'volReg'), v: volRegScore })
+  if (hasConsensus) parts.push({ key: 'consensus', w: weightFor(market, 'consensus'), v: consensusScore })
 
-  if (!parts.length) return { score: 50, status: 'HOLD' }
+  if (!parts.length) return { score: 50, status: 'HOLD', confidence: 0, market, mode }
 
   const wSum = parts.reduce((s, p) => s + p.w, 0)
-  const rawScore = parts.reduce((s, p) => s + p.v * (p.w / wSum), 0)
+  const rawScore = parts.reduce((s, p) => s + p.v * (p.w / Math.max(1e-9, wSum)), 0)
+
+  const maxWeight = (Object.keys(BASE_WEIGHTS) as WeightKey[]).reduce((s, k) => s + weightFor(market, k), 0)
+  const coverage = clamp(wSum / Math.max(1e-9, maxWeight), 0, 1)
+
+  const directional = parts.map(p => ({
+    w: p.w,
+    dir: clamp((p.v - 50) / 50, -1, 1),
+  }))
+  const signed = directional.reduce((s, p) => s + p.w * p.dir, 0)
+  const absSigned = directional.reduce((s, p) => s + p.w * Math.abs(p.dir), 0)
+  const alignment = absSigned > 1e-9 ? clamp(Math.abs(signed) / absSigned, 0, 1) : 0
+  const strength = wSum > 1e-9 ? clamp(absSigned / wSum, 0, 1) : 0
+  const confidence = clamp(0.45 * coverage + 0.30 * strength + 0.25 * alignment, 0, 1)
+
   const score = Math.round(clamp(rawScore, 0, 100))
-  return { score, status: statusFromScore(score) }
+
+  let { buy, sell, minConfidence } = profile.thresholds
+  if (mode === 'HIGH_CONF') {
+    buy = Math.min(90, buy + 4)
+    sell = Math.max(10, sell - 4)
+    minConfidence = Math.min(0.92, minConfidence + 0.12)
+  }
+  const softMin = Math.max(0.45, minConfidence - (mode === 'HIGH_CONF' ? 0.06 : 0.08))
+
+  let status: Status = 'HOLD'
+  if (score >= buy && confidence >= minConfidence) status = 'BUY'
+  else if (score <= sell && confidence >= minConfidence) status = 'SELL'
+  else if (score >= buy + 12 && confidence >= softMin) status = 'BUY'
+  else if (score <= sell - 12 && confidence >= softMin) status = 'SELL'
+
+  return { score, status, confidence, market, mode }
 }

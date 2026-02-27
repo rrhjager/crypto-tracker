@@ -78,7 +78,9 @@ function isSameOrigin(req: NextRequest) {
 // 5) Query-sanity: limiter voor symbols & markt
 const MARKET_ALLOW = new Set([
   'AEX','DAX','FTSE 100','S&P 500','NASDAQ','Dow Jones',
-  'Nikkei 225','Hang Seng','Sensex'
+  'Nikkei 225','Hang Seng','Sensex',
+  // short keys used by API callers
+  'SP500','DOWJONES','FTSE100','NIKKEI225','HANGSENG','SENSEX','ETFS'
 ])
 const countSymbols = (p: string | null) =>
   p ? p.split(',').map(s => s.trim()).filter(Boolean).length : 0

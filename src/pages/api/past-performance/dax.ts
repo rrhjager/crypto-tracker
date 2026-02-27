@@ -216,7 +216,7 @@ function computeStates(times: number[], closes: number[], volumes: number[]) {
       volume: { ratio: volRatio },
       trend,
       volatility,
-    })
+    }, { market: 'DAX' })
 
     states[i] = { score, status }
   }

@@ -118,7 +118,7 @@ async function computeOne(rawSymbol: string, name: string): Promise<Row> {
       volume: { ratio: ind.volume.ratio },
       trend: ind.trend,
       volatility: ind.volatility,
-    })
+    }, { market: 'AEX' })
 
     return { score, status }
   }
