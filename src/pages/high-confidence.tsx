@@ -2,7 +2,7 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import { useMemo } from 'react'
-import { HC_MARKET_META, HC_MARKET_ORDER, horizonLabel, type HCResponse } from '@/lib/highConfidence'
+import { HC_MARKET_META, HC_MARKET_ORDER, horizonLabel, type HCAssetAdvice, type HCResponse } from '@/lib/highConfidence'
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 
@@ -15,12 +15,28 @@ const fmtRatioPct = (v: number | null | undefined, d = 1) =>
   Number.isFinite(v as number) ? `${((v as number) * 100).toFixed(d)}%` : '—'
 const fmtRetPct = (v: number | null | undefined, d = 2) =>
   Number.isFinite(v as number) ? `${(Number(v) >= 0 ? '+' : '')}${Number(v).toFixed(d)}%` : '—'
+const sideTextClass = (status: 'BUY' | 'SELL') =>
+  status === 'BUY' ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'
+const sideBadgeClass = (status: 'BUY' | 'SELL') =>
+  status === 'BUY' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+const sideCardClass = (status: 'BUY' | 'SELL', subtle = false) =>
+  status === 'BUY'
+    ? subtle
+      ? 'border-emerald-300/50 bg-emerald-500/5 hover:bg-emerald-500/10 dark:border-emerald-500/30'
+      : 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15'
+    : subtle
+      ? 'border-rose-300/50 bg-rose-500/5 hover:bg-rose-500/10 dark:border-rose-500/30'
+      : 'border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/15'
 
 export default function HighConfidencePage({ data, error }: Props) {
   const generatedAt = data?.meta?.generatedAt ? new Date(data.meta.generatedAt).toLocaleString('nl-NL') : '—'
   const target = fmtRatioPct(data?.meta?.targetWinrate ?? null)
   const activeAssets = data?.assets?.active || []
   const waitingAssets = data?.assets?.waiting || []
+  const activeEquities = activeAssets.filter((a) => a.market !== 'CRYPTO')
+  const activeCrypto = activeAssets.filter((a) => a.market === 'CRYPTO')
+  const waitingEquities = waitingAssets.filter((a) => a.market !== 'CRYPTO')
+  const waitingCrypto = waitingAssets.filter((a) => a.market === 'CRYPTO')
 
   const marketBlocks = useMemo(() => {
     const byMarket = data?.assets?.byMarket || ({} as any)
@@ -31,6 +47,78 @@ export default function HighConfidencePage({ data, error }: Props) {
       items: Array.isArray(byMarket[market]) ? byMarket[market] : [],
     }))
   }, [data])
+  const equityMarketBlocks = marketBlocks.filter((m) => m.market !== 'CRYPTO')
+  const cryptoMarketBlocks = marketBlocks.filter((m) => m.market === 'CRYPTO')
+
+  const renderActiveCards = (items: HCAssetAdvice[]) => {
+    if (items.length === 0) {
+      return <div className="text-sm text-slate-600 dark:text-white/70">Geen actieve assets nu.</div>
+    }
+    return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        {items.slice(0, 30).map((a) => (
+          <Link
+            key={`hc-active-${a.market}-${a.symbol}`}
+            href={a.href}
+            className={`rounded-xl border p-3 transition ${sideCardClass(a.status)}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold text-slate-900 dark:text-white">{a.symbol}</div>
+              <div className="flex items-center gap-1.5">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
+                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-700/80 dark:text-white/65">{HC_MARKET_META[a.market].label} • {a.name}</div>
+            <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/65">
+              <span className={`font-semibold ${sideTextClass(a.status)}`}>{a.status}</span> • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff} • {horizonLabel(a.horizon)}
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+              <div>
+                <div className="text-slate-600 dark:text-white/55">Winrate</div>
+                <div className={`font-semibold ${sideTextClass(a.status)}`}>{fmtRatioPct(a.expectedWinrate)}</div>
+              </div>
+              <div>
+                <div className="text-slate-600 dark:text-white/55">Coverage</div>
+                <div className="font-semibold text-slate-800 dark:text-white">{fmtRatioPct(a.expectedCoverage)}</div>
+              </div>
+              <div>
+                <div className="text-slate-600 dark:text-white/55">Gem.</div>
+                <div className="font-semibold text-slate-800 dark:text-white">{fmtRetPct(a.expectedReturnPct)}</div>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    )
+  }
+
+  const renderWaitingCards = (items: HCAssetAdvice[]) => {
+    if (items.length === 0) {
+      return <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst.</div>
+    }
+    return (
+      <div className="grid gap-2">
+        {items.slice(0, 45).map((a) => (
+          <Link
+            key={`hc-wait-asset-${a.market}-${a.symbol}`}
+            href={a.href}
+            className={`rounded-lg border px-3 py-2 text-[11px] text-slate-700 transition dark:bg-white/5 dark:text-white/70 ${sideCardClass(a.status, true)}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-900 dark:text-white">{a.symbol}</span>
+              <div className="flex items-center gap-1.5">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
+                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-white/15 dark:text-white/70">WACHT</span>
+              </div>
+            </div>
+            <div className="mt-1 truncate">{HC_MARKET_META[a.market].label} • sterkte {a.strength} • score {a.score}</div>
+            <div className="mt-0.5 truncate text-[10px] text-slate-600 dark:text-white/55">{a.reason}</div>
+          </Link>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <>
@@ -98,90 +186,101 @@ export default function HighConfidencePage({ data, error }: Props) {
           <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
             Alleen assets die nu aan cutoff en target voldoen.
           </p>
-
-          {activeAssets.length === 0 ? (
-            <div className="text-sm text-slate-600 dark:text-white/70">Geen actieve zekerheden nu.</div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {activeAssets.slice(0, 60).map((a) => (
-                <Link
-                  key={`hc-active-${a.market}-${a.symbol}`}
-                  href={a.href}
-                  className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 transition hover:bg-emerald-500/15"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold text-slate-900 dark:text-white">{a.symbol}</div>
-                    <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
-                  </div>
-                  <div className="text-[11px] text-slate-700/80 dark:text-white/65">{HC_MARKET_META[a.market].label} • {a.name}</div>
-                  <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/65">
-                    {a.status} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff} • {horizonLabel(a.horizon)}
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">Winrate</div>
-                      <div className="font-semibold text-emerald-800 dark:text-emerald-200">{fmtRatioPct(a.expectedWinrate)}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">Coverage</div>
-                      <div className="font-semibold text-slate-800 dark:text-white">{fmtRatioPct(a.expectedCoverage)}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">Gem.</div>
-                      <div className="font-semibold text-slate-800 dark:text-white">{fmtRetPct(a.expectedReturnPct)}</div>
-                    </div>
-                  </div>
-                </Link>
-              ))}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Aandelen</h3>
+                <span className="text-[11px] text-slate-600 dark:text-white/60">{activeEquities.length} actief</span>
+              </div>
+              {renderActiveCards(activeEquities)}
             </div>
-          )}
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Crypto</h3>
+                <span className="text-[11px] text-slate-600 dark:text-white/60">{activeCrypto.length} actief</span>
+              </div>
+              {renderActiveCards(activeCrypto)}
+            </div>
+          </div>
         </section>
 
         <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Advies per markt (losse assets)</h2>
           <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
-            Per markt zie je de beste aandelen/coins met advies.
+            Opgesplitst in aandelenmarkten en crypto.
           </p>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {marketBlocks.map((m) => (
-              <div key={`hc-market-assets-${m.market}`} className="rounded-xl border border-slate-300/50 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                <div className="flex items-center justify-between gap-2">
-                  <Link href={m.href} className="font-semibold text-slate-900 hover:underline dark:text-white">
-                    {m.label}
-                  </Link>
-                  <span className="text-[10px] text-slate-600 dark:text-white/60">{m.items.length} assets</span>
-                </div>
-                <ul className="mt-2 space-y-1">
-                  {m.items.slice(0, 6).map((a) => (
-                    <li key={`hc-mkt-asset-${m.market}-${a.symbol}`}>
-                      <Link href={a.href} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-white dark:hover:bg-white/8">
-                        <div className="min-w-0">
-                          <div className="truncate text-[12px] font-medium text-slate-900 dark:text-white">
-                            {a.symbol} <span className="text-slate-600 dark:text-white/55">{a.status}</span>
-                          </div>
-                          <div className="truncate text-[10px] text-slate-600 dark:text-white/55">
-                            sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
-                          </div>
-                        </div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            a.advice === 'ACTIEF'
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
-                          }`}
-                        >
-                          {a.advice}
-                        </span>
-                      </Link>
-                    </li>
-                  ))}
-                  {m.items.length === 0 && (
-                    <li className="text-[11px] text-slate-600 dark:text-white/60 px-2 py-1">Geen actieve BUY/SELL signalen.</li>
-                  )}
-                </ul>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-slate-300/50 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Aandelen</h3>
+                <span className="text-[10px] text-slate-600 dark:text-white/60">{equityMarketBlocks.length} markten</span>
               </div>
-            ))}
+              <ul className="space-y-1">
+                {equityMarketBlocks.map((m) => (
+                  <li key={`hc-market-assets-${m.market}`}>
+                    <Link href={m.href} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-white dark:hover:bg-white/8">
+                      <div className="min-w-0">
+                        <div className="truncate text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
+                        <div className="truncate text-[10px] text-slate-600 dark:text-white/55">
+                          {m.items[0] ? (
+                            <>
+                              {m.items[0].symbol} • <span className={sideTextClass(m.items[0].status)}>{m.items[0].status}</span> • sterkte {m.items[0].strength}
+                            </>
+                          ) : (
+                            'Geen BUY/SELL signaal nu'
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          m.items[0]?.advice === 'ACTIEF'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                        }`}
+                      >
+                        {m.items[0]?.advice || 'WACHT'}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-xl border border-slate-300/50 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Crypto</h3>
+                <span className="text-[10px] text-slate-600 dark:text-white/60">{cryptoMarketBlocks.length} markt</span>
+              </div>
+              <ul className="space-y-1">
+                {cryptoMarketBlocks.map((m) => (
+                  <li key={`hc-market-assets-${m.market}`}>
+                    <Link href={m.href} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-white dark:hover:bg-white/8">
+                      <div className="min-w-0">
+                        <div className="truncate text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
+                        <div className="truncate text-[10px] text-slate-600 dark:text-white/55">
+                          {m.items[0] ? (
+                            <>
+                              {m.items[0].symbol} • <span className={sideTextClass(m.items[0].status)}>{m.items[0].status}</span> • sterkte {m.items[0].strength}
+                            </>
+                          ) : (
+                            'Geen BUY/SELL signaal nu'
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          m.items[0]?.advice === 'ACTIEF'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                        }`}
+                      >
+                        {m.items[0]?.advice || 'WACHT'}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </section>
 
@@ -190,21 +289,21 @@ export default function HighConfidencePage({ data, error }: Props) {
           <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
             Wel BUY/SELL signaal, maar nog niet voldoende zekerheid voor ACTIEF.
           </p>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {waitingAssets.slice(0, 90).map((a) => (
-              <Link
-                key={`hc-wait-asset-${a.market}-${a.symbol}`}
-                href={a.href}
-                className="rounded-lg border border-slate-300/60 bg-white/70 px-3 py-2 text-[11px] text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold">{a.symbol}</span>
-                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-white/15 dark:text-white/70">WACHT</span>
-                </div>
-                <div className="mt-1 truncate">{HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score}</div>
-                <div className="mt-0.5 truncate text-[10px] text-slate-600 dark:text-white/55">{a.reason}</div>
-              </Link>
-            ))}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Aandelen</h3>
+                <span className="text-[11px] text-slate-600 dark:text-white/60">{waitingEquities.length} op wacht</span>
+              </div>
+              {renderWaitingCards(waitingEquities)}
+            </div>
+            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Crypto</h3>
+                <span className="text-[11px] text-slate-600 dark:text-white/60">{waitingCrypto.length} op wacht</span>
+              </div>
+              {renderWaitingCards(waitingCrypto)}
+            </div>
           </div>
         </section>
       </main>

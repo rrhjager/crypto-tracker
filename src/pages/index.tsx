@@ -9,7 +9,7 @@ import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
-import { HC_MARKET_META, HC_MARKET_ORDER, type HCResponse } from '@/lib/highConfidence'
+import { HC_MARKET_META, HC_MARKET_ORDER, type HCAssetAdvice, type HCResponse } from '@/lib/highConfidence'
 
 import { SP500 } from '@/lib/sp500'
 import { NASDAQ } from '@/lib/nasdaq'
@@ -825,9 +825,25 @@ export default function Homepage(props: HomeProps) {
     Number.isFinite(v as number) ? `${((v as number) * 100).toFixed(d)}%` : '—'
   const fmtRetPct = (v: number | null | undefined, d = 2) =>
     Number.isFinite(v as number) ? `${(Number(v) >= 0 ? '+' : '')}${Number(v).toFixed(d)}%` : '—'
+  const sideTextClass = (status: 'BUY' | 'SELL') =>
+    status === 'BUY' ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'
+  const sideBadgeClass = (status: 'BUY' | 'SELL') =>
+    status === 'BUY' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+  const sideCardClass = (status: 'BUY' | 'SELL', subtle = false) =>
+    status === 'BUY'
+      ? subtle
+        ? 'border-emerald-300/50 bg-emerald-500/5 hover:bg-emerald-500/10 dark:border-emerald-500/30'
+        : 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15'
+      : subtle
+        ? 'border-rose-300/50 bg-rose-500/5 hover:bg-rose-500/10 dark:border-rose-500/30'
+        : 'border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/15'
 
   const activeAssetRows = highConf?.assets?.active || []
   const waitingAssetRows = highConf?.assets?.waiting || []
+  const activeEquityRows = activeAssetRows.filter((a) => a.market !== 'CRYPTO')
+  const activeCryptoRows = activeAssetRows.filter((a) => a.market === 'CRYPTO')
+  const waitingEquityRows = waitingAssetRows.filter((a) => a.market !== 'CRYPTO')
+  const waitingCryptoRows = waitingAssetRows.filter((a) => a.market === 'CRYPTO')
   const byMarketAssets = highConf?.assets?.byMarket || ({} as any)
   const marketAssetBlocks = useMemo(() => {
     return HC_MARKET_ORDER.map((market) => ({
@@ -837,7 +853,65 @@ export default function Homepage(props: HomeProps) {
       items: Array.isArray(byMarketAssets[market]) ? byMarketAssets[market] : [],
     }))
   }, [byMarketAssets])
+  const equityMarketAssetBlocks = marketAssetBlocks.filter((m) => m.market !== 'CRYPTO')
+  const cryptoMarketAssetBlocks = marketAssetBlocks.filter((m) => m.market === 'CRYPTO')
   const generatedAt = highConf?.meta?.generatedAt ? new Date(highConf.meta.generatedAt).toLocaleString('nl-NL') : null
+
+  const renderActiveRows = (rows: HCAssetAdvice[], keyPrefix: string) => {
+    if (rows.length === 0) {
+      return <div className="text-[12px] text-slate-600 dark:text-white/65">Geen actieve assets nu.</div>
+    }
+    return (
+      <ul className="space-y-2">
+        {rows.slice(0, 6).map((a) => (
+          <li key={`${keyPrefix}-hc-ok-${a.market}-${a.symbol}`}>
+            <Link
+              href={a.href}
+              className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 transition ${sideCardClass(a.status)}`}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-[13px] text-slate-900 dark:text-white">{a.symbol}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
+                  <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
+                </div>
+                <div className="text-[11px] text-slate-700/80 dark:text-white/65">
+                  {HC_MARKET_META[a.market].label} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
+                </div>
+              </div>
+              <div className="text-right text-[11px]">
+                <div className={`font-semibold ${sideTextClass(a.status)}`}>{fmtRatioPct(a.expectedWinrate)}</div>
+                <div className="text-slate-700/80 dark:text-white/60">{fmtRetPct(a.expectedReturnPct)}</div>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  const renderWaitingRows = (rows: HCAssetAdvice[], keyPrefix: string) => {
+    if (rows.length === 0) {
+      return <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst.</div>
+    }
+    return (
+      <div className="grid gap-2">
+        {rows.slice(0, 8).map((a) => (
+          <Link
+            key={`${keyPrefix}-hc-wait-home-${a.market}-${a.symbol}`}
+            href={a.href}
+            className={`rounded-lg border px-3 py-2 text-[11px] text-slate-700 transition dark:bg-white/5 dark:text-white/70 ${sideCardClass(a.status, true)}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-900 dark:text-white">{a.symbol}</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
+            </div>
+            <div className="truncate">{HC_MARKET_META[a.market].label} • sterkte {a.strength} • score {a.score}</div>
+          </Link>
+        ))}
+      </div>
+    )
+  }
 
   /* ---------------- render ---------------- */
   return (
@@ -1001,7 +1075,7 @@ export default function Homepage(props: HomeProps) {
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-emerald-500/25 bg-white/75 p-4 dark:bg-white/5">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Actieve zekerheden (assets)</h3>
-              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Alleen losse assets met `ACTIEF`.</p>
+              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Gesplitst in Aandelen en Crypto. BUY is groen, SELL is rood.</p>
 
               {highConfErr && <div className="text-[12px] text-rose-500 dark:text-rose-300 mb-2">Fout: {highConfErr}</div>}
               {loadingHighConf ? (
@@ -1009,66 +1083,107 @@ export default function Homepage(props: HomeProps) {
               ) : activeAssetRows.length === 0 ? (
                 <div className="text-[12px] text-slate-600 dark:text-white/65">Geen actieve assets nu. Advies: wachten.</div>
               ) : (
-                <ul className="space-y-2">
-                  {activeAssetRows.slice(0, 10).map((a) => {
-                    return (
-                      <li key={`hc-ok-${a.market}-${a.symbol}`}>
-                        <Link
-                          href={a.href}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 transition hover:bg-emerald-500/15"
-                        >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-[13px] text-slate-900 dark:text-white">{a.symbol}</span>
-                              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
-                            </div>
-                            <div className="text-[11px] text-slate-700/80 dark:text-white/65">
-                              {HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
-                            </div>
-                          </div>
-                          <div className="text-right text-[11px]">
-                            <div className="font-semibold text-emerald-800 dark:text-emerald-200">{fmtRatioPct(a.expectedWinrate)}</div>
-                            <div className="text-slate-700/80 dark:text-white/60">{fmtRetPct(a.expectedReturnPct)}</div>
-                          </div>
-                        </Link>
-                      </li>
-                    )
-                  })}
-                </ul>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
+                      <span className="text-[10px] text-slate-600 dark:text-white/60">{activeEquityRows.length} actief</span>
+                    </div>
+                    {renderActiveRows(activeEquityRows, 'eq')}
+                  </div>
+                  <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
+                      <span className="text-[10px] text-slate-600 dark:text-white/60">{activeCryptoRows.length} actief</span>
+                    </div>
+                    {renderActiveRows(activeCryptoRows, 'cr')}
+                  </div>
+                </div>
               )}
             </div>
 
             <div className="rounded-2xl border border-slate-300/40 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Advies per markt (assets)</h3>
-              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Per markt de top assets met advies.</p>
-              <ul className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
-                {marketAssetBlocks.map((m) => {
-                  const top = m.items?.[0]
-                  return (
-                    <li key={`hc-advice-${m.market}`}>
-                    <Link href={m.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
-                      <div className="min-w-0">
-                        <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
-                        <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
-                          {top
-                            ? `${top.symbol} • ${top.status} • sterkte ${top.strength} • ${top.advice}`
-                            : 'Geen BUY/SELL signaal nu'}
-                        </div>
-                      </div>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          top?.advice === 'ACTIEF'
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
-                        }`}
-                      >
-                        {top?.advice || 'WACHT'}
-                      </span>
-                    </Link>
-                  </li>
-                  )
-                })}
-              </ul>
+              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Top-advies per markt, apart voor Aandelen en Crypto.</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
+                    <span className="text-[10px] text-slate-600 dark:text-white/60">{equityMarketAssetBlocks.length} markten</span>
+                  </div>
+                  <ul className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
+                    {equityMarketAssetBlocks.map((m) => {
+                      const top = m.items?.[0]
+                      return (
+                        <li key={`hc-advice-eq-${m.market}`}>
+                          <Link href={m.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
+                            <div className="min-w-0">
+                              <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
+                              <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
+                                {top ? (
+                                  <>
+                                    {top.symbol} • <span className={sideTextClass(top.status)}>{top.status}</span> • sterkte {top.strength}
+                                  </>
+                                ) : (
+                                  'Geen BUY/SELL signaal nu'
+                                )}
+                              </div>
+                            </div>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                top?.advice === 'ACTIEF'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                              }`}
+                            >
+                              {top?.advice || 'WACHT'}
+                            </span>
+                          </Link>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
+                    <span className="text-[10px] text-slate-600 dark:text-white/60">{cryptoMarketAssetBlocks.length} markt</span>
+                  </div>
+                  <ul className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
+                    {cryptoMarketAssetBlocks.map((m) => {
+                      const top = m.items?.[0]
+                      return (
+                        <li key={`hc-advice-cr-${m.market}`}>
+                          <Link href={m.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
+                            <div className="min-w-0">
+                              <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
+                              <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
+                                {top ? (
+                                  <>
+                                    {top.symbol} • <span className={sideTextClass(top.status)}>{top.status}</span> • sterkte {top.strength}
+                                  </>
+                                ) : (
+                                  'Geen BUY/SELL signaal nu'
+                                )}
+                              </div>
+                            </div>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                top?.advice === 'ACTIEF'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                              }`}
+                            >
+                              {top?.advice || 'WACHT'}
+                            </span>
+                          </Link>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1078,17 +1193,21 @@ export default function Homepage(props: HomeProps) {
             {waitingAssetRows.length === 0 ? (
               <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst.</div>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {waitingAssetRows.slice(0, 12).map((a) => (
-                  <Link
-                    key={`hc-wait-home-${a.market}-${a.symbol}`}
-                    href={a.href}
-                    className="rounded-lg border border-slate-300/60 bg-white/70 px-3 py-2 text-[11px] text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
-                  >
-                    <div className="font-semibold">{a.symbol}</div>
-                    <div className="truncate">{HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score}</div>
-                  </Link>
-                ))}
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
+                    <span className="text-[10px] text-slate-600 dark:text-white/60">{waitingEquityRows.length} op wacht</span>
+                  </div>
+                  {renderWaitingRows(waitingEquityRows, 'eq')}
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
+                    <span className="text-[10px] text-slate-600 dark:text-white/60">{waitingCryptoRows.length} op wacht</span>
+                  </div>
+                  {renderWaitingRows(waitingCryptoRows, 'cr')}
+                </div>
               </div>
             )}
           </div>
