@@ -20,6 +20,8 @@ type SnapItem = {
   macd?: { macd: number | null; signal: number | null; hist: number | null; status?: Advice }
 
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+  trend?: { ret20: number | null; rangePos20: number | null; status?: Advice }
+  volatility?: { stdev20: number | null; regime?: 'low' | 'med' | 'high' | '—'; status?: Advice }
 }
 type SnapResp = { items: SnapItem[]; updatedAt?: number }
 type ScoreResp = { symbol: string; score: number | null }
@@ -32,6 +34,9 @@ const fetcher = async <T,>(url: string): Promise<T> => {
 
 function fmt(v: number | null | undefined, d = 2) {
   return (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
+}
+function fmtPct(v: number | null | undefined, d = 2) {
+  return (v ?? v === 0) && Number.isFinite(v as number) ? `${(v as number).toFixed(d)}%` : '—'
 }
 
 // Yahoo nuances: BRK.B & BF.B use dash in Yahoo endpoints (BRK-B, BF-B)
@@ -79,6 +84,21 @@ function statusVolume(ratio?: number | null): Advice {
   if (ratio < 0.8) return 'SELL'
   return 'HOLD'
 }
+function statusTrend(ret20?: number | null, rangePos20?: number | null): Advice {
+  if (ret20 == null && rangePos20 == null) return 'HOLD'
+  const r = ret20 == null ? 0 : Math.max(-1, Math.min(1, ret20 / 14))
+  const p = rangePos20 == null ? 0 : Math.max(-1, Math.min(1, (rangePos20 - 0.5) * 2))
+  const mix = 0.6 * r + 0.4 * p
+  if (mix >= 0.25) return 'BUY'
+  if (mix <= -0.25) return 'SELL'
+  return 'HOLD'
+}
+function statusVolatility(stdev20?: number | null): Advice {
+  if (stdev20 == null) return 'HOLD'
+  if (stdev20 <= 0.028) return 'BUY'
+  if (stdev20 <= 0.075) return 'HOLD'
+  return 'SELL'
+}
 
 function normalize(item?: SnapItem | null) {
   if (!item) return null
@@ -106,6 +126,12 @@ function normalize(item?: SnapItem | null) {
   const rsiStatus: Advice = (rsiObj?.status as Advice) ?? statusRSI(rsiVal)
   const macdStatus: Advice = item.macd?.status ?? statusMACD(macdHist, macdVal, macdSig)
   const volStatus: Advice = item.volume?.status ?? statusVolume(volRatio)
+  const trendRet20 = item.trend?.ret20 ?? null
+  const trendRangePos20 = item.trend?.rangePos20 ?? null
+  const trendStatus: Advice = item.trend?.status ?? statusTrend(trendRet20, trendRangePos20)
+  const volStdev20 = item.volatility?.stdev20 ?? null
+  const volRegime = item.volatility?.regime ?? '—'
+  const volatilityStatus: Advice = item.volatility?.status ?? statusVolatility(volStdev20)
 
   const snapScore =
     typeof item.score === 'number' && Number.isFinite(item.score) ? Math.round(item.score) : null
@@ -117,6 +143,8 @@ function normalize(item?: SnapItem | null) {
     rsi: { period: rsiPeriod, rsi: rsiVal, status: rsiStatus },
     macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus },
     volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus },
+    trend: { ret20: trendRet20, rangePos20: trendRangePos20, status: trendStatus },
+    volatility: { stdev20: volStdev20, regime: volRegime, status: volatilityStatus },
   }
 }
 
@@ -137,6 +165,8 @@ export default function Sp500StockDetail() {
   const rsi = item?.rsi
   const macd = item?.macd
   const vol = item?.volume
+  const trend = item?.trend
+  const volatility = item?.volatility
 
   // 2) Centrale score (canonical)
   const { data: serverScoreData } = useSWR<ScoreResp>(
@@ -225,6 +255,27 @@ export default function Sp500StockDetail() {
               </div>
               <div className="text-sm text-white/80">
                 Vol: {fmt(vol?.volume, 0)} · Ave(20d): {fmt(vol?.avg20d, 0)} · Ratio: {fmt(vol?.ratio, 2)}
+              </div>
+            </div>
+
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold">Trend (20d)</div>
+                <span className={pillClass(trend?.status)}>{trend?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-white/80">
+                Ret20: {fmtPct(trend?.ret20, 2)} · Range-pos: {fmt(trend?.rangePos20, 2)}
+              </div>
+            </div>
+
+            <div className="table-card p-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="font-semibold">Volatility regime (20d)</div>
+                <span className={pillClass(volatility?.status)}>{volatility?.status || 'HOLD'}</span>
+              </div>
+              <div className="text-sm text-white/80">
+                Stdev20: {fmtPct(volatility?.stdev20 != null ? volatility.stdev20 * 100 : null, 2)} · Regime:{' '}
+                {volatility?.regime ?? '—'}
               </div>
             </div>
           </div>

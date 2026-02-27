@@ -23,6 +23,8 @@ type SnapItem = {
 
   // let op: snapshot gebruikt avg20d i.p.v. avg20
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null; status?: Advice }
+  trend?: { ret20: number | null; rangePos20: number | null; status?: Advice }
+  volatility?: { stdev20: number | null; regime?: 'low' | 'med' | 'high' | '—'; status?: Advice }
 }
 type SnapResp = { items: SnapItem[]; updatedAt?: number }
 
@@ -62,6 +64,21 @@ function statusVolume(ratio?: number | null): Advice {
   if (ratio < 0.8) return 'SELL'
   return 'HOLD'
 }
+function statusTrend(ret20?: number | null, rangePos20?: number | null): Advice {
+  if (ret20 == null && rangePos20 == null) return 'HOLD'
+  const r = ret20 == null ? 0 : Math.max(-1, Math.min(1, ret20 / 14))
+  const p = rangePos20 == null ? 0 : Math.max(-1, Math.min(1, (rangePos20 - 0.5) * 2))
+  const mix = 0.6 * r + 0.4 * p
+  if (mix >= 0.25) return 'BUY'
+  if (mix <= -0.25) return 'SELL'
+  return 'HOLD'
+}
+function statusVolatility(stdev20?: number | null): Advice {
+  if (stdev20 == null) return 'HOLD'
+  if (stdev20 <= 0.028) return 'BUY'
+  if (stdev20 <= 0.075) return 'HOLD'
+  return 'SELL'
+}
 
 function normalize(item?: SnapItem | null) {
   if (!item) return null
@@ -89,6 +106,12 @@ function normalize(item?: SnapItem | null) {
   const rsiStatus: Advice = (rsiObj?.status as Advice) ?? statusRSI(rsiVal)
   const macdStatus: Advice = item.macd?.status ?? statusMACD(macdHist, macdVal, macdSig)
   const volStatus: Advice = item.volume?.status ?? statusVolume(volRatio)
+  const trendRet20 = item.trend?.ret20 ?? null
+  const trendRangePos20 = item.trend?.rangePos20 ?? null
+  const trendStatus: Advice = item.trend?.status ?? statusTrend(trendRet20, trendRangePos20)
+  const volStdev20 = item.volatility?.stdev20 ?? null
+  const volRegime = item.volatility?.regime ?? '—'
+  const volatilityStatus: Advice = item.volatility?.status ?? statusVolatility(volStdev20)
 
   const snapScore =
     typeof item.score === 'number' && Number.isFinite(item.score) ? Math.round(item.score) : null
@@ -100,6 +123,8 @@ function normalize(item?: SnapItem | null) {
     rsi: { period: rsiPeriod, rsi: rsiVal, status: rsiStatus },
     macd: { macd: macdVal, signal: macdSig, hist: macdHist, status: macdStatus },
     volume: { volume: volNow, avg20d: volAvg, ratio: volRatio, status: volStatus },
+    trend: { ret20: trendRet20, rangePos20: trendRangePos20, status: trendStatus },
+    volatility: { stdev20: volStdev20, regime: volRegime, status: volatilityStatus },
   }
 }
 
@@ -120,6 +145,8 @@ export default function StockDetail() {
   const rsi = item?.rsi
   const macd = item?.macd
   const vol20 = item?.volume
+  const trend20 = item?.trend
+  const volatility20 = item?.volatility
 
   // 2) canonical score
   const { data: serverScoreData } = useSWR<ScoreResp>(
@@ -142,6 +169,8 @@ export default function StockDetail() {
 
   const fmt = (v: number | null | undefined, d = 2) =>
     (v ?? v === 0) && Number.isFinite(v as number) ? (v as number).toFixed(d) : '—'
+  const fmtPct = (v: number | null | undefined, d = 2) =>
+    (v ?? v === 0) && Number.isFinite(v as number) ? `${(v as number).toFixed(d)}%` : '—'
 
   return (
     <main className="min-h-screen bg-white text-gray-900 text-[13px]">
@@ -218,6 +247,34 @@ export default function StockDetail() {
                   : vol20 && vol20.volume != null && vol20.avg20d != null
                     ? `Volume: ${Math.round(vol20.volume).toLocaleString()} — Ave.20d: ${Math.round(vol20.avg20d).toLocaleString()} — Ratio: ${fmt(vol20.ratio, 2)}`
                     : 'Onvoldoende data voor volume'
+            }
+          />
+
+          <StockIndicatorCard
+            title="Trend (20d)"
+            status={loading ? 'HOLD' : err ? 'HOLD' : (trend20?.status || 'HOLD')}
+            note={
+              loading
+                ? 'Bezig met ophalen...'
+                : err
+                  ? `Fout: ${err}`
+                  : trend20 && (trend20.ret20 != null || trend20.rangePos20 != null)
+                    ? `Ret20: ${fmtPct(trend20.ret20, 2)} — Range-pos: ${fmt(trend20.rangePos20, 2)}`
+                    : 'Onvoldoende data voor trend'
+            }
+          />
+
+          <StockIndicatorCard
+            title="Volatility regime (20d)"
+            status={loading ? 'HOLD' : err ? 'HOLD' : (volatility20?.status || 'HOLD')}
+            note={
+              loading
+                ? 'Bezig met ophalen...'
+                : err
+                  ? `Fout: ${err}`
+                  : volatility20 && volatility20.stdev20 != null
+                    ? `Stdev20: ${fmtPct(volatility20.stdev20 * 100, 2)} — Regime: ${volatility20.regime ?? '—'}`
+                    : 'Onvoldoende data voor volatility'
             }
           />
         </div>
