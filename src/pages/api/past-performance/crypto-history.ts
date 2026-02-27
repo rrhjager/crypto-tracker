@@ -67,6 +67,8 @@ async function computeOneHistory(pair: string) {
       rsi: ind.rsi,
       macd: { hist: ind.macd.hist },
       volume: { ratio: ind.volume.ratio },
+      trend: ind.trend,
+      volatility: ind.volatility,
     })
 
     statusArr[i] = status
@@ -128,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:history:v1')
+    const kvKey = snapKey.custom('pastperf:crypto:history:v2')
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]

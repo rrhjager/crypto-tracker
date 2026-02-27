@@ -106,6 +106,8 @@ type IndResp = {
   rsi?: number|null
   macd?: { macd: number|null; signal: number|null; hist: number|null }
   volume?: { volume: number|null; avg20d: number|null; ratio: number|null }
+  trend?: { ret20: number|null; rangePos20: number|null }
+  volatility?: { stdev20: number|null; regime?: string }
   error?: string
 }
 
@@ -589,7 +591,12 @@ export default function Homepage(props: HomeProps) {
         for (const br of batchResults) {
           for (const ind of (br.results || [])) {
             const { score } = computeScoreStatus({
-              ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume
+              ma: ind?.ma,
+              rsi: ind?.rsi,
+              macd: ind?.macd,
+              volume: ind?.volume,
+              trend: ind?.trend,
+              volatility: ind?.volatility,
             } as any)
             if (Number.isFinite(score)) {
               const s = Math.round(Number(score))

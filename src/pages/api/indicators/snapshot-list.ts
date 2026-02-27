@@ -5,6 +5,7 @@ import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 import { computeScoreStatus } from '@/lib/taScore'
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 
 import { AEX } from '@/lib/aex'
 import { SP500 } from '@/lib/sp500'
@@ -27,6 +28,8 @@ type SnapItem = {
   rsi: { period: number; rsi: number | null; status: Advice }
   macd: { macd: number | null; signal: number | null; hist: number | null; status: Advice }
   volume: { volume: number | null; avg20d: number | null; ratio: number | null; status: Advice }
+  trend: { ret20: number | null; rangePos20: number | null }
+  volatility: { stdev20: number | null }
   score: number
   status: Advice
 }
@@ -38,7 +41,7 @@ const KV_TTL_SEC = 600
 const RANGE: YahooRange = '1y'
 
 // bump als je caching wil breken na score-wijziging
-const KV_VER = 'v5'
+const KV_VER = 'v6'
 
 // ----- static lists for ?market= -----
 const STATIC_CONS = {
@@ -130,6 +133,8 @@ async function computeOne(symbol: string): Promise<SnapItem> {
   const avg20d = avgVolume(vs, 20)
   const ratio =
     typeof volNow === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volNow / avg20d : null
+  const trend = latestTrendFeatures(cs, 20)
+  const volatility = latestVolatilityFeatures(cs, 20)
 
   // ✅ EXACT dezelfde inputs als crypto-light/indicators.ts gebruikt
   const overall = computeScoreStatus({
@@ -137,6 +142,8 @@ async function computeOne(symbol: string): Promise<SnapItem> {
     rsi: rsi ?? null,
     macd: { hist: hist ?? null },
     volume: { ratio: ratio ?? null },
+    trend,
+    volatility,
   })
 
   const score =
@@ -164,6 +171,8 @@ async function computeOne(symbol: string): Promise<SnapItem> {
     rsi: { period: 14, rsi: rsi ?? null, status: rsiS },
     macd: { macd, signal, hist, status: macdS },
     volume: { volume: volNow ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null, status: volS },
+    trend,
+    volatility,
     score,
     status,
   }

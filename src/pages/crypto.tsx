@@ -52,6 +52,8 @@ type IndResp = {
   rsi?: number | null
   macd?: { macd: number | null; signal: number | null; hist: number | null }
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  trend?: { ret20: number | null; rangePos20: number | null }
+  volatility?: { stdev20: number | null; regime?: 'low' | 'med' | 'high' | '—' }
   perf?: { d: number | null; w: number | null; m: number | null }
 }
 
@@ -527,7 +529,14 @@ function PageInner() {
       const symU = String(c.symbol || '').toUpperCase()
       const ind = c.binance ? indBySym.get(c.binance) : undefined
 
-      const calc = computeScoreStatus({ ma: ind?.ma, rsi: ind?.rsi, macd: ind?.macd, volume: ind?.volume } as any)
+      const calc = computeScoreStatus({
+        ma: ind?.ma,
+        rsi: ind?.rsi,
+        macd: ind?.macd,
+        volume: ind?.volume,
+        trend: ind?.trend,
+        volatility: ind?.volatility,
+      } as any)
       let finalScore = Number(calc?.score ?? 50)
       let finalStatus: Status = statusFromScore(finalScore)
 

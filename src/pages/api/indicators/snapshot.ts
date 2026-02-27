@@ -8,6 +8,7 @@ import { computeScoreStatus } from '@/lib/taScore'
 
 // ✅ shared TA helpers (same as crypto-light/indicators.ts)
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 
 export const config = { runtime: 'nodejs' }
 
@@ -34,6 +35,8 @@ type SnapResp = {
   rsi?: number | null
   macd?: { macd: number | null; signal: number | null; hist: number | null }
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  trend?: { ret20: number | null; rangePos20: number | null }
+  volatility?: { stdev20: number | null }
   // ✅ score + status (zelfde als crypto)
   score?: number
   status?: Advice
@@ -68,6 +71,8 @@ function emptySnap(symbol: string): SnapResp {
     rsi: null,
     macd: { macd: null, signal: null, hist: null },
     volume: { volume: null, avg20d: null, ratio: null },
+    trend: { ret20: null, rangePos20: null },
+    volatility: { stdev20: null },
     score: 50,
     status: 'HOLD',
   }
@@ -138,6 +143,8 @@ async function computeOne(symbol: string): Promise<SnapResp> {
   const avg20d = avgVolume(vols, 20)
   const ratio =
     typeof volume === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volume / avg20d : null
+  const trend = latestTrendFeatures(closes, 20)
+  const volatility = latestVolatilityFeatures(closes, 20)
 
   // price/day
   const last = closes.length ? (closes.at(-1) ?? null) : null
@@ -159,6 +166,8 @@ async function computeOne(symbol: string): Promise<SnapResp> {
     rsi: rsi ?? null,
     macd: { hist: hist ?? null },
     volume: { ratio: ratio ?? null },
+    trend,
+    volatility,
   })
 
   const score =
@@ -179,6 +188,8 @@ async function computeOne(symbol: string): Promise<SnapResp> {
     rsi: rsi ?? null,
     macd: { macd, signal, hist },
     volume: { volume: volume ?? null, avg20d: avg20d ?? null, ratio: ratio ?? null },
+    trend,
+    volatility,
     score,
     status,
   }

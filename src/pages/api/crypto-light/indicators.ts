@@ -12,6 +12,7 @@ import { computeScoreStatus } from '@/lib/taScore'
 
 // ✅ shared TA helpers (same as equities snapshot.ts)
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 
 // ---------- helpers (general) ----------
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -82,14 +83,6 @@ const CG_ALIASES: Record<string, string[]> = {
   ALGOUSDT: ['algorand'],
   QNTUSDT: ['quant', 'quant-network'],
   THETAUSDT: ['theta-token'],
-}
-
-// ---------- tiny utils ----------
-const stdev = (arr: number[]): number | null => {
-  if (arr.length === 0) return null
-  const m = arr.reduce((a, b) => a + b, 0) / arr.length
-  const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length
-  return Math.sqrt(v)
 }
 
 // ---------- market data fetchers (OKX -> Bitfinex -> CoinGecko) ----------
@@ -193,13 +186,8 @@ function computeIndicators(closes: number[], volumes: number[]) {
   const avg20d = avgVolume(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
 
-  const rets: number[] = []
-  for (let i = 1; i < closes.length; i++) {
-    const a = closes[i - 1]
-    const b = closes[i]
-    if (a > 0 && Number.isFinite(a) && Number.isFinite(b)) rets.push((b - a) / a)
-  }
-  const st = stdev(rets.slice(-20))
+  const trend = latestTrendFeatures(closes, 20)
+  const st = latestVolatilityFeatures(closes, 20).stdev20
   let regime: 'low' | 'med' | 'high' | '—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
@@ -217,6 +205,7 @@ function computeIndicators(closes: number[], volumes: number[]) {
     rsi,
     macd,
     volume: { volume, avg20d, ratio },
+    trend,
     volatility: { stdev20: st ?? null, regime },
     perf,
   }
@@ -328,7 +317,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const debug = String(req.query.debug || '') === '1'
 
     // ✅ bump versie zodat KV cache zeker vernieuwt na deze wijziging
-    const kvKey = snapKey.cryptoInd('v3:' + encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
+    const kvKey = snapKey.cryptoInd('v4:' + encodeURIComponent(symbolsParam) + (debug ? ':dbg1' : ''))
 
     const compute = async () => {
       const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
@@ -354,6 +343,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 rsi: ind.rsi ?? null,
                 macd: { hist: ind.macd?.hist ?? null },
                 volume: { ratio: ind.volume?.ratio ?? null },
+                trend: ind.trend ?? null,
+                volatility: { stdev20: ind.volatility?.stdev20 ?? null },
               })
 
               const score = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50

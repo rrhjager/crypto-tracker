@@ -1,4 +1,6 @@
 // src/lib/pastPerformance/equityIndicatorsExact.ts
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
+
 export type FetchOk = {
     ok: true
     source: 'yahoo'
@@ -154,11 +156,15 @@ export type FetchOk = {
     const vol = volumes[volumes.length - 1] ?? null
     const avg20d = smaLast(volumes, 20)
     const ratio = avg20d && avg20d > 0 && vol != null ? vol / avg20d : null
-  
+    const trend = latestTrendFeatures(closes, 20)
+    const volatility = latestVolatilityFeatures(closes, 20)
+
     return {
       ma: { ma50, ma200 },
       rsi,
       macd: { hist },
       volume: { ratio },
+      trend,
+      volatility,
     }
   }

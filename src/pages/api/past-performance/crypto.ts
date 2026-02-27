@@ -140,6 +140,8 @@ async function computeOne(pair: string): Promise<{ row: Row }> {
       rsi: ind.rsi,
       macd: { hist: ind.macd.hist },
       volume: { ratio: ind.volume.ratio },
+      trend: ind.trend,
+      volatility: ind.volatility,
     })
 
     return { score, status }
@@ -320,7 +322,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:v4') // bump: add enterAfter7dUntilNext metric
+    const kvKey = snapKey.custom('pastperf:crypto:v5') // bump: score model updated with trend/vol filters
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]

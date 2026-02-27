@@ -3,6 +3,8 @@
 // src/pages/api/crypto-light/indicators.ts
 // We DO NOT modify the original calculation code; we copy it here for reuse.
 
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
+
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 
 // ⬇️ detect “platte” reeksen en forceer fallback
@@ -80,13 +82,6 @@ const sma = (arr: number[], win: number): number | null => {
   return s / win
 }
 
-const stdev = (arr: number[]): number | null => {
-  if (arr.length === 0) return null
-  const m = arr.reduce((a, b) => a + b, 0) / arr.length
-  const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length
-  return Math.sqrt(v)
-}
-
 const rsi14 = (closes: number[]): number | null => {
   if (closes.length < 15) return null
   let gains = 0, losses = 0
@@ -134,13 +129,8 @@ export function computeIndicators(closes: number[], volumes: number[]) {
   const volume = volumes.at(-1) ?? null
   const avg20d = sma(volumes, 20)
   const ratio = volume != null && avg20d != null && avg20d > 0 ? volume / avg20d : null
-
-  const rets: number[] = []
-  for (let i = 1; i < closes.length; i++) {
-    const a = closes[i - 1], b = closes[i]
-    if (a > 0 && Number.isFinite(a) && Number.isFinite(b)) rets.push((b - a) / a)
-  }
-  const st = stdev(rets.slice(-20))
+  const trend = latestTrendFeatures(closes, 20)
+  const st = latestVolatilityFeatures(closes, 20).stdev20
   let regime: 'low'|'med'|'high'|'—' = '—'
   if (st != null) regime = st < 0.01 ? 'low' : st < 0.02 ? 'med' : 'high'
 
@@ -158,6 +148,7 @@ export function computeIndicators(closes: number[], volumes: number[]) {
     rsi,
     macd,
     volume: { volume, avg20d, ratio },
+    trend,
     volatility: { stdev20: st ?? null, regime },
     perf,
   }

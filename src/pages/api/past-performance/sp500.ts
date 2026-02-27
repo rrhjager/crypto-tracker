@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { SP500 } from '@/lib/sp500'
 import { cache5min } from '@/lib/cacheHeaders'
 import { computeScoreStatus } from '@/lib/taScore'
+import { lookbackReturnPctAt, rangePositionAt, realizedVolatilityAt } from '@/lib/taExtras'
 
 type Advice = 'BUY' | 'HOLD' | 'SELL'
 
@@ -208,12 +209,19 @@ function computeStates(times: number[], closes: number[], volumes: number[]) {
 
     const volAvg20 = smaAt(volumes, i, 20)
     const volRatio = volAvg20 && volAvg20 > 0 ? volumes[i] / volAvg20 : null
+    const trend = {
+      ret20: lookbackReturnPctAt(closes, i, 20),
+      rangePos20: rangePositionAt(closes, i, 20),
+    }
+    const volatility = { stdev20: realizedVolatilityAt(closes, i, 20) }
 
     const { score, status } = computeScoreStatus({
       ma: { ma50, ma200 },
       rsi: rsi14,
       macd: { hist: macdHist },
       volume: { ratio: volRatio },
+      trend,
+      volatility,
     })
 
     states[i] = { score, status }

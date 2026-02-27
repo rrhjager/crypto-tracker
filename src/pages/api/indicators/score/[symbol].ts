@@ -5,6 +5,7 @@ import { getYahooDailyOHLC } from '@/lib/providers/quote'
 
 import { computeScoreStatus } from '@/lib/taScore'
 import { sma, rsi as rsiWilder, macd as macdCalc, avgVolume } from '@/lib/ta-light'
+import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 
 export const config = { runtime: 'nodejs' }
 
@@ -72,12 +73,16 @@ async function computeScore(symbol: string): Promise<ScoreResp> {
   const avg20d = avgVolume(vols, 20)
   const ratio =
     typeof volNow === 'number' && typeof avg20d === 'number' && avg20d > 0 ? volNow / avg20d : null
+  const trend = latestTrendFeatures(closes, 20)
+  const volatility = latestVolatilityFeatures(closes, 20)
 
   const overall = computeScoreStatus({
     ma: { ma50: ma50 ?? null, ma200: ma200 ?? null },
     rsi: rsi ?? null,
     macd: { hist },
     volume: { ratio },
+    trend,
+    volatility,
   })
 
   const scoreRaw = typeof overall.score === 'number' && Number.isFinite(overall.score) ? overall.score : 50
