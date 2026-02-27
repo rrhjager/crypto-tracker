@@ -61,6 +61,7 @@ export type HCAssetAdvice = {
   href: string
   status: 'BUY' | 'SELL'
   score: number
+  strength: number
   cutoff: number
   horizon: HCHorizon
   marketMeetsTarget: boolean

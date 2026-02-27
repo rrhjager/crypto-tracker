@@ -1023,7 +1023,7 @@ export default function Homepage(props: HomeProps) {
                               <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
                             </div>
                             <div className="text-[11px] text-slate-700/80 dark:text-white/65">
-                              {HC_MARKET_META[a.market].label} • {a.status} • score {a.score} • cutoff {a.cutoff}
+                              {HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
                             </div>
                           </div>
                           <div className="text-right text-[11px]">
@@ -1051,7 +1051,7 @@ export default function Homepage(props: HomeProps) {
                         <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
                         <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
                           {top
-                            ? `${top.symbol} • ${top.status} • score ${top.score} • ${top.advice}`
+                            ? `${top.symbol} • ${top.status} • sterkte ${top.strength} • ${top.advice}`
                             : 'Geen BUY/SELL signaal nu'}
                         </div>
                       </div>
@@ -1086,7 +1086,7 @@ export default function Homepage(props: HomeProps) {
                     className="rounded-lg border border-slate-300/60 bg-white/70 px-3 py-2 text-[11px] text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
                   >
                     <div className="font-semibold">{a.symbol}</div>
-                    <div className="truncate">{HC_MARKET_META[a.market].label} • {a.status} • score {a.score}</div>
+                    <div className="truncate">{HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score}</div>
                   </Link>
                 ))}
               </div>

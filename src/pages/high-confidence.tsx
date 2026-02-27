@@ -115,7 +115,7 @@ export default function HighConfidencePage({ data, error }: Props) {
                   </div>
                   <div className="text-[11px] text-slate-700/80 dark:text-white/65">{HC_MARKET_META[a.market].label} • {a.name}</div>
                   <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/65">
-                    {a.status} • score {a.score} • cutoff {a.cutoff} • {horizonLabel(a.horizon)}
+                    {a.status} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff} • {horizonLabel(a.horizon)}
                   </div>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
                     <div>
@@ -161,7 +161,7 @@ export default function HighConfidencePage({ data, error }: Props) {
                             {a.symbol} <span className="text-slate-600 dark:text-white/55">{a.status}</span>
                           </div>
                           <div className="truncate text-[10px] text-slate-600 dark:text-white/55">
-                            score {a.score} • cutoff {a.cutoff}
+                            sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
                           </div>
                         </div>
                         <span
@@ -201,7 +201,7 @@ export default function HighConfidencePage({ data, error }: Props) {
                   <span className="font-semibold">{a.symbol}</span>
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-white/15 dark:text-white/70">WACHT</span>
                 </div>
-                <div className="mt-1 truncate">{HC_MARKET_META[a.market].label} • {a.status} • score {a.score}</div>
+                <div className="mt-1 truncate">{HC_MARKET_META[a.market].label} • {a.status} • sterkte {a.strength} • score {a.score}</div>
                 <div className="mt-0.5 truncate text-[10px] text-slate-600 dark:text-white/55">{a.reason}</div>
               </Link>
             ))}

@@ -71,6 +71,7 @@ type AssetAdvice = {
   href: string
   status: 'BUY' | 'SELL'
   score: number
+  strength: number
   cutoff: number
   horizon: Horizon
   marketMeetsTarget: boolean
@@ -226,10 +227,14 @@ function detailHref(market: MarketKey, symbol: string) {
   return `${base}/${encodeURIComponent(symbol)}`
 }
 
-function activeReason(score: number, cutoff: number, marketMeetsTarget: boolean) {
-  if (score < cutoff) return `Score ${score} onder cutoff ${cutoff}`
+function certaintyStrength(status: 'BUY' | 'SELL', score: number) {
+  return status === 'BUY' ? score : 100 - score
+}
+
+function activeReason(status: 'BUY' | 'SELL', score: number, strength: number, cutoff: number, marketMeetsTarget: boolean) {
+  if (strength < cutoff) return `Sterkte ${strength} onder cutoff ${cutoff} (${status} score ${score})`
   if (!marketMeetsTarget) return 'Marktfilter haalt target nu niet'
-  return `Score ${score} >= cutoff ${cutoff} en target gehaald`
+  return `Sterkte ${strength} >= cutoff ${cutoff} en target gehaald`
 }
 
 function initByMarket() {
@@ -349,7 +354,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         withSignalCount += 1
         assetsWithSignal += 1
 
-        const isActiveCertainty = marketMeetsTarget && score >= cutoff
+        const strength = certaintyStrength(status, Math.round(score))
+        const isActiveCertainty = marketMeetsTarget && strength >= cutoff
         if (isActiveCertainty) {
           activeCount += 1
           activeAssets += 1
@@ -362,12 +368,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           href: detailHref(market, id.symbol),
           status,
           score: Math.round(score),
+          strength,
           cutoff,
           horizon,
           marketMeetsTarget,
           isActiveCertainty,
           advice: isActiveCertainty ? 'ACTIEF' : 'WACHT',
-          reason: activeReason(Math.round(score), cutoff, marketMeetsTarget),
+          reason: activeReason(status, Math.round(score), strength, cutoff, marketMeetsTarget),
           expectedReturnPct,
           expectedWinrate,
           expectedCoverage,
@@ -379,7 +386,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       byMarket[market].sort((a, b) => {
         if (a.isActiveCertainty !== b.isActiveCertainty) return a.isActiveCertainty ? -1 : 1
-        if (b.score !== a.score) return b.score - a.score
+        if (b.strength !== a.strength) return b.strength - a.strength
         return b.expectedReturnPct - a.expectedReturnPct
       })
 
@@ -400,7 +407,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const activeList = allActionable
       .filter(a => a.isActiveCertainty)
       .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score
+        if (b.strength !== a.strength) return b.strength - a.strength
         return b.expectedReturnPct - a.expectedReturnPct
       })
       .slice(0, maxAssetsGlobal)
@@ -408,7 +415,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const waitingList = allActionable
       .filter(a => !a.isActiveCertainty)
       .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score
+        if (b.strength !== a.strength) return b.strength - a.strength
         return b.expectedWinrate - a.expectedWinrate
       })
       .slice(0, maxAssetsGlobal)
