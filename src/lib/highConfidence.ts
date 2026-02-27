@@ -47,6 +47,29 @@ export type HCMarketResult = {
   market: HCMarketKey
   recommendation: HCRecommendation | null
   horizons: HCHorizonResult[]
+  assetStats?: {
+    scanned: number
+    withSignal: number
+    active: number
+  }
+}
+
+export type HCAssetAdvice = {
+  market: HCMarketKey
+  symbol: string
+  name: string
+  href: string
+  status: 'BUY' | 'SELL'
+  score: number
+  cutoff: number
+  horizon: HCHorizon
+  marketMeetsTarget: boolean
+  isActiveCertainty: boolean
+  advice: 'ACTIEF' | 'WACHT'
+  reason: string
+  expectedReturnPct: number
+  expectedWinrate: number
+  expectedCoverage: number
 }
 
 export type HCResponse = {
@@ -64,8 +87,17 @@ export type HCResponse = {
     avgWinrate: number
     avgReturnPct: number
     avgCoverage: number
+    assetsScanned: number
+    assetsWithSignal: number
+    activeAssets: number
+    waitingAssets: number
   }
   markets: HCMarketResult[]
+  assets: {
+    active: HCAssetAdvice[]
+    waiting: HCAssetAdvice[]
+    byMarket: Record<HCMarketKey, HCAssetAdvice[]>
+  }
 }
 
 export const HC_MARKET_META: Record<HCMarketKey, { label: string; href: string }> = {

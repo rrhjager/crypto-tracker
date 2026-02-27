@@ -41,20 +41,45 @@ type HorizonResult = {
   best: Candidate | null
 }
 
+type Recommendation = {
+  horizon: Horizon
+  cutoff: number
+  trades: number
+  coverage: number
+  winrate: number
+  avgReturnPct: number
+  medianReturnPct: number
+  profitFactor: number | null
+  meetsTarget: boolean
+}
+
 type MarketResult = {
   market: MarketKey
-  recommendation: {
-    horizon: Horizon
-    cutoff: number
-    trades: number
-    coverage: number
-    winrate: number
-    avgReturnPct: number
-    medianReturnPct: number
-    profitFactor: number | null
-    meetsTarget: boolean
-  } | null
+  recommendation: Recommendation | null
   horizons: HorizonResult[]
+  assetStats?: {
+    scanned: number
+    withSignal: number
+    active: number
+  }
+}
+
+type AssetAdvice = {
+  market: MarketKey
+  symbol: string
+  name: string
+  href: string
+  status: 'BUY' | 'SELL'
+  score: number
+  cutoff: number
+  horizon: Horizon
+  marketMeetsTarget: boolean
+  isActiveCertainty: boolean
+  advice: 'ACTIEF' | 'WACHT'
+  reason: string
+  expectedReturnPct: number
+  expectedWinrate: number
+  expectedCoverage: number
 }
 
 const MARKETS: Array<{ key: MarketKey; slug: string }> = [
@@ -72,6 +97,20 @@ const MARKETS: Array<{ key: MarketKey; slug: string }> = [
 ]
 
 const CUT_OFFS = Array.from({ length: 21 }, (_, i) => 50 + i * 2) // 50..90
+
+const DETAIL_BASE: Record<MarketKey, string> = {
+  AEX: '/stocks',
+  DAX: '/dax',
+  DOWJONES: '/dowjones',
+  ETFS: '/etfs',
+  FTSE100: '/ftse100',
+  HANGSENG: '/hangseng',
+  NASDAQ: '/nasdaq',
+  NIKKEI225: '/nikkei225',
+  SENSEX: '/sensex',
+  SP500: '/sp500',
+  CRYPTO: '/crypto',
+}
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n))
@@ -167,6 +206,48 @@ async function fetchRows(origin: string, slug: string): Promise<any[]> {
   return Array.isArray(j?.rows) ? j.rows : []
 }
 
+function rowIdentity(row: any, market: MarketKey): { symbol: string; name: string } | null {
+  if (market === 'CRYPTO') {
+    const symbol = String(row?.coin || row?.symbol || row?.pair || '').trim()
+    if (!symbol) return null
+    const name = String(row?.name || symbol).trim() || symbol
+    return { symbol, name }
+  }
+
+  const symbol = String(row?.symbol || '').trim()
+  if (!symbol) return null
+  const name = String(row?.name || symbol).trim() || symbol
+  return { symbol, name }
+}
+
+function detailHref(market: MarketKey, symbol: string) {
+  const base = DETAIL_BASE[market]
+  if (market === 'CRYPTO') return `${base}/${encodeURIComponent(symbol.toLowerCase())}`
+  return `${base}/${encodeURIComponent(symbol)}`
+}
+
+function activeReason(score: number, cutoff: number, marketMeetsTarget: boolean) {
+  if (score < cutoff) return `Score ${score} onder cutoff ${cutoff}`
+  if (!marketMeetsTarget) return 'Marktfilter haalt target nu niet'
+  return `Score ${score} >= cutoff ${cutoff} en target gehaald`
+}
+
+function initByMarket() {
+  return {
+    AEX: [],
+    DAX: [],
+    DOWJONES: [],
+    ETFS: [],
+    FTSE100: [],
+    HANGSENG: [],
+    NASDAQ: [],
+    NIKKEI225: [],
+    SENSEX: [],
+    SP500: [],
+    CRYPTO: [],
+  } as Record<MarketKey, AssetAdvice[]>
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     cache5min(res, 120, 600)
@@ -178,6 +259,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const targetWinrate = clamp(Number(req.query.targetWinrate ?? 0.8), 0.55, 0.95)
     const minCoverage = clamp(Number(req.query.minCoverage ?? 0.12), 0.03, 0.5)
     const minTradesBase = Math.max(3, Number(req.query.minTrades ?? 8) || 8)
+    const maxAssetsPerMarket = Math.round(clamp(Number(req.query.maxAssetsPerMarket ?? 12), 4, 40))
+    const maxAssetsGlobal = Math.round(clamp(Number(req.query.maxAssetsGlobal ?? 120), 20, 600))
 
     const rowsPerMarket = await Promise.all(
       MARKETS.map(async m => ({
@@ -186,7 +269,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }))
     )
 
-    const marketResults: MarketResult[] = rowsPerMarket.map(({ market, rows }) => {
+    let marketResults: MarketResult[] = rowsPerMarket.map(({ market, rows }) => {
       const horizons: HorizonResult[] = (['d7', 'd30', 'untilNext'] as Horizon[]).map(h => {
         const events = eventsFromRows(rows, h)
         const minTrades = Math.max(minTradesBase, Math.ceil(events.length * minCoverage))
@@ -230,6 +313,106 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     })
 
+    const byMarket = initByMarket()
+    const allActionable: AssetAdvice[] = []
+
+    let assetsScanned = 0
+    let assetsWithSignal = 0
+    let activeAssets = 0
+
+    const byMarketResult = new Map<MarketKey, MarketResult>(marketResults.map(m => [m.market, m]))
+
+    for (const { market, rows } of rowsPerMarket) {
+      const rec = byMarketResult.get(market)?.recommendation || null
+      const cutoff = rec?.cutoff ?? 70
+      const horizon = rec?.horizon ?? 'untilNext'
+      const marketMeetsTarget = Boolean(rec?.meetsTarget)
+      const expectedReturnPct = Number(rec?.avgReturnPct ?? 0)
+      const expectedWinrate = Number(rec?.winrate ?? 0)
+      const expectedCoverage = Number(rec?.coverage ?? 0)
+
+      let withSignalCount = 0
+      let activeCount = 0
+
+      assetsScanned += rows.length
+
+      for (const row of rows) {
+        const id = rowIdentity(row, market)
+        if (!id) continue
+
+        const current = row?.current
+        const status = current?.status
+        const score = Number(current?.score)
+
+        if ((status !== 'BUY' && status !== 'SELL') || !Number.isFinite(score)) continue
+
+        withSignalCount += 1
+        assetsWithSignal += 1
+
+        const isActiveCertainty = marketMeetsTarget && score >= cutoff
+        if (isActiveCertainty) {
+          activeCount += 1
+          activeAssets += 1
+        }
+
+        const item: AssetAdvice = {
+          market,
+          symbol: id.symbol,
+          name: id.name,
+          href: detailHref(market, id.symbol),
+          status,
+          score: Math.round(score),
+          cutoff,
+          horizon,
+          marketMeetsTarget,
+          isActiveCertainty,
+          advice: isActiveCertainty ? 'ACTIEF' : 'WACHT',
+          reason: activeReason(Math.round(score), cutoff, marketMeetsTarget),
+          expectedReturnPct,
+          expectedWinrate,
+          expectedCoverage,
+        }
+
+        byMarket[market].push(item)
+        allActionable.push(item)
+      }
+
+      byMarket[market].sort((a, b) => {
+        if (a.isActiveCertainty !== b.isActiveCertainty) return a.isActiveCertainty ? -1 : 1
+        if (b.score !== a.score) return b.score - a.score
+        return b.expectedReturnPct - a.expectedReturnPct
+      })
+
+      byMarket[market] = byMarket[market].slice(0, maxAssetsPerMarket)
+
+      const mr = byMarketResult.get(market)
+      if (mr) {
+        mr.assetStats = {
+          scanned: rows.length,
+          withSignal: withSignalCount,
+          active: activeCount,
+        }
+      }
+    }
+
+    marketResults = MARKETS.map(m => byMarketResult.get(m.key)!).filter(Boolean)
+
+    const activeList = allActionable
+      .filter(a => a.isActiveCertainty)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return b.expectedReturnPct - a.expectedReturnPct
+      })
+      .slice(0, maxAssetsGlobal)
+
+    const waitingList = allActionable
+      .filter(a => !a.isActiveCertainty)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return b.expectedWinrate - a.expectedWinrate
+      })
+      .slice(0, maxAssetsGlobal)
+
     const withRec = marketResults.filter(m => m.recommendation)
     const meets = withRec.filter(m => m.recommendation?.meetsTarget).length
     const avgWin = withRec.length
@@ -248,7 +431,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetWinrate,
         minCoverage,
         minTradesBase,
-        note: 'To reach higher precision, trade only signals with strength >= cutoff and use market-specific horizon.',
+        note: 'Actieve zekerheid wordt nu op asset-niveau bepaald (aandeel/coin), niet op markt-niveau.',
       },
       summary: {
         markets: marketResults.length,
@@ -257,8 +440,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         avgWinrate: avgWin,
         avgReturnPct: avgRet,
         avgCoverage: avgCov,
+        assetsScanned,
+        assetsWithSignal,
+        activeAssets,
+        waitingAssets: Math.max(0, assetsWithSignal - activeAssets),
       },
       markets: marketResults,
+      assets: {
+        active: activeList,
+        waiting: waitingList,
+        byMarket,
+      },
     })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Internal error' })

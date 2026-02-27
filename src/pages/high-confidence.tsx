@@ -17,32 +17,20 @@ const fmtRetPct = (v: number | null | undefined, d = 2) =>
   Number.isFinite(v as number) ? `${(Number(v) >= 0 ? '+' : '')}${Number(v).toFixed(d)}%` : '—'
 
 export default function HighConfidencePage({ data, error }: Props) {
-  const rows = useMemo(() => {
-    const byMarket = new Map((data?.markets || []).map(m => [m.market, m]))
-    return HC_MARKET_ORDER.map(m => {
-      const rec = byMarket.get(m)?.recommendation || null
-      return {
-        market: m,
-        label: HC_MARKET_META[m].label,
-        href: HC_MARKET_META[m].href,
-        recommendation: rec,
-        advice: rec?.meetsTarget ? 'ACTIEF' : 'WACHT',
-      }
-    })
-  }, [data])
-
-  const active = [...rows]
-    .filter(r => r.recommendation?.meetsTarget)
-    .sort((a, b) => {
-      const aa = a.recommendation!
-      const bb = b.recommendation!
-      if (bb.winrate !== aa.winrate) return bb.winrate - aa.winrate
-      return bb.avgReturnPct - aa.avgReturnPct
-    })
-  const waiting = rows.filter(r => !r.recommendation?.meetsTarget)
   const generatedAt = data?.meta?.generatedAt ? new Date(data.meta.generatedAt).toLocaleString('nl-NL') : '—'
   const target = fmtRatioPct(data?.meta?.targetWinrate ?? null)
-  const waitingCount = Math.max(0, rows.length - active.length)
+  const activeAssets = data?.assets?.active || []
+  const waitingAssets = data?.assets?.waiting || []
+
+  const marketBlocks = useMemo(() => {
+    const byMarket = data?.assets?.byMarket || ({} as any)
+    return HC_MARKET_ORDER.map((market) => ({
+      market,
+      label: HC_MARKET_META[market].label,
+      href: HC_MARKET_META[market].href,
+      items: Array.isArray(byMarket[market]) ? byMarket[market] : [],
+    }))
+  }, [data])
 
   return (
     <>
@@ -50,7 +38,7 @@ export default function HighConfidencePage({ data, error }: Props) {
         <title>High-Confidence Advies | SignalHub</title>
         <meta
           name="description"
-          content="Alleen high-confidence signalen die het ingestelde winrate-target halen, inclusief termijn, cutoff en verwacht rendement."
+          content="High-confidence advies op losse aandelen en crypto's, met ACTIEF/WACHT per asset."
         />
       </Head>
 
@@ -60,7 +48,7 @@ export default function HighConfidencePage({ data, error }: Props) {
             <div>
               <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-white">High-Confidence Advies</h1>
               <p className="text-sm text-slate-700/85 dark:text-white/70">
-                Elke markt krijgt een advies. Alleen `meetsTarget = true` wordt als actieve zekerheid getoond.
+                Actieve zekerheid = een los aandeel of een losse coin, nooit een hele markt.
               </p>
             </div>
             <Link href="/" className="rounded-full border border-slate-400/35 bg-white/70 px-4 py-2 text-[12px] font-medium text-slate-800 hover:bg-white dark:border-white/20 dark:bg-white/10 dark:text-white">
@@ -70,10 +58,10 @@ export default function HighConfidencePage({ data, error }: Props) {
 
           <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
             <span className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-1 text-emerald-900 dark:text-emerald-200">
-              Actief: {active.length}/{rows.length}
+              Actieve assets: {data?.summary?.activeAssets ?? 0}
             </span>
             <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Wacht: {waitingCount}
+              Wacht assets: {data?.summary?.waitingAssets ?? 0}
             </span>
             <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
               Target winrate: {target}
@@ -85,23 +73,16 @@ export default function HighConfidencePage({ data, error }: Props) {
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl border border-emerald-400/35 bg-white/70 p-3 dark:border-emerald-500/35 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Actieve zekerheden</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{active.length}</div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Markten met direct trade-advies</div>
+              <div className="text-[11px] text-slate-600 dark:text-white/55">Assets gescand</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{data?.summary?.assetsScanned ?? 0}</div>
             </div>
             <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. winrate (met advies)</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
-                {fmtRatioPct(data?.summary?.avgWinrate ?? null)}
-              </div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Gemiddeld over aanbevolen setups</div>
+              <div className="text-[11px] text-slate-600 dark:text-white/55">BUY/SELL signalen</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{data?.summary?.assetsWithSignal ?? 0}</div>
             </div>
             <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. verwacht rendement</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
-                {fmtRetPct(data?.summary?.avgReturnPct ?? null)}
-              </div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Per signaal met cutoff-filter</div>
+              <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. verwachte return</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{fmtRetPct(data?.summary?.avgReturnPct ?? null)}</div>
             </div>
           </div>
         </section>
@@ -113,134 +94,118 @@ export default function HighConfidencePage({ data, error }: Props) {
         )}
 
         <section className="rounded-2xl border border-emerald-400/25 bg-white/70 p-5 dark:border-emerald-500/25 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Actieve zekerheden</h2>
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Actieve zekerheden (assets)</h2>
           <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
-            Alleen markten met `meetsTarget = true` en voldoende sample-size.
+            Alleen assets die nu aan cutoff en target voldoen.
           </p>
 
-          {active.length === 0 ? (
-            <div className="text-sm text-slate-600 dark:text-white/70">Geen actieve zekerheden. Advies: wachten.</div>
+          {activeAssets.length === 0 ? (
+            <div className="text-sm text-slate-600 dark:text-white/70">Geen actieve zekerheden nu.</div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {active.map((r) => {
-                const rec = r.recommendation!
-                return (
-                  <Link
-                    key={`hc-active-${r.market}`}
-                    href={r.href}
-                    className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 transition hover:bg-emerald-500/15"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold text-slate-900 dark:text-white">{r.label}</div>
-                      <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
-                    </div>
-                    <div className="mt-2 text-[12px] text-slate-700/85 dark:text-white/70">
-                      {horizonLabel(rec.horizon)} • cutoff {rec.cutoff}
-                    </div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-                      <div>
-                        <div className="text-slate-600 dark:text-white/55">Winrate</div>
-                        <div className="font-semibold text-emerald-800 dark:text-emerald-200">{fmtRatioPct(rec.winrate)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-600 dark:text-white/55">Coverage</div>
-                        <div className="font-semibold text-slate-800 dark:text-white">{fmtRatioPct(rec.coverage)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-600 dark:text-white/55">Gem.</div>
-                        <div className="font-semibold text-slate-800 dark:text-white">{fmtRetPct(rec.avgReturnPct)}</div>
-                      </div>
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Advies per markt</h2>
-          <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
-            Alle markten krijgen advies. `ACTIEF` betekent trade toegestaan, `WACHT` betekent geen instap.
-          </p>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {rows.map((r) => {
-              const rec = r.recommendation
-              return (
+              {activeAssets.slice(0, 60).map((a) => (
                 <Link
-                  key={`hc-row-${r.market}`}
-                  href={r.href}
-                  className={`rounded-xl border p-3 transition hover:-translate-y-[1px] ${
-                    r.advice === 'ACTIEF'
-                      ? 'border-emerald-500/35 bg-emerald-500/10'
-                      : 'border-slate-300/50 bg-white/70 dark:border-white/15 dark:bg-white/5'
-                  }`}
+                  key={`hc-active-${a.market}-${a.symbol}`}
+                  href={a.href}
+                  className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 transition hover:bg-emerald-500/15"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold text-slate-900 dark:text-white">{r.label}</div>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        r.advice === 'ACTIEF'
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
-                      }`}
-                    >
-                      {r.advice}
-                    </span>
+                    <div className="font-semibold text-slate-900 dark:text-white">{a.symbol}</div>
+                    <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
                   </div>
-
-                  <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/60">
-                    {rec
-                      ? `${horizonLabel(rec.horizon)} • cutoff ${rec.cutoff}`
-                      : 'Onvoldoende data voor aanbeveling'}
+                  <div className="text-[11px] text-slate-700/80 dark:text-white/65">{HC_MARKET_META[a.market].label} • {a.name}</div>
+                  <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/65">
+                    {a.status} • score {a.score} • cutoff {a.cutoff} • {horizonLabel(a.horizon)}
                   </div>
-
                   <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
                     <div>
                       <div className="text-slate-600 dark:text-white/55">Winrate</div>
-                      <div className="font-semibold text-slate-900 dark:text-white">{rec ? fmtRatioPct(rec.winrate) : '—'}</div>
+                      <div className="font-semibold text-emerald-800 dark:text-emerald-200">{fmtRatioPct(a.expectedWinrate)}</div>
                     </div>
                     <div>
                       <div className="text-slate-600 dark:text-white/55">Coverage</div>
-                      <div className="font-semibold text-slate-900 dark:text-white">{rec ? fmtRatioPct(rec.coverage) : '—'}</div>
+                      <div className="font-semibold text-slate-800 dark:text-white">{fmtRatioPct(a.expectedCoverage)}</div>
                     </div>
                     <div>
                       <div className="text-slate-600 dark:text-white/55">Gem.</div>
-                      <div className="font-semibold text-slate-900 dark:text-white">{rec ? fmtRetPct(rec.avgReturnPct) : '—'}</div>
+                      <div className="font-semibold text-slate-800 dark:text-white">{fmtRetPct(a.expectedReturnPct)}</div>
                     </div>
                   </div>
-
-                  <div className="mt-2 text-[10px] text-slate-600 dark:text-white/55">
-                    meetsTarget: {rec?.meetsTarget ? 'ja' : 'nee'}
-                  </div>
-                </Link>
-              )
-            })}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Wachtlijst</h2>
-          <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
-            Markten die nu geen zekerheid halen. Deze blijven op `WACHT`.
-          </p>
-
-          {waiting.length === 0 ? (
-            <div className="text-sm text-slate-600 dark:text-white/70">Geen wachtlijst. Alle markten zijn actief.</div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {waiting.map((r) => (
-                <Link
-                  key={`hc-wait-${r.market}`}
-                  href={r.href}
-                  className="rounded-full border border-slate-300/60 bg-white/70 px-3 py-1 text-[11px] font-medium text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
-                >
-                  {r.label}
                 </Link>
               ))}
             </div>
           )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Advies per markt (losse assets)</h2>
+          <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
+            Per markt zie je de beste aandelen/coins met advies.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {marketBlocks.map((m) => (
+              <div key={`hc-market-assets-${m.market}`} className="rounded-xl border border-slate-300/50 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
+                <div className="flex items-center justify-between gap-2">
+                  <Link href={m.href} className="font-semibold text-slate-900 hover:underline dark:text-white">
+                    {m.label}
+                  </Link>
+                  <span className="text-[10px] text-slate-600 dark:text-white/60">{m.items.length} assets</span>
+                </div>
+                <ul className="mt-2 space-y-1">
+                  {m.items.slice(0, 6).map((a) => (
+                    <li key={`hc-mkt-asset-${m.market}-${a.symbol}`}>
+                      <Link href={a.href} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-white dark:hover:bg-white/8">
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-medium text-slate-900 dark:text-white">
+                            {a.symbol} <span className="text-slate-600 dark:text-white/55">{a.status}</span>
+                          </div>
+                          <div className="truncate text-[10px] text-slate-600 dark:text-white/55">
+                            score {a.score} • cutoff {a.cutoff}
+                          </div>
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            a.advice === 'ACTIEF'
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
+                          }`}
+                        >
+                          {a.advice}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                  {m.items.length === 0 && (
+                    <li className="text-[11px] text-slate-600 dark:text-white/60 px-2 py-1">Geen actieve BUY/SELL signalen.</li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Wachtlijst (assets)</h2>
+          <p className="text-[12px] text-slate-700/80 dark:text-white/60 mb-3">
+            Wel BUY/SELL signaal, maar nog niet voldoende zekerheid voor ACTIEF.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {waitingAssets.slice(0, 90).map((a) => (
+              <Link
+                key={`hc-wait-asset-${a.market}-${a.symbol}`}
+                href={a.href}
+                className="rounded-lg border border-slate-300/60 bg-white/70 px-3 py-2 text-[11px] text-slate-700 hover:bg-white dark:border-white/15 dark:bg-white/5 dark:text-white/70"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{a.symbol}</span>
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-white/15 dark:text-white/70">WACHT</span>
+                </div>
+                <div className="mt-1 truncate">{HC_MARKET_META[a.market].label} • {a.status} • score {a.score}</div>
+                <div className="mt-0.5 truncate text-[10px] text-slate-600 dark:text-white/55">{a.reason}</div>
+              </Link>
+            ))}
+          </div>
         </section>
       </main>
     </>
