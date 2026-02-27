@@ -20,6 +20,8 @@ type IndResp = {
   rsi?: number | null
   macd?: { macd: number | null; signal: number | null; hist: number | null }
   volume?: { volume: number | null; avg20d: number | null; ratio: number | null }
+  trend?: { ret20: number | null; rangePos20: number | null }
+  volatility?: { stdev20: number | null; regime?: 'low' | 'med' | 'high' | '—' }
   score?: number
   status?: Status
   error?: string
@@ -60,6 +62,14 @@ function fmtNum(n: number | null | undefined, d = 2) {
   if (n == null || !Number.isFinite(n)) return '—'
   return n.toFixed(d)
 }
+function fmtPct(n: number | null | undefined, d = 2) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return `${n.toFixed(d)}%`
+}
+function ratioToPct(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return null
+  return n * 100
+}
 function formatFiat(n: number | null | undefined) {
   if (n == null || !Number.isFinite(Number(n))) return '—'
   const v = Number(n)
@@ -96,6 +106,21 @@ const statusVolume = (ratio?: number | null): Status => {
   if (ratio > 1.2) return 'BUY'
   if (ratio < 0.8) return 'SELL'
   return 'HOLD'
+}
+const statusTrend = (ret20?: number | null, rangePos20?: number | null): Status => {
+  if (ret20 == null && rangePos20 == null) return 'HOLD'
+  const r = ret20 == null ? 0 : Math.max(-1, Math.min(1, ret20 / 14))
+  const p = rangePos20 == null ? 0 : Math.max(-1, Math.min(1, (rangePos20 - 0.5) * 2))
+  const mix = 0.6 * r + 0.4 * p
+  if (mix >= 0.25) return 'BUY'
+  if (mix <= -0.25) return 'SELL'
+  return 'HOLD'
+}
+const statusVolatility = (stdev20?: number | null): Status => {
+  if (stdev20 == null) return 'HOLD'
+  if (stdev20 <= 0.028) return 'BUY'
+  if (stdev20 <= 0.075) return 'HOLD'
+  return 'SELL'
 }
 
 function PageInner() {
@@ -268,6 +293,31 @@ function PageInner() {
           <div className="text-white/80 text-sm">
             Volume: {fmtInt(ind?.volume?.volume ?? null)} — Gem.20d:{' '}
             {fmtInt(ind?.volume?.avg20d ?? null)} — Ratio: {fmtNum(ind?.volume?.ratio ?? null, 2)}
+          </div>
+        </div>
+
+        <div className="table-card p-4">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">Trend (20d)</h3>
+            <span className={pill(statusTrend(ind?.trend?.ret20 ?? null, ind?.trend?.rangePos20 ?? null))}>
+              {statusTrend(ind?.trend?.ret20 ?? null, ind?.trend?.rangePos20 ?? null)}
+            </span>
+          </div>
+          <div className="text-white/80 text-sm">
+            Return: {fmtPct(ind?.trend?.ret20 ?? null, 2)} — Range-pos: {fmtNum(ind?.trend?.rangePos20 ?? null, 2)}
+          </div>
+        </div>
+
+        <div className="table-card p-4">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">Volatility regime (20d)</h3>
+            <span className={pill(statusVolatility(ind?.volatility?.stdev20 ?? null))}>
+              {statusVolatility(ind?.volatility?.stdev20 ?? null)}
+            </span>
+          </div>
+          <div className="text-white/80 text-sm">
+            Stdev: {fmtPct(ratioToPct(ind?.volatility?.stdev20), 2)} — Regime:{' '}
+            {ind?.volatility?.regime ?? '—'}
           </div>
         </div>
       </section>
