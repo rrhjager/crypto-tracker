@@ -13,6 +13,12 @@ type ExitProfile = {
   stopLossPct: number | null
 }
 
+type VariantTrade = {
+  side: SignalSide
+  returnPct: number
+  daysHeld: number
+}
+
 type TrendSnapshot = {
   ret20: number | null
   ret60?: number | null
@@ -338,7 +344,7 @@ function simulateVariant(
   points: DailySignalPoint[],
   exitProfile: ExitProfile
 ) {
-  const tradeReturns: number[] = []
+  const trades: VariantTrade[] = []
   let open:
     | {
         side: SignalSide
@@ -369,7 +375,11 @@ function simulateVariant(
 
       if (hitTakeProfit || hitStopLoss || hitMaxHold || invalidSignal) {
         if (aligned != null && Number.isFinite(aligned)) {
-          tradeReturns.push(aligned)
+          trades.push({
+            side: open.side,
+            returnPct: aligned,
+            daysHeld,
+          })
         }
         open = null
         exitedThisBar = true
@@ -389,7 +399,7 @@ function simulateVariant(
   }
 
   return {
-    tradeReturns,
+    trades,
     openSide: open?.side ?? null,
   }
 }
@@ -592,30 +602,36 @@ function rankQualifiedStrategy(
   strategy: StrategyKey,
   train: ReturnType<typeof summarizeReturns>,
   test: ReturnType<typeof summarizeReturns>,
-  exitProfile: ExitProfile
+  exitProfile: ExitProfile,
+  side: SignalSide
 ) {
   const threshold = STRATEGY_META[strategy].threshold
   const isEntrySafe = STRATEGY_META[strategy].entrySafe
-  const minTrainWinrate = threshold >= 80 ? 0.5 : 0.47
-  const minTestWinrate = threshold >= 80 ? 0.5 : 0.5
-  const maxDd = threshold >= 80 ? 38 : 45
+  const minTrainWinrate = threshold >= 80 ? 0.58 : 0.55
+  const minTestWinrate = threshold >= 80 ? 0.66 : 0.60
+  const minTrainAvg = threshold >= 80 ? 0.2 : 0.05
+  const minTestAvg = threshold >= 80 ? 0.4 : 0.15
+  const maxDd = threshold >= 80 ? 26 : 34
 
   const qualifies =
-    train.count >= 5 &&
+    train.count >= 4 &&
     test.count >= 3 &&
     (train.winrate ?? 0) >= minTrainWinrate &&
     (test.winrate ?? 0) >= minTestWinrate &&
-    (train.avgReturnPct ?? -999) > 0 &&
-    (test.avgReturnPct ?? -999) > 0 &&
+    (train.avgReturnPct ?? -999) >= minTrainAvg &&
+    (test.avgReturnPct ?? -999) >= minTestAvg &&
     ((test.maxDrawdownPct ?? 999) <= maxDd)
 
   const score =
-    (test.winrate ?? 0) * 100 +
-    (test.avgReturnPct ?? 0) * 5 +
-    (isEntrySafe ? 3 : 0) +
-    (threshold >= 80 ? 2 : 0) -
+    (test.winrate ?? 0) * 125 +
+    (test.avgReturnPct ?? 0) * 8 +
+    Math.min(test.count, 8) * 0.75 +
+    (train.avgReturnPct ?? 0) * 1.5 +
+    (isEntrySafe ? 4 : 0) +
+    (threshold >= 80 ? 3 : 0) +
+    (side === 'SELL' ? 1 : 0) -
     (exitProfile.maxHoldDays != null && exitProfile.maxHoldDays <= 5 ? 1 : 0) -
-    ((test.maxDrawdownPct ?? 0) * 0.15)
+    ((test.maxDrawdownPct ?? 0) * 0.25)
 
   return { qualifies, score }
 }
@@ -632,18 +648,23 @@ export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
     for (const strategy of candidateStrategies) {
       for (const exitProfile of EXIT_PROFILES) {
         const variant = simulateVariant(strategy, state.points, exitProfile)
-        if (variant.tradeReturns.length < 8) continue
+        if (!variant.openSide) continue
+        if (strategy === 'status_flip' && (latest.strength ?? 0) < 60) continue
 
-        const splitIdx = Math.max(5, Math.min(variant.tradeReturns.length - 3, Math.floor(variant.tradeReturns.length * 0.7)))
-        const trainReturns = variant.tradeReturns.slice(0, splitIdx)
-        const testReturns = variant.tradeReturns.slice(splitIdx)
-        if (trainReturns.length < 5 || testReturns.length < 3) continue
+        const sideReturns = variant.trades
+          .filter((trade) => trade.side === variant.openSide)
+          .map((trade) => trade.returnPct)
+        if (sideReturns.length < 7) continue
+
+        const splitIdx = Math.max(4, Math.min(sideReturns.length - 3, Math.floor(sideReturns.length * 0.65)))
+        const trainReturns = sideReturns.slice(0, splitIdx)
+        const testReturns = sideReturns.slice(splitIdx)
+        if (trainReturns.length < 4 || testReturns.length < 3) continue
 
         const train = summarizeReturns(trainReturns)
         const test = summarizeReturns(testReturns)
-        const ranked = rankQualifiedStrategy(strategy, train, test, exitProfile)
+        const ranked = rankQualifiedStrategy(strategy, train, test, exitProfile, variant.openSide)
         if (!ranked.qualifies) continue
-        if (!variant.openSide) continue
         if (!Number.isFinite(latest.strength as number)) continue
 
         const pick: QualifiedLivePick & { _score: number } = {
