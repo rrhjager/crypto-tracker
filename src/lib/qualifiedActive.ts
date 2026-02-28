@@ -149,7 +149,7 @@ export function qualifyActiveSignals<T extends QualifiedSignalCandidate>(items: 
 
   if (thresholdScore === 80 && !withPeerScores.some((item) => item.quality.qualifies)) {
     for (const item of withPeerScores) {
-      item.quality.qualifies = item.quality.qualityScore >= 56 && !item.quality.isLateEntry && !item.quality.isOverextended
+      item.quality.qualifies = item.quality.qualityScore >= 50 && !item.quality.isLateEntry && !item.quality.isOverextended
     }
   }
 
