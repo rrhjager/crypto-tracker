@@ -112,6 +112,7 @@ export type AssetAuditInput = {
 type AssetAuditState = {
   symbol: string
   name: string
+  market: ScoreMarket
   points: DailySignalPoint[]
   byStrategy: Record<StrategyKey, { trades: BacktestTrade[]; open: OpenPosition | null }>
 }
@@ -119,6 +120,7 @@ type AssetAuditState = {
 export type QualifiedLivePick = {
   symbol: string
   name: string
+  market: ScoreMarket
   status: SignalSide
   strategy: StrategyKey
   strategyLabel: string
@@ -491,6 +493,7 @@ export function runAssetAudit(input: AssetAuditInput, computeIndicators: Indicat
   return {
     symbol: input.symbol,
     name: input.name,
+    market: input.market,
     points,
     byStrategy,
   }
@@ -670,6 +673,7 @@ export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
         const pick: QualifiedLivePick & { _score: number } = {
           symbol: state.symbol,
           name: state.name,
+          market: state.market,
           status: variant.openSide,
           strategy,
           strategyLabel: `${STRATEGY_META[strategy].label} · ${exitProfile.label}`,
@@ -698,6 +702,24 @@ export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
     if (b.strength !== a.strength) return b.strength - a.strength
     return a.symbol.localeCompare(b.symbol)
   })
+}
+
+export function findBlindFollowPicks(picks: QualifiedLivePick[]) {
+  return picks
+    .filter((pick) =>
+      pick.trainingTrades >= 8 &&
+      pick.validationTrades >= 5 &&
+      pick.validationWinrate >= 0.8 &&
+      pick.validationAvgReturnPct >= 1.0 &&
+      pick.strength >= 75
+    )
+    .sort((a, b) => {
+      if (b.validationWinrate !== a.validationWinrate) return b.validationWinrate - a.validationWinrate
+      if (b.validationAvgReturnPct !== a.validationAvgReturnPct) return b.validationAvgReturnPct - a.validationAvgReturnPct
+      if (b.validationTrades !== a.validationTrades) return b.validationTrades - a.validationTrades
+      if (b.strength !== a.strength) return b.strength - a.strength
+      return a.symbol.localeCompare(b.symbol)
+    })
 }
 
 export function getStrategyMeta(strategy: StrategyKey) {

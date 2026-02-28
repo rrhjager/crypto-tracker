@@ -16,7 +16,7 @@ import { SENSEX } from '@/lib/sensex'
 import { SP500 } from '@/lib/sp500'
 import { fetchMarketDataFor, computeIndicators as computeCryptoIndicators } from '@/lib/pastPerformance/cryptoIndicatorsExact'
 import { fetchMarketDataForEquity, computeIndicators as computeEquityIndicators } from '@/lib/pastPerformance/equityIndicatorsExact'
-import { findQualifiedLivePicks, runAssetAudit, summarizeMarketAudit } from '@/lib/backtestAudit'
+import { findBlindFollowPicks, findQualifiedLivePicks, runAssetAudit, summarizeMarketAudit } from '@/lib/backtestAudit'
 import type { ScoreMarket } from '@/lib/taScore'
 
 type MarketKey =
@@ -201,7 +201,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom(`backtest:market-audit:v3:${market}`)
+    const kvKey = snapKey.custom(`backtest:market-audit:v4:${market}`)
 
     const compute = async () => {
       const batches = chunk(spec.assets, spec.batchSize)
@@ -249,6 +249,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (bi < batches.length - 1) await sleep(spec.pauseMs)
       }
 
+      const qualifiedLivePicks = findQualifiedLivePicks(states)
+
       return {
         meta: {
           market: spec.key,
@@ -264,7 +266,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             'Dit is een voorspellende event-backtest op de echte score-engine. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
         },
         strategies: summarizeMarketAudit(states),
-        qualifiedLivePicks: findQualifiedLivePicks(states),
+        qualifiedLivePicks,
+        blindFollowPicks: findBlindFollowPicks(qualifiedLivePicks),
         sampleErrors: errors.slice(0, 10),
       }
     }

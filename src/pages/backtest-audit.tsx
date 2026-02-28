@@ -46,6 +46,21 @@ type Props = {
     qualifiedLivePicks?: Array<{
       symbol: string
       name: string
+      market: string
+      status: 'BUY' | 'SELL'
+      strategy: string
+      strategyLabel: string
+      currentScore: number
+      strength: number
+      validationWinrate: number
+      validationAvgReturnPct: number
+      trainingTrades: number
+      validationTrades: number
+    }>
+    blindFollowPicks?: Array<{
+      symbol: string
+      name: string
+      market: string
       status: 'BUY' | 'SELL'
       strategy: string
       strategyLabel: string
@@ -227,6 +242,61 @@ export default function BacktestAuditPage({ market, payload }: Props) {
             <p className="mt-4 text-sm text-slate-700/80 dark:text-white/65">{meta.note}</p>
           </section>
         ) : null}
+
+        <section className="rounded-3xl border border-amber-300/45 bg-white/85 p-5 dark:border-amber-500/25 dark:bg-white/5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Blind-volgen alleen bij deze</h2>
+              <p className="mt-1 text-sm text-slate-700/80 dark:text-white/60">
+                Dit is de strengste laag: alleen live picks met hoge validatie-winrate, genoeg samplegrootte en positieve gemiddelde validatie-return.
+                Als deze lijst leeg is, is het juiste signaal simpelweg: geen trade.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
+              <div className="text-[10px] uppercase tracking-[0.12em] opacity-75">Nu live</div>
+              <div className="text-2xl font-semibold">{payload?.blindFollowPicks?.length || 0}</div>
+            </div>
+          </div>
+
+          {(payload?.blindFollowPicks || []).length > 0 ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {(payload?.blindFollowPicks || []).map((item) => (
+                <div key={`blind-${item.symbol}-${item.strategy}`} className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-lg font-semibold text-slate-900 dark:text-white">{item.symbol}</span>
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold text-white ${item.status === 'BUY' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-700/80 dark:text-white/60">{item.name}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-slate-600 dark:text-white/55">Validatie</div>
+                      <div className="text-lg font-semibold text-slate-900 dark:text-white">{fmtPct(item.validationWinrate * 100)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/10 dark:bg-white/5">
+                      <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. validatie-trade</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{fmtPct(item.validationAvgReturnPct)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/10 dark:bg-white/5">
+                      <div className="text-[11px] text-slate-600 dark:text-white/55">Train / test</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{item.trainingTrades} / {item.validationTrades}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 text-xs text-slate-700/80 dark:text-white/55">{item.strategyLabel}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
+              Er is nu geen live signaal dat streng genoeg is om blind te volgen.
+            </div>
+          )}
+        </section>
 
         {(payload?.qualifiedLivePicks || []).length > 0 ? (
           <section className="rounded-3xl border border-emerald-300/45 bg-white/85 p-5 dark:border-emerald-500/25 dark:bg-white/5">
