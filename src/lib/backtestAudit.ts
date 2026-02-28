@@ -5,6 +5,13 @@ const WINDOW = 200
 
 type SignalSide = 'BUY' | 'SELL'
 type StrategyKey = 'status_flip' | 'strength_70' | 'strength_80' | 'entry_70' | 'entry_80'
+type ExitProfile = {
+  key: string
+  label: string
+  maxHoldDays: number | null
+  takeProfitPct: number | null
+  stopLossPct: number | null
+}
 
 type TrendSnapshot = {
   ret20: number | null
@@ -126,6 +133,15 @@ const STRATEGY_META: Record<StrategyKey, { label: string; threshold: 0 | 70 | 80
   entry_70: { label: 'Entry-safe 70+', threshold: 70, entrySafe: true },
   entry_80: { label: 'Entry-safe 80+', threshold: 80, entrySafe: true },
 }
+
+const EXIT_PROFILES: ExitProfile[] = [
+  { key: 'flip', label: 'Flip exit', maxHoldDays: null, takeProfitPct: null, stopLossPct: null },
+  { key: 'tp4_sl6_h5', label: 'TP 4% / SL 6% / max 5d', maxHoldDays: 5, takeProfitPct: 4, stopLossPct: 6 },
+  { key: 'tp6_sl6_h8', label: 'TP 6% / SL 6% / max 8d', maxHoldDays: 8, takeProfitPct: 6, stopLossPct: 6 },
+  { key: 'tp8_sl5_h10', label: 'TP 8% / SL 5% / max 10d', maxHoldDays: 10, takeProfitPct: 8, stopLossPct: 5 },
+  { key: 'tp12_sl6_h14', label: 'TP 12% / SL 6% / max 14d', maxHoldDays: 14, takeProfitPct: 12, stopLossPct: 6 },
+  { key: 'time3', label: 'Max 3 dagen', maxHoldDays: 3, takeProfitPct: null, stopLossPct: null },
+]
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 
@@ -315,6 +331,67 @@ function isEligible(point: DailySignalPoint, strategy: StrategyKey) {
   if (strategy === 'strength_80') return point.strength >= 80
   if (strategy === 'entry_70') return point.strength >= 70 && point.entryQualifies70
   return point.strength >= 80 && point.entryQualifies80
+}
+
+function simulateVariant(
+  strategy: StrategyKey,
+  points: DailySignalPoint[],
+  exitProfile: ExitProfile
+) {
+  const tradeReturns: number[] = []
+  let open:
+    | {
+        side: SignalSide
+        entryClose: number
+        entryIndex: number
+      }
+    | null = null
+
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i]
+    const prev = i > 0 ? points[i - 1] : null
+    const eligible = isEligible(point, strategy)
+    let exitedThisBar = false
+
+    if (open) {
+      const daysHeld = Math.max(0, point.index - open.entryIndex)
+      const raw = pct(open.entryClose, point.close)
+      const aligned = signalAlign(open.side, raw)
+      const hitTakeProfit =
+        exitProfile.takeProfitPct != null && aligned != null && aligned >= exitProfile.takeProfitPct
+      const hitStopLoss =
+        exitProfile.stopLossPct != null && aligned != null && aligned <= -exitProfile.stopLossPct
+      const hitMaxHold =
+        exitProfile.maxHoldDays != null && daysHeld >= exitProfile.maxHoldDays
+      const invalidSignal =
+        point.status !== open.side ||
+        (strategy !== 'status_flip' && !eligible)
+
+      if (hitTakeProfit || hitStopLoss || hitMaxHold || invalidSignal) {
+        if (aligned != null && Number.isFinite(aligned)) {
+          tradeReturns.push(aligned)
+        }
+        open = null
+        exitedThisBar = true
+      }
+    }
+
+    if (!open && !exitedThisBar && eligible) {
+      const prevEligibleSameSide = prev ? prev.status === point.status && isEligible(prev, strategy) : false
+      if (!prevEligibleSameSide) {
+        open = {
+          side: point.status as SignalSide,
+          entryClose: point.close,
+          entryIndex: point.index,
+        }
+      }
+    }
+  }
+
+  return {
+    tradeReturns,
+    openSide: open?.side ?? null,
+  }
 }
 
 function simulateStrategy(input: AssetAuditInput, strategy: StrategyKey, points: DailySignalPoint[]) {
@@ -514,12 +591,13 @@ function summarizeReturns(returns: number[]) {
 function rankQualifiedStrategy(
   strategy: StrategyKey,
   train: ReturnType<typeof summarizeReturns>,
-  test: ReturnType<typeof summarizeReturns>
+  test: ReturnType<typeof summarizeReturns>,
+  exitProfile: ExitProfile
 ) {
   const threshold = STRATEGY_META[strategy].threshold
   const isEntrySafe = STRATEGY_META[strategy].entrySafe
-  const minTrainWinrate = threshold >= 80 ? 0.52 : 0.48
-  const minTestWinrate = threshold >= 80 ? 0.5 : 0.47
+  const minTrainWinrate = threshold >= 80 ? 0.5 : 0.47
+  const minTestWinrate = threshold >= 80 ? 0.5 : 0.5
   const maxDd = threshold >= 80 ? 38 : 45
 
   const qualifies =
@@ -533,9 +611,10 @@ function rankQualifiedStrategy(
 
   const score =
     (test.winrate ?? 0) * 100 +
-    (test.avgReturnPct ?? 0) * 4 +
+    (test.avgReturnPct ?? 0) * 5 +
     (isEntrySafe ? 3 : 0) +
     (threshold >= 80 ? 2 : 0) -
+    (exitProfile.maxHoldDays != null && exitProfile.maxHoldDays <= 5 ? 1 : 0) -
     ((test.maxDrawdownPct ?? 0) * 0.15)
 
   return { qualifies, score }
@@ -543,7 +622,7 @@ function rankQualifiedStrategy(
 
 export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
   const candidates: QualifiedLivePick[] = []
-  const candidateStrategies: StrategyKey[] = ['entry_80', 'entry_70', 'strength_80', 'strength_70']
+  const candidateStrategies: StrategyKey[] = ['entry_80', 'entry_70', 'strength_80', 'strength_70', 'status_flip']
 
   for (const state of assetStates) {
     if (!state.points.length) continue
@@ -551,38 +630,39 @@ export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
     let best: (QualifiedLivePick & { _score: number }) | null = null
 
     for (const strategy of candidateStrategies) {
-      const trades = state.byStrategy[strategy].trades
-      if (trades.length < 8) continue
+      for (const exitProfile of EXIT_PROFILES) {
+        const variant = simulateVariant(strategy, state.points, exitProfile)
+        if (variant.tradeReturns.length < 8) continue
 
-      const splitIdx = Math.max(5, Math.min(trades.length - 3, Math.floor(trades.length * 0.7)))
-      const trainTrades = trades.slice(0, splitIdx)
-      const testTrades = trades.slice(splitIdx)
-      if (trainTrades.length < 5 || testTrades.length < 3) continue
+        const splitIdx = Math.max(5, Math.min(variant.tradeReturns.length - 3, Math.floor(variant.tradeReturns.length * 0.7)))
+        const trainReturns = variant.tradeReturns.slice(0, splitIdx)
+        const testReturns = variant.tradeReturns.slice(splitIdx)
+        if (trainReturns.length < 5 || testReturns.length < 3) continue
 
-      const train = summarizeReturns(trainTrades.map((trade) => trade.returnPct))
-      const test = summarizeReturns(testTrades.map((trade) => trade.returnPct))
-      const ranked = rankQualifiedStrategy(strategy, train, test)
-      if (!ranked.qualifies) continue
-      if (!isEligible(latest, strategy)) continue
-      if (latest.status !== 'BUY' && latest.status !== 'SELL') continue
-      if (!Number.isFinite(latest.strength as number)) continue
+        const train = summarizeReturns(trainReturns)
+        const test = summarizeReturns(testReturns)
+        const ranked = rankQualifiedStrategy(strategy, train, test, exitProfile)
+        if (!ranked.qualifies) continue
+        if (!variant.openSide) continue
+        if (!Number.isFinite(latest.strength as number)) continue
 
-      const pick: QualifiedLivePick & { _score: number } = {
-        symbol: state.symbol,
-        name: state.name,
-        status: latest.status as SignalSide,
-        strategy,
-        strategyLabel: STRATEGY_META[strategy].label,
-        currentScore: latest.score,
-        strength: Number(latest.strength),
-        validationWinrate: Number(test.winrate),
-        validationAvgReturnPct: Number(test.avgReturnPct),
-        trainingTrades: train.count,
-        validationTrades: test.count,
-        _score: ranked.score,
+        const pick: QualifiedLivePick & { _score: number } = {
+          symbol: state.symbol,
+          name: state.name,
+          status: variant.openSide,
+          strategy,
+          strategyLabel: `${STRATEGY_META[strategy].label} · ${exitProfile.label}`,
+          currentScore: latest.score,
+          strength: Number(latest.strength),
+          validationWinrate: Number(test.winrate),
+          validationAvgReturnPct: Number(test.avgReturnPct),
+          trainingTrades: train.count,
+          validationTrades: test.count,
+          _score: ranked.score,
+        }
+
+        if (!best || pick._score > best._score) best = pick
       }
-
-      if (!best || pick._score > best._score) best = pick
     }
 
     if (best) {
