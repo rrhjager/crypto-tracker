@@ -16,7 +16,7 @@ import { SENSEX } from '@/lib/sensex'
 import { SP500 } from '@/lib/sp500'
 import { fetchMarketDataFor, computeIndicators as computeCryptoIndicators } from '@/lib/pastPerformance/cryptoIndicatorsExact'
 import { fetchMarketDataForEquity, computeIndicators as computeEquityIndicators } from '@/lib/pastPerformance/equityIndicatorsExact'
-import { runAssetAudit, summarizeMarketAudit } from '@/lib/backtestAudit'
+import { findQualifiedLivePicks, runAssetAudit, summarizeMarketAudit } from '@/lib/backtestAudit'
 import type { ScoreMarket } from '@/lib/taScore'
 
 type MarketKey =
@@ -264,6 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             'Dit is een voorspellende event-backtest op de echte score-engine. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
         },
         strategies: summarizeMarketAudit(states),
+        qualifiedLivePicks: findQualifiedLivePicks(states),
         sampleErrors: errors.slice(0, 10),
       }
     }

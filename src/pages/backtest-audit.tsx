@@ -43,6 +43,19 @@ type Props = {
       note: string
     }
     strategies?: StrategyStats[]
+    qualifiedLivePicks?: Array<{
+      symbol: string
+      name: string
+      status: 'BUY' | 'SELL'
+      strategy: string
+      strategyLabel: string
+      currentScore: number
+      strength: number
+      validationWinrate: number
+      validationAvgReturnPct: number
+      trainingTrades: number
+      validationTrades: number
+    }>
   } | null
 }
 
@@ -214,6 +227,60 @@ export default function BacktestAuditPage({ market, payload }: Props) {
             <p className="mt-4 text-sm text-slate-700/80 dark:text-white/65">{meta.note}</p>
           </section>
         ) : null}
+
+        {(payload?.qualifiedLivePicks || []).length > 0 ? (
+          <section className="rounded-3xl border border-emerald-300/45 bg-white/85 p-5 dark:border-emerald-500/25 dark:bg-white/5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Nu historisch gekwalificeerd</h2>
+                <p className="mt-1 text-sm text-slate-700/80 dark:text-white/60">
+                  Dit zijn assets die nu live een signaal hebben én waarvan de best passende strategie out-of-sample positief en stabiel bleef.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
+                <div className="text-[10px] uppercase tracking-[0.12em] opacity-75">Nu live</div>
+                <div className="text-2xl font-semibold">{payload?.qualifiedLivePicks?.length || 0}</div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {(payload?.qualifiedLivePicks || []).map((item) => (
+                <div key={`${item.symbol}-${item.strategy}`} className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-lg font-semibold text-slate-900 dark:text-white">{item.symbol}</span>
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold text-white ${item.status === 'BUY' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-700/80 dark:text-white/60">{item.name}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-slate-600 dark:text-white/55">Sterkte</div>
+                      <div className="text-lg font-semibold text-slate-900 dark:text-white">{item.strength}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-sm font-semibold text-slate-900 dark:text-white">{item.strategyLabel}</div>
+                  <div className="mt-1 text-xs text-slate-700/75 dark:text-white/55">
+                    Validatie: {fmtPct(item.validationWinrate * 100)} winrate, {fmtPct(item.validationAvgReturnPct)} gemiddeld
+                  </div>
+                  <div className="mt-1 text-xs text-slate-700/75 dark:text-white/55">
+                    Train {item.trainingTrades} trades · Validatie {item.validationTrades} trades · Huidige score {item.currentScore}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-3xl border border-slate-300/45 bg-white/85 p-5 dark:border-white/10 dark:bg-white/5">
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Nu historisch gekwalificeerd</h2>
+            <p className="mt-2 text-sm text-slate-700/80 dark:text-white/60">
+              Op dit moment is er in deze markt geen live asset die door de strengere out-of-sample selectie komt.
+            </p>
+          </section>
+        )}
 
         {strategies.map((strategy) => (
           <StrategyCard key={strategy.key} strategy={strategy} />

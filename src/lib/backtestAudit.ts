@@ -103,6 +103,20 @@ type AssetAuditState = {
   byStrategy: Record<StrategyKey, { trades: BacktestTrade[]; open: OpenPosition | null }>
 }
 
+export type QualifiedLivePick = {
+  symbol: string
+  name: string
+  status: SignalSide
+  strategy: StrategyKey
+  strategyLabel: string
+  currentScore: number
+  strength: number
+  validationWinrate: number
+  validationAvgReturnPct: number
+  trainingTrades: number
+  validationTrades: number
+}
+
 const STRATEGY_ORDER: StrategyKey[] = ['status_flip', 'strength_70', 'strength_80', 'entry_70', 'entry_80']
 
 const STRATEGY_META: Record<StrategyKey, { label: string; threshold: 0 | 70 | 80; entrySafe: boolean }> = {
@@ -479,6 +493,110 @@ function summarizeStrategy(
 
 export function summarizeMarketAudit(assetStates: AssetAuditState[]) {
   return STRATEGY_ORDER.map((strategy) => summarizeStrategy(strategy, assetStates))
+}
+
+function summarizeReturns(returns: number[]) {
+  const wins = returns.filter((v) => v > 0).length
+  const avg = returns.length ? returns.reduce((sum, v) => sum + v, 0) / returns.length : null
+  const compounded = returns.length
+    ? returns.reduce((equity, ret) => equity * (1 + ret / 100), 100)
+    : null
+  return {
+    count: returns.length,
+    wins,
+    winrate: returns.length ? wins / returns.length : null,
+    avgReturnPct: avg,
+    maxDrawdownPct: computeMaxDrawdownPct(returns),
+    compoundedValueOf100: compounded,
+  }
+}
+
+function rankQualifiedStrategy(
+  strategy: StrategyKey,
+  train: ReturnType<typeof summarizeReturns>,
+  test: ReturnType<typeof summarizeReturns>
+) {
+  const threshold = STRATEGY_META[strategy].threshold
+  const isEntrySafe = STRATEGY_META[strategy].entrySafe
+  const minTrainWinrate = threshold >= 80 ? 0.52 : 0.48
+  const minTestWinrate = threshold >= 80 ? 0.5 : 0.47
+  const maxDd = threshold >= 80 ? 38 : 45
+
+  const qualifies =
+    train.count >= 5 &&
+    test.count >= 3 &&
+    (train.winrate ?? 0) >= minTrainWinrate &&
+    (test.winrate ?? 0) >= minTestWinrate &&
+    (train.avgReturnPct ?? -999) > 0 &&
+    (test.avgReturnPct ?? -999) > 0 &&
+    ((test.maxDrawdownPct ?? 999) <= maxDd)
+
+  const score =
+    (test.winrate ?? 0) * 100 +
+    (test.avgReturnPct ?? 0) * 4 +
+    (isEntrySafe ? 3 : 0) +
+    (threshold >= 80 ? 2 : 0) -
+    ((test.maxDrawdownPct ?? 0) * 0.15)
+
+  return { qualifies, score }
+}
+
+export function findQualifiedLivePicks(assetStates: AssetAuditState[]) {
+  const candidates: QualifiedLivePick[] = []
+  const candidateStrategies: StrategyKey[] = ['entry_80', 'entry_70', 'strength_80', 'strength_70']
+
+  for (const state of assetStates) {
+    if (!state.points.length) continue
+    const latest = state.points[state.points.length - 1]
+    let best: (QualifiedLivePick & { _score: number }) | null = null
+
+    for (const strategy of candidateStrategies) {
+      const trades = state.byStrategy[strategy].trades
+      if (trades.length < 8) continue
+
+      const splitIdx = Math.max(5, Math.min(trades.length - 3, Math.floor(trades.length * 0.7)))
+      const trainTrades = trades.slice(0, splitIdx)
+      const testTrades = trades.slice(splitIdx)
+      if (trainTrades.length < 5 || testTrades.length < 3) continue
+
+      const train = summarizeReturns(trainTrades.map((trade) => trade.returnPct))
+      const test = summarizeReturns(testTrades.map((trade) => trade.returnPct))
+      const ranked = rankQualifiedStrategy(strategy, train, test)
+      if (!ranked.qualifies) continue
+      if (!isEligible(latest, strategy)) continue
+      if (latest.status !== 'BUY' && latest.status !== 'SELL') continue
+      if (!Number.isFinite(latest.strength as number)) continue
+
+      const pick: QualifiedLivePick & { _score: number } = {
+        symbol: state.symbol,
+        name: state.name,
+        status: latest.status as SignalSide,
+        strategy,
+        strategyLabel: STRATEGY_META[strategy].label,
+        currentScore: latest.score,
+        strength: Number(latest.strength),
+        validationWinrate: Number(test.winrate),
+        validationAvgReturnPct: Number(test.avgReturnPct),
+        trainingTrades: train.count,
+        validationTrades: test.count,
+        _score: ranked.score,
+      }
+
+      if (!best || pick._score > best._score) best = pick
+    }
+
+    if (best) {
+      const { _score, ...publicPick } = best
+      candidates.push(publicPick)
+    }
+  }
+
+  return candidates.sort((a, b) => {
+    if (b.validationWinrate !== a.validationWinrate) return b.validationWinrate - a.validationWinrate
+    if (b.validationAvgReturnPct !== a.validationAvgReturnPct) return b.validationAvgReturnPct - a.validationAvgReturnPct
+    if (b.strength !== a.strength) return b.strength - a.strength
+    return a.symbol.localeCompare(b.symbol)
+  })
 }
 
 export function getStrategyMeta(strategy: StrategyKey) {
