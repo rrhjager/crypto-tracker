@@ -68,6 +68,8 @@ const DETAIL_BASE: Record<StockMarketKey, string> = {
   SP500: '/sp500',
 }
 
+const FRESH_SIGNAL_MAX_DAYS = 10
+
 function parseThreshold(raw: string | string[] | undefined): 70 | 80 {
   const value = Array.isArray(raw) ? raw[0] : raw
   return value === '70' ? 70 : 80
@@ -99,6 +101,23 @@ function bestOf(a: StockPick, b: StockPick) {
   const bRet = Number.isFinite(b.currentReturnPct as number) ? Number(b.currentReturnPct) : -999999
   if (bRet !== aRet) return bRet > aRet ? b : a
   return a
+}
+
+function isFreshSignal(item: StockPick) {
+  return item.daysSinceSignal == null || item.daysSinceSignal <= FRESH_SIGNAL_MAX_DAYS
+}
+
+function sortFreshFirst(a: StockPick, b: StockPick) {
+  const aDays = a.daysSinceSignal ?? 0
+  const bDays = b.daysSinceSignal ?? 0
+  if (aDays !== bDays) return aDays - bDays
+  if (b.score !== a.score) return b.score - a.score
+
+  const aRet = Number.isFinite(a.currentReturnPct as number) ? Number(a.currentReturnPct) : 999999
+  const bRet = Number.isFinite(b.currentReturnPct as number) ? Number(b.currentReturnPct) : 999999
+  if (aRet !== bRet) return aRet - bRet
+
+  return a.symbol.localeCompare(b.symbol)
 }
 
 function buildPick(market: StockMarketKey, row: PastPerformanceRow, thresholdScore: 70 | 80): StockPick | null {
@@ -185,8 +204,10 @@ function PickCard({
 }
 
 export default function PremiumActivePage({ error, generatedAt, thresholdScore, picks }: Props) {
-  const featured = picks.slice(0, 5)
-  const fresh = picks.filter((item) => item.daysSinceSignal != null && item.daysSinceSignal <= 10).length
+  const freshPicks = picks.filter(isFreshSignal).sort(sortFreshFirst)
+  const olderPicks = picks.filter((item) => !isFreshSignal(item))
+  const featured = freshPicks.slice(0, 5)
+  const fresh = freshPicks.length
 
   return (
     <>
@@ -205,7 +226,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Top Aandelen Kopen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
                 Dit is nu precies een losse aandelenlijst. Geen marktfilter. Alleen aandelen die op dit moment een BUY-signaal hebben en een
-                individuele score van minimaal {thresholdScore}.
+                individuele score van minimaal {thresholdScore}. Bovenaan staan alleen verse instapkansen, niet oude trades die al lang lopen.
               </p>
             </div>
 
@@ -235,7 +256,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Verse kansen</div>
               <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">{fresh}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Signaal loopt 10 dagen of korter</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Signaal loopt {FRESH_SIGNAL_MAX_DAYS} dagen of korter</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
@@ -297,8 +318,10 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-emerald-400/35 bg-white/85 p-5 dark:border-emerald-500/25 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 koop nu</h2>
-              <p className="text-sm text-slate-700/80 dark:text-white/65">Hoogste individuele score eerst. Dit zijn de sterkste losse aandelen op dit moment.</p>
+              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 verse koopkansen</h2>
+              <p className="text-sm text-slate-700/80 dark:text-white/65">
+                Alleen nieuwe of nog jonge BUY-signalen. Alles dat al langer dan {FRESH_SIGNAL_MAX_DAYS} dagen open staat komt hier niet meer in.
+              </p>
             </div>
             <div className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-emerald-900 dark:text-emerald-200">
               <div className="text-[10px] uppercase tracking-[0.12em] opacity-75">Nu live</div>
@@ -308,7 +331,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {featured.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse aandelen met een BUY-signaal boven deze score.
+              Er zijn op dit moment geen verse losse aandelen met een BUY-signaal boven deze score.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -322,9 +345,10 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-slate-300/45 bg-white/85 p-5 dark:border-white/10 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle koopwaardige aandelen nu</h2>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve BUY-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit is de volledige losse aandelenlijst met live BUY en een huidige score van minimaal {thresholdScore}.
+                Dit is de volledige losse aandelenlijst met live BUY en een huidige score van minimaal {thresholdScore}. Hieronder staan dus ook
+                signalen die al langer lopen.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -347,7 +371,8 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         </section>
 
         <section className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-          Deze route gebruikt nu geen marktfilter meer. Als hetzelfde aandeel in meerdere indexen voorkomt, tonen we hem maar één keer.
+          <span className="font-medium text-slate-900 dark:text-white">{olderPicks.length}</span> signalen lopen al langer dan {FRESH_SIGNAL_MAX_DAYS}{' '}
+          dagen en staan daarom niet in de bovenste instaplijst. Als hetzelfde aandeel in meerdere indexen voorkomt, tonen we hem maar één keer.
         </section>
       </main>
     </>
