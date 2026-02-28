@@ -192,6 +192,10 @@ export default function SiteHeader() {
             <span className={`transition-colors ${rainbow}`}>Top Aandelen</span>
           </Link>
 
+          <Link href="/premium-active-crypto" className="group text-white/80 hover:text-white transition">
+            <span className={`transition-colors ${rainbow}`}>Top Crypto</span>
+          </Link>
+
           {/* Stock tracker */}
           <div className="relative" ref={stockRef}>
             <button
@@ -565,6 +569,14 @@ export default function SiteHeader() {
             onClick={onMobileLinkClick}
           >
             <span className={rainbow}>Top Aandelen</span>
+          </Link>
+
+          <Link
+            href="/premium-active-crypto"
+            className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
+            onClick={onMobileLinkClick}
+          >
+            <span className={rainbow}>Top Crypto</span>
           </Link>
 
           {/* Past performance (mobile) */}
