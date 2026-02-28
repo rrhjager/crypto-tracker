@@ -189,7 +189,7 @@ export default function SiteHeader() {
           </Link>
 
           <Link href="/premium-active" className="group text-white/80 hover:text-white transition">
-            <span className={`transition-colors ${rainbow}`}>High Threshold</span>
+            <span className={`transition-colors ${rainbow}`}>Top Aandelen</span>
           </Link>
 
           {/* Stock tracker */}
@@ -564,7 +564,7 @@ export default function SiteHeader() {
             className="group rounded-xl px-4 py-3 hover:bg-white/10 text-base"
             onClick={onMobileLinkClick}
           >
-            <span className={rainbow}>High Threshold</span>
+            <span className={rainbow}>Top Aandelen</span>
           </Link>
 
           {/* Past performance (mobile) */}
