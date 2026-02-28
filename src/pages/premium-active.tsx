@@ -9,6 +9,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 type Props = {
   data: PremiumActiveResponse | null
   error: string | null
+  thresholdPct: 70 | 80
 }
 
 const fmtRatioPct = (v: number | null | undefined, d = 1) =>
@@ -94,9 +95,14 @@ function SignalColumn({
   )
 }
 
-export default function PremiumActivePage({ data, error }: Props) {
+export default function PremiumActivePage({ data, error, thresholdPct }: Props) {
   const generatedAt = data?.meta?.generatedAt ? new Date(data.meta.generatedAt).toLocaleString('nl-NL') : '—'
   const allSignals = data?.signals?.all || []
+  const activeThreshold = Math.round((data?.meta?.targetWinrate ?? thresholdPct / 100) * 100) as 70 | 80
+  const thresholdOptions: Array<{ value: 70 | 80; blurb: string }> = [
+    { value: 70, blurb: 'Meer signalen' },
+    { value: 80, blurb: 'Strenger filter' },
+  ]
 
   return (
     <>
@@ -114,7 +120,7 @@ export default function PremiumActivePage({ data, error }: Props) {
             <div>
               <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-white">Hoge Threshold Lijst</h1>
               <p className="text-sm text-slate-700/85 dark:text-white/70">
-                Alleen assets die nu door de hoge probability-filter komen.
+                Alleen assets die nu door de gekozen high-probability filter komen.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -132,6 +138,26 @@ export default function PremiumActivePage({ data, error }: Props) {
               </Link>
             </div>
           </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {thresholdOptions.map((option) => {
+              const isActive = option.value === activeThreshold
+              return (
+                <Link
+                  key={option.value}
+                  href={option.value === 80 ? '/premium-active' : `/premium-active?threshold=${option.value}`}
+                  className={`rounded-2xl border px-3 py-2 text-left transition ${
+                    isActive
+                      ? 'border-amber-500/40 bg-amber-500/15 text-amber-950 dark:text-amber-200'
+                      : 'border-slate-400/35 bg-white/70 text-slate-800 hover:bg-white dark:border-white/20 dark:bg-white/10 dark:text-white'
+                  }`}
+                >
+                  <div className="text-[12px] font-semibold">{option.value}% threshold</div>
+                  <div className="text-[10px] opacity-80">{option.blurb}</div>
+                </Link>
+              )
+            })}
+          </div>
         </section>
 
         {error && (
@@ -143,7 +169,7 @@ export default function PremiumActivePage({ data, error }: Props) {
         <section className="rounded-2xl border border-amber-400/25 bg-white/70 p-5 dark:border-amber-500/25 dark:bg-white/5">
           <SignalColumn
             title={`Live High-Probability Signals (${allSignals.length})`}
-            subtitle={`Update ${generatedAt}`}
+            subtitle={`${activeThreshold}% filter • Update ${generatedAt}`}
             items={allSignals}
           />
         </section>
@@ -152,7 +178,15 @@ export default function PremiumActivePage({ data, error }: Props) {
   )
 }
 
-export const getServerSideProps: GetServerSideProps<Props> = async () => {
+function parseThreshold(raw: string | string[] | undefined): 70 | 80 {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return value === '70' ? 70 : 80
+}
+
+export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
+  const thresholdPct = parseThreshold(context.query.threshold)
+  const targetWinrate = thresholdPct / 100
+
   try {
     const base =
       process.env.NODE_ENV === 'development'
@@ -160,14 +194,14 @@ export const getServerSideProps: GetServerSideProps<Props> = async () => {
         : (BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
 
     const r = await fetch(
-      `${base}/api/market/premium-active?targetWinrate=0.8&minCoverage=0.12&minTrades=8&minValidationTrades=6`,
+      `${base}/api/market/premium-active?targetWinrate=${targetWinrate}&minCoverage=0.12&minTrades=8&minValidationTrades=6`,
       { cache: 'no-store' }
     )
-    if (!r.ok) return { props: { data: null, error: `HTTP ${r.status}` } }
+    if (!r.ok) return { props: { data: null, error: `HTTP ${r.status}`, thresholdPct } }
 
     const data = (await r.json()) as PremiumActiveResponse
-    return { props: { data, error: null } }
+    return { props: { data, error: null, thresholdPct } }
   } catch (e: any) {
-    return { props: { data: null, error: e?.message || 'Failed to fetch' } }
+    return { props: { data: null, error: e?.message || 'Failed to fetch', thresholdPct } }
   }
 }
