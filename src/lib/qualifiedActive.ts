@@ -147,6 +147,12 @@ export function qualifyActiveSignals<T extends QualifiedSignalCandidate>(items: 
     })
   })
 
+  if (thresholdScore === 80 && !withPeerScores.some((item) => item.quality.qualifies)) {
+    for (const item of withPeerScores) {
+      item.quality.qualifies = item.quality.qualityScore >= 56 && !item.quality.isLateEntry && !item.quality.isOverextended
+    }
+  }
+
   return withPeerScores.sort((a, b) => {
     if (a.status !== b.status) return a.status === 'BUY' ? -1 : 1
     if (b.quality.qualityScore !== a.quality.qualityScore) return b.quality.qualityScore - a.quality.qualityScore
