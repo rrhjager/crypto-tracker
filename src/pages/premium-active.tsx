@@ -112,9 +112,9 @@ export default function PremiumActivePage({ data, error }: Props) {
         <section className="rounded-3xl border border-amber-300/45 bg-gradient-to-br from-amber-50 via-orange-50 to-emerald-50 p-6 shadow-[0_20px_60px_-28px_rgba(245,158,11,0.35)] dark:border-amber-500/30 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-slate-950">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-white">Premium Active Signals</h1>
+              <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-white">Hoge Threshold Lijst</h1>
               <p className="text-sm text-slate-700/85 dark:text-white/70">
-                Aparte premium-laag: alleen markten die de strengere leave-one-out validatie halen, blijven over.
+                Alleen assets die nu door de hoge probability-filter komen.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -132,45 +132,6 @@ export default function PremiumActivePage({ data, error }: Props) {
               </Link>
             </div>
           </div>
-
-          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
-            <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-3 py-1 text-amber-900 dark:text-amber-200">
-              Gevalideerde markten: {data?.summary?.validatedMarkets ?? 0}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Live signals: {data?.summary?.liveSignals ?? 0}
-            </span>
-            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-emerald-900 dark:text-emerald-200">
-              BUY: {data?.summary?.buySignals ?? 0}
-            </span>
-            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-rose-900 dark:text-rose-200">
-              SELL / EXIT: {data?.summary?.sellSignals ?? 0}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Target: {fmtRatioPct(data?.meta?.targetWinrate ?? null)}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Update: {generatedAt}
-            </span>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Handelsregel</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">BUY = instappen / long houden</div>
-              <div className="mt-1 text-[11px] text-slate-700/80 dark:text-white/60">Zolang het signaal actief blijft.</div>
-            </div>
-            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Uitstapregel</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">SELL = long sluiten / short alleen indien mogelijk</div>
-              <div className="mt-1 text-[11px] text-slate-700/80 dark:text-white/60">Bij flip of zodra het signaal verdwijnt.</div>
-            </div>
-            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Validatie</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Leave-one-out op afgesloten signalen</div>
-              <div className="mt-1 text-[11px] text-slate-700/80 dark:text-white/60">Alleen markten boven target blijven op deze pagina.</div>
-            </div>
-          </div>
         </section>
 
         {error && (
@@ -180,13 +141,9 @@ export default function PremiumActivePage({ data, error }: Props) {
         )}
 
         <section className="rounded-2xl border border-amber-400/25 bg-white/70 p-5 dark:border-amber-500/25 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Hoge Threshold Lijst</h2>
-          <p className="mb-3 text-[12px] text-slate-700/80 dark:text-white/60">
-            Alleen signalen die nu de hoge probability-filter halen. Staat een asset hier niet tussen, dan haalt die de hoge threshold nu niet.
-          </p>
           <SignalColumn
-            title="Live High-Probability Signals"
-            subtitle="Dit is de volledige premium-lijst op dit moment."
+            title={`Live High-Probability Signals (${allSignals.length})`}
+            subtitle={`Update ${generatedAt}`}
             items={allSignals}
           />
         </section>
