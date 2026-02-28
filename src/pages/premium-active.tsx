@@ -1,13 +1,9 @@
 import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
-import type { HCMarketKey } from '@/lib/highConfidence'
 import { HC_MARKET_META } from '@/lib/highConfidence'
-import { qualifyActiveSignals, type QualifiedSignalMetrics } from '@/lib/qualifiedActive'
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
-
-type StockMarketKey = Exclude<HCMarketKey, 'CRYPTO'>
+type StockMarketKey = 'AEX' | 'DAX' | 'DOWJONES' | 'ETFS' | 'FTSE100' | 'HANGSENG' | 'NASDAQ' | 'NIKKEI225' | 'SENSEX' | 'SP500'
 
 type StockPick = {
   market: StockMarketKey
@@ -17,51 +13,34 @@ type StockPick = {
   status: 'BUY' | 'SELL'
   score: number
   strength: number
-  currentReturnPct: number | null
-  valueOf100Now: number | null
-  daysSinceSignal: number | null
-  d7Signal: number | null
-  d30Signal: number | null
-  mfeSignal: number | null
-  maeSignal: number | null
-  quality: QualifiedSignalMetrics | null
+  strategyLabel: string
+  validationWinrate: number
+  validationAvgReturnPct: number
+  trainingTrades: number
+  validationTrades: number
 }
 
 type Props = {
   error: string | null
   generatedAt: string
-  thresholdScore: 70 | 80
   picks: StockPick[]
 }
 
-type PastPerformanceRow = {
+type AuditPick = {
   symbol?: string
   name?: string
-  current?: {
-    date?: string
-    status?: 'BUY' | 'HOLD' | 'SELL'
-    score?: number
-    close?: number
-  } | null
-  lastSignal?: {
-    date?: string
-    status?: 'BUY' | 'SELL'
-    score?: number
-    close?: number
-  } | null
-  perf?: {
-    d7Signal?: number | null
-    d30Signal?: number | null
-  } | null
-  nextSignal?: {
-    signalReturnPct?: number | null
-    daysFromSignal?: number | null
-  } | null
-  untilNext?: {
-    mfeSignal?: number | null
-    maeSignal?: number | null
-  } | null
+  market?: string
+  status?: 'BUY' | 'SELL'
+  currentScore?: number
+  strength?: number
+  strategyLabel?: string
+  validationWinrate?: number
+  validationAvgReturnPct?: number
+  trainingTrades?: number
+  validationTrades?: number
 }
+
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 
 const STOCK_MARKETS: Array<{ key: StockMarketKey; slug: string }> = [
   { key: 'AEX', slug: 'aex' },
@@ -89,81 +68,50 @@ const DETAIL_BASE: Record<StockMarketKey, string> = {
   SP500: '/sp500',
 }
 
-const FRESH_SIGNAL_MAX_DAYS = 10
-
-function parseThreshold(raw: string | string[] | undefined): 70 | 80 {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  return value === '70' ? 70 : 80
-}
-
 function detailHref(market: StockMarketKey, symbol: string) {
   return `${DETAIL_BASE[market]}/${encodeURIComponent(symbol)}`
 }
 
-function formatPct(v: number | null | undefined, digits = 2) {
+function formatPct(v: number | null | undefined, digits = 1) {
   if (!Number.isFinite(v as number)) return '-'
   const n = Number(v)
   return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}%`
 }
 
-function formatEuro(v: number | null | undefined) {
-  if (!Number.isFinite(v as number)) return '-'
-  return new Intl.NumberFormat('nl-NL', {
-    style: 'currency',
-    currency: 'EUR',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(v))
+function pickScore(item: StockPick) {
+  return (
+    item.validationWinrate * 100 +
+    item.validationAvgReturnPct * 8 +
+    item.validationTrades * 1.5 +
+    item.trainingTrades * 0.35 +
+    item.strength * 0.12
+  )
 }
 
-function bestOf(a: StockPick, b: StockPick) {
-  if (b.strength !== a.strength) return b.strength > a.strength ? b : a
-  const aRet = Number.isFinite(a.currentReturnPct as number) ? Number(a.currentReturnPct) : -999999
-  const bRet = Number.isFinite(b.currentReturnPct as number) ? Number(b.currentReturnPct) : -999999
-  if (bRet !== aRet) return bRet > aRet ? b : a
-  return a
-}
-
-function isFreshSignal(item: StockPick) {
-  return item.daysSinceSignal == null || item.daysSinceSignal <= FRESH_SIGNAL_MAX_DAYS
-}
-
-function sortFreshFirst(a: StockPick, b: StockPick) {
-  const aDays = a.daysSinceSignal ?? 0
-  const bDays = b.daysSinceSignal ?? 0
-  if (aDays !== bDays) return aDays - bDays
+function sortByBest(a: StockPick, b: StockPick) {
+  const diff = pickScore(b) - pickScore(a)
+  if (Math.abs(diff) > 1e-9) return diff
+  if (b.validationWinrate !== a.validationWinrate) return b.validationWinrate - a.validationWinrate
+  if (b.validationAvgReturnPct !== a.validationAvgReturnPct) return b.validationAvgReturnPct - a.validationAvgReturnPct
   if (b.strength !== a.strength) return b.strength - a.strength
-
-  const aRet = Number.isFinite(a.currentReturnPct as number) ? Number(a.currentReturnPct) : 999999
-  const bRet = Number.isFinite(b.currentReturnPct as number) ? Number(b.currentReturnPct) : 999999
-  if (aRet !== bRet) return aRet - bRet
-
   return a.symbol.localeCompare(b.symbol)
 }
 
-function buildPick(market: StockMarketKey, row: PastPerformanceRow, thresholdScore: 70 | 80): StockPick | null {
-  const symbol = String(row?.symbol || '').trim()
-  const name = String(row?.name || symbol).trim()
-  const current = row?.current
-  const lastSignal = row?.lastSignal
-  const nextSignal = row?.nextSignal
+function buildPick(market: StockMarketKey, raw: AuditPick): StockPick | null {
+  const symbol = String(raw?.symbol || '').trim().toUpperCase()
+  const name = String(raw?.name || symbol).trim()
+  const status = raw?.status
+  const score = Number(raw?.currentScore)
+  const strength = Number(raw?.strength)
+  const validationWinrate = Number(raw?.validationWinrate)
+  const validationAvgReturnPct = Number(raw?.validationAvgReturnPct)
+  const trainingTrades = Number(raw?.trainingTrades)
+  const validationTrades = Number(raw?.validationTrades)
 
-  if (!symbol || !current || (current.status !== 'BUY' && current.status !== 'SELL')) return null
-
-  const rawScore = Number(current.score)
-  if (!Number.isFinite(rawScore)) return null
-
-  const status = current.status
-  const score = Math.round(rawScore)
-  const strength = Math.round(status === 'BUY' ? rawScore : (100 - rawScore))
-  if (!Number.isFinite(strength) || strength < thresholdScore) return null
-
-  const currentReturnPct =
-    lastSignal?.status === status && Number.isFinite(nextSignal?.signalReturnPct as number)
-      ? Number(nextSignal?.signalReturnPct)
-      : null
-
-  const daysSinceSignal = Number.isFinite(nextSignal?.daysFromSignal as number) ? Number(nextSignal?.daysFromSignal) : null
+  if (!symbol || !name || (status !== 'BUY' && status !== 'SELL')) return null
+  if (!Number.isFinite(score) || !Number.isFinite(strength)) return null
+  if (!Number.isFinite(validationWinrate) || !Number.isFinite(validationAvgReturnPct)) return null
+  if (!Number.isFinite(trainingTrades) || !Number.isFinite(validationTrades)) return null
 
   return {
     market,
@@ -171,28 +119,22 @@ function buildPick(market: StockMarketKey, row: PastPerformanceRow, thresholdSco
     name,
     href: detailHref(market, symbol),
     status,
-    score,
-    strength,
-    currentReturnPct,
-    valueOf100Now: Number.isFinite(currentReturnPct as number) ? 100 * (1 + Number(currentReturnPct) / 100) : null,
-    daysSinceSignal,
-    d7Signal: Number.isFinite(row?.perf?.d7Signal as number) ? Number(row?.perf?.d7Signal) : null,
-    d30Signal: Number.isFinite(row?.perf?.d30Signal as number) ? Number(row?.perf?.d30Signal) : null,
-    mfeSignal: Number.isFinite(row?.untilNext?.mfeSignal as number) ? Number(row?.untilNext?.mfeSignal) : null,
-    maeSignal: Number.isFinite(row?.untilNext?.maeSignal as number) ? Number(row?.untilNext?.maeSignal) : null,
-    quality: null,
+    score: Math.round(score),
+    strength: Math.round(strength),
+    strategyLabel: String(raw?.strategyLabel || '').trim() || 'Gevalideerde strategie',
+    validationWinrate,
+    validationAvgReturnPct,
+    trainingTrades: Math.round(trainingTrades),
+    validationTrades: Math.round(validationTrades),
   }
 }
 
-function PickCard({
-  item,
-  featured = false,
-}: {
-  item: StockPick
-  featured?: boolean
-}) {
+function bestOf(a: StockPick, b: StockPick) {
+  return pickScore(b) > pickScore(a) ? b : a
+}
+
+function PickCard({ item, featured = false }: { item: StockPick; featured?: boolean }) {
   const isBuy = item.status === 'BUY'
-  const positiveMove = !Number.isFinite(item.currentReturnPct as number) || Number(item.currentReturnPct) >= 0
 
   return (
     <Link
@@ -221,21 +163,16 @@ function PickCard({
             >
               Sterkte {item.strength}
             </span>
-            {item.quality ? (
-              <span className="rounded-full border border-slate-400/35 bg-slate-100/80 px-2.5 py-1 text-[10px] font-semibold text-slate-900 dark:border-white/15 dark:bg-white/10 dark:text-white/80">
-                Kwaliteit {item.quality.qualityScore}
-              </span>
-            ) : null}
           </div>
           <div className="mt-1 text-sm text-slate-800 dark:text-white/85">{item.name}</div>
           <div className="mt-1 text-[11px] text-slate-700/75 dark:text-white/60">{HC_MARKET_META[item.market].label}</div>
         </div>
 
         <div className="rounded-2xl border border-white/40 bg-white/70 px-3 py-2 text-right dark:border-white/10 dark:bg-white/10">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">€100 sinds start</div>
-          <div className="text-base font-semibold text-slate-900 dark:text-white">{formatEuro(item.valueOf100Now)}</div>
-          <div className={`text-[11px] ${positiveMove ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>
-            {formatPct(item.currentReturnPct)}
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Validatie winrate</div>
+          <div className="text-base font-semibold text-slate-900 dark:text-white">{formatPct(item.validationWinrate * 100)}</div>
+          <div className={`text-[11px] ${item.validationAvgReturnPct >= 0 ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>
+            {formatPct(item.validationAvgReturnPct)} gem. per trade
           </div>
         </div>
       </div>
@@ -248,36 +185,33 @@ function PickCard({
           </div>
         </div>
         <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Signaal loopt</div>
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Train / test</div>
           <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-            {item.daysSinceSignal != null ? `${item.daysSinceSignal} dagen` : 'Vers signaal'}
+            {item.trainingTrades} / {item.validationTrades} trades
           </div>
         </div>
       </div>
+
+      <div className="mt-3 text-[11px] text-slate-700/75 dark:text-white/55">{item.strategyLabel}</div>
     </Link>
   )
 }
 
-export default function PremiumActivePage({ error, generatedAt, thresholdScore, picks }: Props) {
-  const buyPicks = picks.filter((item) => item.status === 'BUY')
-  const sellPicks = picks.filter((item) => item.status === 'SELL')
-  const qualifiedBuys = buyPicks.filter((item) => item.quality?.qualifies)
-  const qualifiedSells = sellPicks.filter((item) => item.quality?.qualifies)
-
-  const freshBuys = qualifiedBuys.filter(isFreshSignal).sort(sortFreshFirst)
-  const freshSells = qualifiedSells.filter(isFreshSignal).sort(sortFreshFirst)
-  const featuredBuys = freshBuys.slice(0, 5)
-  const featuredSells = freshSells.slice(0, 5)
+export default function PremiumActivePage({ error, generatedAt, picks }: Props) {
+  const buyPicks = picks.filter((item) => item.status === 'BUY').sort(sortByBest)
+  const sellPicks = picks.filter((item) => item.status === 'SELL').sort(sortByBest)
+  const featuredBuys = buyPicks.slice(0, 5)
+  const featuredSells = sellPicks.slice(0, 5)
   const hiddenBuys = Math.max(0, buyPicks.length - featuredBuys.length)
   const hiddenSells = Math.max(0, sellPicks.length - featuredSells.length)
 
   return (
     <>
       <Head>
-        <title>Top Aandelen Signalen | SignalHub</title>
+        <title>Premium Aandelen Signalen | SignalHub</title>
         <meta
           name="description"
-          content="Alleen losse aandelen. Geen marktfilter. Deze pagina toont live BUY- en SELL-signalen voor individuele aandelen met een minimale signaalsterkte van 70 of 80."
+          content="Alleen audit-gevalideerde live aandelen-signalen. Deze pagina toont uitsluitend huidige BUY- en SELL-signalen die out-of-sample door de backtest zijn gekomen."
         />
       </Head>
 
@@ -285,19 +219,19 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-emerald-300/45 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.18),transparent_42%),linear-gradient(135deg,rgba(255,255,255,0.95),rgba(240,253,250,0.92),rgba(236,253,245,0.95))] p-6 shadow-[0_20px_60px_-28px_rgba(16,185,129,0.35)] dark:border-emerald-500/25 dark:bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.18),transparent_38%),linear-gradient(135deg,rgba(2,6,23,0.98),rgba(3,15,12,0.96),rgba(2,6,23,0.98))]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="max-w-3xl">
-              <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Top Aandelen Signalen</h1>
+              <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Premium Aandelen Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
-                Alleen losse aandelen. Bovenaan staan de beste instapkansen na de extra kwaliteitsfilter. Daaronder zie je de volledige lijst met alle
-                live BUY- en SELL-signalen boven sterkte {thresholdScore}.
+                Deze pagina toont alleen live aandelen-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.
+                De ruwe scorepool zie je hier dus bewust niet meer.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <Link
-                href="/high-confidence"
+                href="/backtest-audit"
                 className="rounded-full border border-slate-400/35 bg-white/70 px-4 py-2 text-[12px] font-medium text-slate-800 hover:bg-white dark:border-white/20 dark:bg-white/10 dark:text-white"
               >
-                Open gratis signalen
+                Open audit
               </Link>
               <Link
                 href="/"
@@ -310,42 +244,22 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           <div className="mt-5 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Nu long</div>
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Gevalideerde longs</div>
               <div className="mt-1 text-3xl font-semibold text-emerald-900 dark:text-emerald-200">{buyPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live BUY-signalen boven de drempel</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live BUY-signalen die de audit halen</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Nu short</div>
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Gevalideerde shorts</div>
               <div className="mt-1 text-3xl font-semibold text-rose-900 dark:text-rose-200">{sellPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live SELL-signalen boven de drempel</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live SELL-signalen die de audit halen</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Actieve drempel</div>
-              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Sterkte {thresholdScore}+</div>
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Databron</div>
+              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Audit</div>
               <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt}</div>
             </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            {([70, 80] as const).map((value) => {
-              const isActive = value === thresholdScore
-              return (
-                <Link
-                  key={value}
-                  href={value === 80 ? '/premium-active' : `/premium-active?threshold=${value}`}
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${
-                    isActive
-                      ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-950 dark:text-emerald-200'
-                      : 'border-slate-400/35 bg-white/70 text-slate-800 hover:bg-white dark:border-white/20 dark:bg-white/10 dark:text-white'
-                  }`}
-                >
-                  <div className="text-[12px] font-semibold">Sterkte {value}+</div>
-                  <div className="text-[11px] opacity-80">{value === 80 ? 'Strikter en selectiever' : 'Meer signalen zichtbaar'}</div>
-                </Link>
-              )
-            })}
           </div>
         </section>
 
@@ -358,31 +272,31 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="grid gap-3 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 1</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Bovenste blokken = beste instapkansen</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Bovenste blokken = beste nu</div>
             <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">
-              Daar filteren we extra op kwaliteit, timing en te late instappen.
+              Dit zijn de sterkste live signalen op validatie, samplegrootte en actuele sterkte.
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 2</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Onderste lijsten = volledige pool</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Daar zie je alle live signalen boven de gekozen sterktedrempel.</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Onderste lijsten = volledige audit-pool</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Hier staan alle live signalen die de backtest-audit nu halen.</div>
           </div>
 
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 3</div>
             <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Verdwijnt hij?</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan sluit je de trade. Staat hij alleen onderaan, dan is het geen top-entry meer maar wel nog actief.</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan is hij niet langer audit-gekwalificeerd en sluit je de trade.</div>
           </div>
         </section>
 
         <section className="rounded-3xl border border-emerald-400/35 bg-white/85 p-5 dark:border-emerald-500/25 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 verse koopkansen</h2>
+              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 koopkansen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn de beste nieuwe of nog jonge BUY-signalen na de extra kwaliteitsfilter.
+                Dit zijn de best gevalideerde live BUY-signalen van dit moment.
               </p>
             </div>
             <div className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-emerald-900 dark:text-emerald-200">
@@ -393,12 +307,12 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {featuredBuys.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen verse losse aandelen met een BUY-signaal boven deze score.
+              Er zijn op dit moment geen audit-gevalideerde BUY-signalen voor aandelen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {featuredBuys.map((item) => (
-                <PickCard key={`featured-${item.symbol}-${item.name}`} item={item} featured />
+                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured />
               ))}
             </div>
           )}
@@ -407,9 +321,9 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-rose-400/35 bg-white/85 p-5 dark:border-rose-500/25 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-rose-900 dark:text-rose-200">Top 5 verse shortkansen</h2>
+              <h2 className="text-xl font-semibold text-rose-900 dark:text-rose-200">Top 5 shortkansen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn de beste nieuwe of nog jonge SELL-signalen na de extra kwaliteitsfilter.
+                Dit zijn de best gevalideerde live SELL-signalen van dit moment.
               </p>
             </div>
             <div className="rounded-2xl bg-rose-500/15 px-4 py-2 text-center text-rose-900 dark:text-rose-200">
@@ -420,12 +334,12 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {featuredSells.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen verse losse aandelen met een SELL-signaal boven deze sterkte.
+              Er zijn op dit moment geen audit-gevalideerde SELL-signalen voor aandelen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {featuredSells.map((item) => (
-                <PickCard key={`featured-${item.symbol}-${item.name}-${item.status}`} item={item} featured />
+                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured />
               ))}
             </div>
           )}
@@ -434,9 +348,9 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-slate-300/45 bg-white/85 p-5 dark:border-white/10 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve BUY-signalen</h2>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle audit-gevalideerde BUY-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit is de volledige BUY-lijst boven sterkte {thresholdScore}, gesorteerd op kwaliteit.
+                Dit is de volledige huidige BUY-lijst die door de audit-backtest is gekomen.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -447,12 +361,12 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {buyPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse aandelen met een BUY-signaal boven deze sterkte.
+              Er zijn op dit moment geen audit-gevalideerde BUY-signalen voor aandelen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {buyPicks.map((item) => (
-                <PickCard key={`pick-${item.symbol}-${item.name}`} item={item} />
+                <PickCard key={`buy-${item.symbol}-${item.status}`} item={item} />
               ))}
             </div>
           )}
@@ -461,9 +375,9 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         <section className="rounded-3xl border border-slate-300/45 bg-white/85 p-5 dark:border-white/10 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve SELL-signalen</h2>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle audit-gevalideerde SELL-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit is de volledige SELL-lijst boven sterkte {thresholdScore}, gesorteerd op kwaliteit.
+                Dit is de volledige huidige SELL-lijst die door de audit-backtest is gekomen.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -474,12 +388,12 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {sellPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse aandelen met een SELL-signaal boven deze sterkte.
+              Er zijn op dit moment geen audit-gevalideerde SELL-signalen voor aandelen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {sellPicks.map((item) => (
-                <PickCard key={`pick-${item.symbol}-${item.name}-${item.status}`} item={item} />
+                <PickCard key={`sell-${item.symbol}-${item.status}`} item={item} />
               ))}
             </div>
           )}
@@ -487,8 +401,8 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
         <section className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
           <span className="font-medium text-slate-900 dark:text-white">{hiddenBuys}</span> BUY-signalen en{' '}
-          <span className="font-medium text-slate-900 dark:text-white">{hiddenSells}</span> SELL-signalen staan niet in de bovenste instaplijsten,
-          omdat ze ouder zijn of lager scoren op kwaliteit. Als hetzelfde aandeel in meerdere indexen voorkomt, tonen we hem maar een keer.
+          <span className="font-medium text-slate-900 dark:text-white">{hiddenSells}</span> SELL-signalen staan niet in de bovenste blokken,
+          maar wel in de volledige audit-lijsten hieronder. Dubbele symbolen uit meerdere indexen tonen we maar een keer.
         </section>
       </main>
     </>
@@ -496,8 +410,6 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 }
 
 export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
-  const thresholdScore = parseThreshold(context.query.threshold)
-
   try {
     const forwardedProto = context.req.headers['x-forwarded-proto']
     const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || 'https')
@@ -510,12 +422,12 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
 
     const results = await Promise.all(
       STOCK_MARKETS.map(async (market) => {
-        const r = await fetch(`${base}/api/past-performance/${market.slug}`, { cache: 'no-store' })
-        if (!r.ok) return { market: market.key, rows: [] as PastPerformanceRow[] }
+        const r = await fetch(`${base}/api/backtest/market-audit?market=${market.slug}`, { cache: 'no-store' })
+        if (!r.ok) return { market: market.key, picks: [] as AuditPick[] }
         const data = await r.json()
         return {
           market: market.key,
-          rows: Array.isArray(data?.rows) ? (data.rows as PastPerformanceRow[]) : [],
+          picks: Array.isArray(data?.qualifiedLivePicks) ? (data.qualifiedLivePicks as AuditPick[]) : [],
         }
       })
     )
@@ -523,23 +435,22 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
     const deduped = new Map<string, StockPick>()
 
     for (const result of results) {
-      for (const row of result.rows) {
-        const pick = buildPick(result.market, row, thresholdScore)
+      for (const raw of result.picks) {
+        const market = raw?.market === result.market ? result.market : result.market
+        const pick = buildPick(market, raw)
         if (!pick) continue
-
-        const dedupeKey = `${pick.symbol}::${pick.name}::${pick.status}`
+        const dedupeKey = `${pick.symbol}::${pick.status}`
         const existing = deduped.get(dedupeKey)
         deduped.set(dedupeKey, existing ? bestOf(existing, pick) : pick)
       }
     }
 
-    const picks = qualifyActiveSignals([...deduped.values()], thresholdScore)
+    const picks = [...deduped.values()].sort(sortByBest)
 
     return {
       props: {
         error: null,
         generatedAt: new Date().toLocaleString('nl-NL'),
-        thresholdScore,
         picks,
       },
     }
@@ -548,7 +459,6 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
       props: {
         error: e?.message || 'Failed to fetch',
         generatedAt: new Date().toLocaleString('nl-NL'),
-        thresholdScore,
         picks: [],
       },
     }
