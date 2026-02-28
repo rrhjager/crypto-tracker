@@ -201,7 +201,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom(`backtest:market-audit:v1:${market}`)
+    const kvKey = snapKey.custom(`backtest:market-audit:v2:${market}`)
 
     const compute = async () => {
       const batches = chunk(spec.assets, spec.batchSize)

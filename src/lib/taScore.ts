@@ -19,10 +19,15 @@ export type MAStruct    = { ma50: number | null; ma200: number | null }
 export type MACDStruct  = { hist: number | null }
 export type VolumeStruct= { ratio: number | null }
 export type TrendStruct = {
+  ret5?: number | null
   ret20: number | null
   ret60?: number | null
   rangePos20: number | null
+  rangePos55?: number | null
   efficiency14?: number | null
+  breakout20?: number | null
+  breakout55?: number | null
+  stretch20?: number | null
 }
 export type VolatilityStruct = { stdev20: number | null }
 
@@ -252,12 +257,30 @@ export function computeScoreStatus(ind: {
   // --- Trend (18%) — ret20 + ret60 + range-pos20 + trend efficiency
   let trendScore = 50
   let hasTrend = false
+  const ret5 = ind.trend?.ret5
   const ret20 = ind.trend?.ret20
   const ret60 = ind.trend?.ret60
   const rangePos20 = ind.trend?.rangePos20
+  const rangePos55 = ind.trend?.rangePos55
   const efficiency14 = ind.trend?.efficiency14
-  if (typeof ret20 === 'number' || typeof ret60 === 'number' || typeof rangePos20 === 'number' || typeof efficiency14 === 'number') {
+  const breakout20 = ind.trend?.breakout20
+  const breakout55 = ind.trend?.breakout55
+  const stretch20 = ind.trend?.stretch20
+  if (
+    typeof ret5 === 'number' ||
+    typeof ret20 === 'number' ||
+    typeof ret60 === 'number' ||
+    typeof rangePos20 === 'number' ||
+    typeof rangePos55 === 'number' ||
+    typeof efficiency14 === 'number' ||
+    typeof breakout20 === 'number' ||
+    typeof breakout55 === 'number' ||
+    typeof stretch20 === 'number'
+  ) {
     hasTrend = true
+    const mShort = typeof ret5 === 'number'
+      ? clamp(ret5 / Math.max(1e-9, AGGR.trend.retRefPct * 0.34), -1, 1)
+      : 0
     const m = typeof ret20 === 'number'
       ? clamp(ret20 / Math.max(1e-9, AGGR.trend.retRefPct), -1, 1)
       : 0
@@ -267,10 +290,27 @@ export function computeScoreStatus(ind: {
     const p = typeof rangePos20 === 'number'
       ? clamp((rangePos20 - 0.5) * 2, -1, 1)
       : 0
+    const pLong = typeof rangePos55 === 'number'
+      ? clamp((rangePos55 - 0.5) * 2, -1, 1)
+      : 0
     const e = typeof efficiency14 === 'number'
       ? clamp((efficiency14 - 0.35) / 0.45, -1, 1)
       : 0
-    const mix = 0.38 * m + 0.22 * mLong + 0.18 * p + 0.22 * e
+    const bo20 = typeof breakout20 === 'number' ? clamp(breakout20, -1, 1) : 0
+    const bo55 = typeof breakout55 === 'number' ? clamp(breakout55, -1, 1) : 0
+    const rawMix =
+      0.20 * mShort +
+      0.22 * m +
+      0.12 * mLong +
+      0.10 * p +
+      0.08 * pLong +
+      0.14 * bo20 +
+      0.06 * bo55 +
+      0.08 * e
+    const stretchPenalty = typeof stretch20 === 'number'
+      ? clamp((Math.abs(stretch20) - 6) / 10, 0, 1)
+      : 0
+    const mix = clamp(rawMix * (1 - 0.30 * stretchPenalty), -1, 1)
     trendScore = clamp(50 + mix * AGGR.trend.gain, 0, 100)
   }
 
@@ -307,6 +347,9 @@ export function computeScoreStatus(ind: {
   }
   if (hasMACD && typeof hist === 'number') {
     dirs.push(hist > 0 ? 1 : hist < 0 ? -1 : 0)
+  }
+  if (hasTrend && typeof breakout20 === 'number') {
+    dirs.push(breakout20 > 0.15 ? 1 : breakout20 < -0.15 ? -1 : 0)
   }
   const nonZero = dirs.filter(d => d !== 0)
   if (nonZero.length >= 2) {

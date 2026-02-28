@@ -130,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:crypto:history:v2')
+    const kvKey = snapKey.custom('pastperf:crypto:history:v3')
 
     const compute = async () => {
       const pairs = COINS.map(c => c.pairUSD?.binance).filter(Boolean) as string[]

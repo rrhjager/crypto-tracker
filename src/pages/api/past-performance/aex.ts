@@ -266,7 +266,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom('pastperf:aex:v4') // score model updated with trend/vol filters
+    const kvKey = snapKey.custom('pastperf:aex:v5') // score model updated with breakout/stretch filters
 
     const compute = async () => {
       const symbols = AEX.map(x => ({ symbol: x.symbol, name: x.name }))

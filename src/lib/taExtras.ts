@@ -1,9 +1,14 @@
 // src/lib/taExtras.ts
 export type TrendStruct = {
+  ret5: number | null
   ret20: number | null
   ret60: number | null
   rangePos20: number | null
+  rangePos55: number | null
   efficiency14: number | null
+  breakout20: number | null
+  breakout55: number | null
+  stretch20: number | null
 }
 
 export type VolatilityStruct = {
@@ -74,13 +79,68 @@ export function trendEfficiencyAt(closes: number[], i: number, lookback = 14): n
   return clamp(Math.abs(to - from) / path, 0, 1)
 }
 
+function smaAt(closes: number[], i: number, lookback = 20): number | null {
+  if (i < 0 || i - lookback + 1 < 0 || i >= closes.length) return null
+  let sum = 0
+  let n = 0
+  for (let k = i - lookback + 1; k <= i; k++) {
+    const v = closes[k]
+    if (!Number.isFinite(v)) continue
+    sum += v
+    n += 1
+  }
+  if (!n) return null
+  return sum / n
+}
+
+export function breakoutBiasAt(closes: number[], i: number, lookback = 20): number | null {
+  if (i <= 0 || i - lookback < 0 || i >= closes.length) return null
+  let lo = Infinity
+  let hi = -Infinity
+  for (let k = i - lookback; k <= i - 1; k++) {
+    const v = closes[k]
+    if (!Number.isFinite(v)) continue
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  const cur = closes[i]
+  if (!Number.isFinite(cur) || cur <= 0) return null
+
+  if (cur > hi) {
+    const pct = ((cur / hi) - 1) * 100
+    return clamp(0.65 + pct / 10, -1, 1)
+  }
+  if (cur < lo) {
+    const pct = ((cur / lo) - 1) * 100
+    return clamp(-0.65 + pct / 10, -1, 1)
+  }
+
+  const span = hi - lo
+  if (span <= 1e-12) return 0
+  const pos = clamp((cur - lo) / span, 0, 1)
+  return clamp((pos - 0.5) * 1.6, -0.8, 0.8)
+}
+
+export function stretchFromSmaPctAt(closes: number[], i: number, lookback = 20): number | null {
+  const ma = smaAt(closes, i, lookback)
+  const cur = closes[i]
+  if (!Number.isFinite(ma) || !Number.isFinite(cur) || !ma || ma <= 0) return null
+  return ((cur / ma) - 1) * 100
+}
+
 export function latestTrendFeatures(closes: number[], lookback = 20): TrendStruct {
   const i = closes.length - 1
   return {
+    ret5: lookbackReturnPctAt(closes, i, 5),
     ret20: lookbackReturnPctAt(closes, i, lookback),
     ret60: lookbackReturnPctAt(closes, i, Math.max(lookback * 3, lookback + 20)),
     rangePos20: rangePositionAt(closes, i, lookback),
+    rangePos55: rangePositionAt(closes, i, Math.max(55, lookback * 2 + 15)),
     efficiency14: trendEfficiencyAt(closes, i, 14),
+    breakout20: breakoutBiasAt(closes, i, lookback),
+    breakout55: breakoutBiasAt(closes, i, Math.max(55, lookback * 2 + 15)),
+    stretch20: stretchFromSmaPctAt(closes, i, lookback),
   }
 }
 
