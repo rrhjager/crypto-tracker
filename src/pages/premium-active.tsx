@@ -261,13 +261,15 @@ function PickCard({
 export default function PremiumActivePage({ error, generatedAt, thresholdScore, picks }: Props) {
   const buyPicks = picks.filter((item) => item.status === 'BUY')
   const sellPicks = picks.filter((item) => item.status === 'SELL')
+  const qualifiedBuys = buyPicks.filter((item) => item.quality?.qualifies)
+  const qualifiedSells = sellPicks.filter((item) => item.quality?.qualifies)
 
-  const freshBuys = buyPicks.filter(isFreshSignal).sort(sortFreshFirst)
-  const freshSells = sellPicks.filter(isFreshSignal).sort(sortFreshFirst)
-  const olderBuys = buyPicks.filter((item) => !isFreshSignal(item))
-  const olderSells = sellPicks.filter((item) => !isFreshSignal(item))
+  const freshBuys = qualifiedBuys.filter(isFreshSignal).sort(sortFreshFirst)
+  const freshSells = qualifiedSells.filter(isFreshSignal).sort(sortFreshFirst)
   const featuredBuys = freshBuys.slice(0, 5)
   const featuredSells = freshSells.slice(0, 5)
+  const hiddenBuys = Math.max(0, buyPicks.length - featuredBuys.length)
+  const hiddenSells = Math.max(0, sellPicks.length - featuredSells.length)
 
   return (
     <>
@@ -285,8 +287,8 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
             <div className="max-w-3xl">
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Top Aandelen Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
-                Alleen losse aandelen die nu echt door de strengere kwaliteitsfilter komen. Naast sterkte {thresholdScore}+ filteren we nu ook op
-                trendkwaliteit, follow-through, peer-rang en te late instappen.
+                Alleen losse aandelen. Bovenaan staan de beste instapkansen na de extra kwaliteitsfilter. Daaronder zie je de volledige lijst met alle
+                live BUY- en SELL-signalen boven sterkte {thresholdScore}.
               </p>
             </div>
 
@@ -310,13 +312,13 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Nu long</div>
               <div className="mt-1 text-3xl font-semibold text-emerald-900 dark:text-emerald-200">{buyPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Gekwalificeerde BUY-signalen</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live BUY-signalen boven de drempel</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Nu short</div>
               <div className="mt-1 text-3xl font-semibold text-rose-900 dark:text-rose-200">{sellPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Gekwalificeerde SELL-signalen</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live SELL-signalen boven de drempel</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
@@ -354,24 +356,24 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         )}
 
         <section className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 1</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Volg alleen deze gekwalificeerde lijst</div>
+          <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 1</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Bovenste blokken = beste instapkansen</div>
             <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">
-              Alles dat te zwak, te laat of te ver opgelopen is, tonen we hier niet meer.
+              Daar filteren we extra op kwaliteit, timing en te late instappen.
             </div>
           </div>
 
-            <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 2</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Blijft hij staan?</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan houd je de positie vast zolang het signaal in deze lijst blijft staan.</div>
+          <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 2</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Onderste lijsten = volledige pool</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Daar zie je alle live signalen boven de gekozen sterktedrempel.</div>
           </div>
 
-            <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 3</div>
+          <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 3</div>
             <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Verdwijnt hij?</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan sluit je de trade. De oude en minder sterke setups filteren we automatisch weg.</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan sluit je de trade. Staat hij alleen onderaan, dan is het geen top-entry meer maar wel nog actief.</div>
           </div>
         </section>
 
@@ -434,7 +436,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
             <div>
               <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve BUY-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn alle losse aandelen met live BUY die nu nog door de strengere kwaliteitsfilter komen.
+                Dit is de volledige BUY-lijst boven sterkte {thresholdScore}, gesorteerd op kwaliteit.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -445,7 +447,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {buyPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse aandelen met een BUY-signaal die door deze strengere filter komen.
+              Er zijn op dit moment geen losse aandelen met een BUY-signaal boven deze sterkte.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
@@ -461,7 +463,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
             <div>
               <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve SELL-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn alle losse aandelen met live SELL die nu nog door de strengere kwaliteitsfilter komen.
+                Dit is de volledige SELL-lijst boven sterkte {thresholdScore}, gesorteerd op kwaliteit.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -472,7 +474,7 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
 
           {sellPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse aandelen met een SELL-signaal die door deze strengere filter komen.
+              Er zijn op dit moment geen losse aandelen met een SELL-signaal boven deze sterkte.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
@@ -484,9 +486,9 @@ export default function PremiumActivePage({ error, generatedAt, thresholdScore, 
         </section>
 
         <section className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-          <span className="font-medium text-slate-900 dark:text-white">{olderBuys.length}</span> BUY-signalen en{' '}
-          <span className="font-medium text-slate-900 dark:text-white">{olderSells.length}</span> SELL-signalen zijn nog actief, maar te oud voor
-          de bovenste instaplijsten. Als hetzelfde aandeel in meerdere indexen voorkomt, tonen we hem maar een keer.
+          <span className="font-medium text-slate-900 dark:text-white">{hiddenBuys}</span> BUY-signalen en{' '}
+          <span className="font-medium text-slate-900 dark:text-white">{hiddenSells}</span> SELL-signalen staan niet in de bovenste instaplijsten,
+          omdat ze ouder zijn of lager scoren op kwaliteit. Als hetzelfde aandeel in meerdere indexen voorkomt, tonen we hem maar een keer.
         </section>
       </main>
     </>
@@ -527,7 +529,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
       }
     }
 
-    const picks = qualifyActiveSignals([...deduped.values()], thresholdScore).filter((item) => item.quality.qualifies)
+    const picks = qualifyActiveSignals([...deduped.values()], thresholdScore)
 
     return {
       props: {
