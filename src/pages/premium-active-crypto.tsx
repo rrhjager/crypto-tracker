@@ -29,11 +29,15 @@ type CryptoPastPerformanceRow = {
   coin?: string
   name?: string
   current?: {
+    date?: string
     status?: 'BUY' | 'HOLD' | 'SELL'
     score?: number
+    close?: number
   } | null
   lastSignal?: {
+    date?: string
     status?: 'BUY' | 'SELL'
+    close?: number
   } | null
   nextSignal?: {
     signalReturnPct?: number | null
@@ -60,6 +64,31 @@ function formatEuro(v: number | null | undefined) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(v))
+}
+
+function pct(from: number, to: number) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return null
+  return ((to / from) - 1) * 100
+}
+
+function signalAlign(status: 'BUY' | 'SELL', raw: number | null) {
+  if (raw == null) return null
+  return status === 'BUY' ? raw : -raw
+}
+
+function safeDate(d: string | null | undefined) {
+  if (!d) return null
+  const dt = new Date(`${d}T00:00:00Z`)
+  if (!Number.isFinite(dt.getTime())) return null
+  return dt
+}
+
+function diffDays(fromISO: string | null | undefined, toISO: string | null | undefined) {
+  const a = safeDate(fromISO)
+  const b = safeDate(toISO)
+  if (!a || !b) return null
+  const ms = b.getTime() - a.getTime()
+  return Math.max(0, Math.round(ms / 86400000))
 }
 
 function bestOf(a: CryptoPick, b: CryptoPick) {
@@ -104,12 +133,15 @@ function buildPick(row: CryptoPastPerformanceRow, thresholdScore: 70 | 80): Cryp
   const strength = Math.round(status === 'BUY' ? rawScore : (100 - rawScore))
   if (!Number.isFinite(strength) || strength < thresholdScore) return null
 
-  const currentReturnPct =
-    lastSignal?.status === status && Number.isFinite(nextSignal?.signalReturnPct as number)
-      ? Number(nextSignal?.signalReturnPct)
-      : null
+  const openSignalReturn =
+    lastSignal?.status === status ? signalAlign(status, pct(Number(lastSignal?.close), Number(current?.close))) : null
 
-  const daysSinceSignal = Number.isFinite(nextSignal?.daysFromSignal as number) ? Number(nextSignal?.daysFromSignal) : null
+  const currentReturnPct =
+    Number.isFinite(nextSignal?.signalReturnPct as number) ? Number(nextSignal?.signalReturnPct) : openSignalReturn
+
+  const daysSinceSignal = Number.isFinite(nextSignal?.daysFromSignal as number)
+    ? Number(nextSignal?.daysFromSignal)
+    : diffDays(lastSignal?.date, current?.date)
 
   return {
     symbol,
