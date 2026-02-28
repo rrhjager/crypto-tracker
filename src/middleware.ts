@@ -33,6 +33,9 @@ const PUBLIC_ALLOW = [
   // Market Intel (server-side geaggregeerd)
   '/api/market/',
 
+  // Backtest audits
+  '/api/backtest/',
+
   // ✅ Trump quotes endpoint
   '/api/trump/',
 
