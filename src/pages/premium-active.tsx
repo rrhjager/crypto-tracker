@@ -1,8 +1,7 @@
 import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
-import { useMemo } from 'react'
-import { HC_MARKET_META, horizonLabel, type HCMarketKey } from '@/lib/highConfidence'
+import { HC_MARKET_META, horizonLabel } from '@/lib/highConfidence'
 import type { PremiumActiveResponse, PremiumSignal } from '@/lib/premiumActive'
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
@@ -97,19 +96,7 @@ function SignalColumn({
 
 export default function PremiumActivePage({ data, error }: Props) {
   const generatedAt = data?.meta?.generatedAt ? new Date(data.meta.generatedAt).toLocaleString('nl-NL') : '—'
-  const validatedMarkets = data?.markets?.filter((m) => m.passed) || []
   const allSignals = data?.signals?.all || []
-
-  const grouped = useMemo(() => {
-    const equities = allSignals.filter((s) => s.market !== 'CRYPTO')
-    const crypto = allSignals.filter((s) => s.market === 'CRYPTO')
-    return {
-      equitiesBuy: equities.filter((s) => s.status === 'BUY'),
-      equitiesSell: equities.filter((s) => s.status === 'SELL'),
-      cryptoBuy: crypto.filter((s) => s.status === 'BUY'),
-      cryptoSell: crypto.filter((s) => s.status === 'SELL'),
-    }
-  }, [allSignals])
 
   return (
     <>
@@ -192,89 +179,16 @@ export default function PremiumActivePage({ data, error }: Props) {
           </section>
         )}
 
-        <section className="rounded-2xl border border-slate-300/35 bg-white/70 p-5 dark:border-white/15 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Gevalideerde markten</h2>
-          <p className="mb-3 text-[12px] text-slate-700/80 dark:text-white/60">
-            Alleen markten met voldoende closed trades en een sterke leave-one-out hitrate komen door.
-          </p>
-
-          {validatedMarkets.length === 0 ? (
-            <div className="text-sm text-slate-600 dark:text-white/70">Nog geen markten die de strengere validatie halen.</div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {validatedMarkets.map((market) => (
-                <div key={`premium-market-${market.market}`} className="rounded-xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold text-slate-900 dark:text-white">{HC_MARKET_META[market.market as HCMarketKey].label}</div>
-                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:text-amber-200">
-                      VALIDE
-                    </span>
-                  </div>
-                  <div className="mt-2 text-[11px] text-slate-700/80 dark:text-white/65">
-                    {market.recommendation
-                      ? `${horizonLabel(market.recommendation.horizon)} • cutoff ${market.recommendation.cutoff}`
-                      : 'Geen aanbeveling'}
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">LOO win</div>
-                      <div className="font-semibold text-amber-800 dark:text-amber-200">{fmtRatioPct(market.validation.winrate)}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">LOO gem.</div>
-                      <div className="font-semibold text-slate-900 dark:text-white">{fmtRetPct(market.validation.avgReturnPct)}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 dark:text-white/55">Trades</div>
-                      <div className="font-semibold text-slate-900 dark:text-white">{market.validation.trades}</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 text-[10px] text-slate-600 dark:text-white/55">
-                    Live signalen nu: {market.currentSignals} • BUY {market.validation.buyCount} • SELL {market.validation.sellCount}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
         <section className="rounded-2xl border border-amber-400/25 bg-white/70 p-5 dark:border-amber-500/25 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Live premium signalen</h2>
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Hoge Threshold Lijst</h2>
           <p className="mb-3 text-[12px] text-slate-700/80 dark:text-white/60">
-            Deze lijst is bedoeld als de betaalde actieve laag. De gratis indicatorpagina’s blijven ongewijzigd.
+            Alleen signalen die nu de hoge probability-filter halen. Staat een asset hier niet tussen, dan haalt die de hoge threshold nu niet.
           </p>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-300/45 bg-white/70 p-4 dark:border-white/15 dark:bg-white/5">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Aandelen</h3>
-                  <span className="text-[10px] text-slate-600 dark:text-white/60">
-                    {grouped.equitiesBuy.length + grouped.equitiesSell.length} live
-                  </span>
-                </div>
-                <div className="grid gap-3">
-                  <SignalColumn title="BUY" subtitle="Open / houd long" items={grouped.equitiesBuy} />
-                  <SignalColumn title="SELL / EXIT" subtitle="Sluit long of short indien toegestaan" items={grouped.equitiesSell} />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-300/45 bg-white/70 p-4 dark:border-white/15 dark:bg-white/5">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Crypto</h3>
-                  <span className="text-[10px] text-slate-600 dark:text-white/60">
-                    {grouped.cryptoBuy.length + grouped.cryptoSell.length} live
-                  </span>
-                </div>
-                <div className="grid gap-3">
-                  <SignalColumn title="BUY" subtitle="Open / houd long" items={grouped.cryptoBuy} />
-                  <SignalColumn title="SELL / EXIT" subtitle="Sluit long of short indien toegestaan" items={grouped.cryptoSell} />
-                </div>
-              </div>
-            </div>
-          </div>
+          <SignalColumn
+            title="Live High-Probability Signals"
+            subtitle="Dit is de volledige premium-lijst op dit moment."
+            items={allSignals}
+          />
         </section>
       </main>
     </>
