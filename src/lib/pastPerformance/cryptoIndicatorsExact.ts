@@ -198,7 +198,7 @@ function guessIdFromBase(base: string): string | null {
 }
 
 // ---------- market data (same chain, but returns times too) ----------
-export type MarketData = { times: number[]; closes: number[]; volumes: number[] }
+export type MarketData = { times: number[]; closes: number[]; volumes: number[]; highs?: number[]; lows?: number[] }
 
 function cgHeaders() {
   const apiKey = process.env.COINGECKO_API_KEY || ''
@@ -216,12 +216,27 @@ async function okxFetch(instId: string, limit = 900): Promise<MarketData | null>
   const arr: any[] = Array.isArray(j?.data) ? j.data : []
   if (!arr.length) return null
   const rows = arr.slice().reverse()
-  const times = rows.map(x => Number(x?.[0])).filter(Number.isFinite)
-  const closes = rows.map(x => Number(x?.[4])).filter(Number.isFinite)
-  const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
+  const times: number[] = []
+  const highs: number[] = []
+  const lows: number[] = []
+  const closes: number[] = []
+  const volumes: number[] = []
+  for (const x of rows) {
+    const t = Number(x?.[0])
+    const h = Number(x?.[2])
+    const l = Number(x?.[3])
+    const c = Number(x?.[4])
+    const v = Number(x?.[5])
+    if (!Number.isFinite(t) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(c)) continue
+    times.push(t)
+    highs.push(h)
+    lows.push(l)
+    closes.push(c)
+    volumes.push(Number.isFinite(v) ? v : 0)
+  }
   if (closes.length < 50) return null
   if (isSeriesFlat(closes)) return null
-  return { times, closes, volumes }
+  return { times, highs, lows, closes, volumes }
 }
 
 async function bitfinexFetch(tSymbol: string, limit = 900): Promise<MarketData | null> {
@@ -232,12 +247,27 @@ async function bitfinexFetch(tSymbol: string, limit = 900): Promise<MarketData |
   const arr: any[] = await r.json()
   if (!Array.isArray(arr) || !arr.length) return null
   const rows = arr.slice().reverse()
-  const times = rows.map(x => Number(x?.[0])).filter(Number.isFinite)
-  const closes = rows.map(x => Number(x?.[2])).filter(Number.isFinite)
-  const volumes = rows.map(x => Number(x?.[5])).filter(Number.isFinite)
+  const times: number[] = []
+  const highs: number[] = []
+  const lows: number[] = []
+  const closes: number[] = []
+  const volumes: number[] = []
+  for (const x of rows) {
+    const t = Number(x?.[0])
+    const c = Number(x?.[2])
+    const h = Number(x?.[3])
+    const l = Number(x?.[4])
+    const v = Number(x?.[5])
+    if (!Number.isFinite(t) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(c)) continue
+    times.push(t)
+    highs.push(h)
+    lows.push(l)
+    closes.push(c)
+    volumes.push(Number.isFinite(v) ? v : 0)
+  }
   if (closes.length < 50) return null
   if (isSeriesFlat(closes)) return null
-  return { times, closes, volumes }
+  return { times, highs, lows, closes, volumes }
 }
 
 type MarketChart = { prices: [number, number][]; total_volumes: [number, number][] }

@@ -1,5 +1,6 @@
 import type { ScoreMarket, Status } from '@/lib/taScore'
 import { computeScoreStatus } from '@/lib/taScore'
+import { latestRangeStrengthFeatures, latestRelativeStrengthFeatures } from '@/lib/taExtras'
 
 const WINDOW = 200
 
@@ -24,9 +25,12 @@ type TrendSnapshot = {
   ret60?: number | null
   rangePos20: number | null
   efficiency14?: number | null
+  adx14?: number | null
+  relBench20?: number | null
+  relBench60?: number | null
 }
 
-type VolSnapshot = { stdev20: number | null }
+type VolSnapshot = { stdev20: number | null; atrPct14?: number | null }
 
 type IndicatorSnapshot = {
   ma: { ma50: number | null; ma200: number | null }
@@ -105,8 +109,11 @@ export type AssetAuditInput = {
   name: string
   market: ScoreMarket
   times: number[]
+  highs?: number[]
+  lows?: number[]
   closes: number[]
   volumes: number[]
+  benchmarkCloses?: number[] | null
 }
 
 type AssetAuditState = {
@@ -184,6 +191,9 @@ function computeEntryQualification(
   threshold: 70 | 80,
   ind: IndicatorSnapshot
 ) {
+  const readNum = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN
+
   let score = 0
   let maxScore = 0
 
@@ -191,13 +201,17 @@ function computeEntryQualification(
   maxScore += 28
   score += clamp(((strength - threshold) / strengthRoom) * 28, 0, 28)
 
-  const ret20 = Number(ind.trend?.ret20)
-  const ret60 = Number(ind.trend?.ret60)
-  const rangePos20 = Number(ind.trend?.rangePos20)
-  const efficiency14 = Number(ind.trend?.efficiency14)
-  const volumeRatio = Number(ind.volume?.ratio)
-  const stdev20 = Number(ind.volatility?.stdev20)
-  const rsi = Number(ind.rsi)
+  const ret20 = readNum(ind.trend?.ret20)
+  const ret60 = readNum(ind.trend?.ret60)
+  const rangePos20 = readNum(ind.trend?.rangePos20)
+  const efficiency14 = readNum(ind.trend?.efficiency14)
+  const volumeRatio = readNum(ind.volume?.ratio)
+  const stdev20 = readNum(ind.volatility?.stdev20)
+  const atrPct14 = readNum(ind.volatility?.atrPct14)
+  const adx14 = readNum(ind.trend?.adx14)
+  const relBench20 = readNum(ind.trend?.relBench20)
+  const relBench60 = readNum(ind.trend?.relBench60)
+  const rsi = readNum(ind.rsi)
 
   maxScore += 18
   if (Number.isFinite(ret20)) {
@@ -233,6 +247,28 @@ function computeEntryQualification(
     score += 3
   }
 
+  maxScore += 14
+  if (Number.isFinite(adx14)) {
+    if (adx14 >= 24) score += 8
+    else if (adx14 >= 18) score += 5
+    else score += 2
+  } else {
+    score += 4
+  }
+  if (Number.isFinite(relBench20)) {
+    if ((status === 'BUY' && relBench20 >= 1.0) || (status === 'SELL' && relBench20 <= -1.0)) score += 4
+    else if ((status === 'BUY' && relBench20 >= 0) || (status === 'SELL' && relBench20 <= 0)) score += 2
+    else score += 0
+  } else {
+    score += 1.5
+  }
+  if (Number.isFinite(relBench60)) {
+    if ((status === 'BUY' && relBench60 >= 1.5) || (status === 'SELL' && relBench60 <= -1.5)) score += 2
+    else if ((status === 'BUY' && relBench60 >= 0) || (status === 'SELL' && relBench60 <= 0)) score += 1
+  } else {
+    score += 1
+  }
+
   maxScore += 12
   if (Number.isFinite(rsi)) {
     if (status === 'BUY') {
@@ -260,16 +296,25 @@ function computeEntryQualification(
   }
 
   maxScore += 16
+  let volScore = 0
+  let volCount = 0
   if (Number.isFinite(stdev20)) {
-    if (stdev20 >= 0.008 && stdev20 <= 0.09) score += 16
-    else if (stdev20 <= 0.12) score += 10
-    else score += 4
-  } else {
-    score += 8
+    volCount += 1
+    if (stdev20 >= 0.008 && stdev20 <= 0.09) volScore += 16
+    else if (stdev20 <= 0.12) volScore += 10
+    else volScore += 4
   }
+  if (Number.isFinite(atrPct14)) {
+    volCount += 1
+    if (atrPct14 >= 0.6 && atrPct14 <= 8.5) volScore += 16
+    else if (atrPct14 <= 11) volScore += 10
+    else volScore += 4
+  }
+  if (volCount) score += volScore / volCount
+  else score += 8
 
   const qualityScore = Math.round((score / Math.max(1, maxScore)) * 100)
-  const minQuality = threshold === 80 ? 63 : 55
+  const minQuality = threshold === 80 ? 66 : 58
 
   return {
     qualityScore,
@@ -278,8 +323,8 @@ function computeEntryQualification(
 }
 
 export function buildDailySignalSeries(input: AssetAuditInput, computeIndicators: IndicatorComputer) {
-  const { times, closes, volumes, market } = input
-  const n = Math.min(times.length, closes.length, volumes.length)
+  const { times, highs, lows, closes, volumes, market, benchmarkCloses } = input
+  const n = Math.min(times.length, closes.length, volumes.length, highs?.length ?? Infinity, lows?.length ?? Infinity)
   if (n < WINDOW + 2) return [] as DailySignalPoint[]
 
   const points: DailySignalPoint[] = []
@@ -288,15 +333,35 @@ export function buildDailySignalSeries(input: AssetAuditInput, computeIndicators
     const from = i - (WINDOW - 1)
     const cWin = closes.slice(from, i + 1)
     const vWin = volumes.slice(from, i + 1)
+    const hWin = highs?.slice(from, i + 1) ?? []
+    const lWin = lows?.slice(from, i + 1) ?? []
     const ind = computeIndicators(cWin, vWin)
+    const remaining = (n - 1) - i
+    const benchmarkEnd = benchmarkCloses?.length ? benchmarkCloses.length - 1 - remaining : -1
+    const benchmarkWin =
+      benchmarkCloses?.length && benchmarkEnd >= 0
+        ? benchmarkCloses.slice(Math.max(0, benchmarkEnd - (cWin.length - 1)), benchmarkEnd + 1)
+        : null
+    const rangeStrength = latestRangeStrengthFeatures(hWin, lWin, cWin)
+    const relStrength = latestRelativeStrengthFeatures(cWin, benchmarkWin)
+    const trend = {
+      ...ind.trend,
+      adx14: rangeStrength.adx14,
+      relBench20: relStrength.relBench20,
+      relBench60: relStrength.relBench60,
+    }
+    const volatility = {
+      ...ind.volatility,
+      atrPct14: rangeStrength.atrPct14,
+    }
     const { score, status } = computeScoreStatus(
       {
         ma: { ma50: ind.ma.ma50, ma200: ind.ma.ma200 },
         rsi: ind.rsi,
         macd: { hist: ind.macd.hist },
         volume: { ratio: ind.volume.ratio },
-        trend: ind.trend,
-        volatility: ind.volatility,
+        trend,
+        volatility,
       },
       { market }
     )
@@ -305,11 +370,11 @@ export function buildDailySignalSeries(input: AssetAuditInput, computeIndicators
     const strength = status === 'BUY' ? roundedScore : status === 'SELL' ? Math.round(100 - roundedScore) : null
     const q70 =
       status === 'BUY' || status === 'SELL'
-        ? computeEntryQualification(status, strength ?? 0, 70, ind)
+        ? computeEntryQualification(status, strength ?? 0, 70, { ...ind, trend, volatility })
         : { qualityScore: null, qualifies: false }
     const q80 =
       status === 'BUY' || status === 'SELL'
-        ? computeEntryQualification(status, strength ?? 0, 80, ind)
+        ? computeEntryQualification(status, strength ?? 0, 80, { ...ind, trend, volatility })
         : { qualityScore: null, qualifies: false }
 
     points.push({

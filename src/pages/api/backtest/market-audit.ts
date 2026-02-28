@@ -14,6 +14,7 @@ import { NASDAQ } from '@/lib/nasdaq'
 import { NIKKEI225 } from '@/lib/nikkei225'
 import { SENSEX } from '@/lib/sensex'
 import { SP500 } from '@/lib/sp500'
+import { getBenchmarkSpec } from '@/lib/benchmarkSymbols'
 import { fetchMarketDataFor, computeIndicators as computeCryptoIndicators } from '@/lib/pastPerformance/cryptoIndicatorsExact'
 import { fetchMarketDataForEquity, computeIndicators as computeEquityIndicators } from '@/lib/pastPerformance/equityIndicatorsExact'
 import { findBlindFollowPicks, findQualifiedLivePicks, runAssetAudit, summarizeMarketAudit } from '@/lib/backtestAudit'
@@ -188,6 +189,24 @@ async function fetchAsset(spec: MarketSpec, asset: AssetSpec) {
   return { ok: true as const, data: got.data }
 }
 
+async function fetchBenchmarkCloses(spec: MarketSpec) {
+  const bench = getBenchmarkSpec(spec.scoreMarket)
+  if (!bench) return null
+
+  try {
+    if (bench.kind === 'crypto') {
+      const got = await fetchMarketDataFor(bench.symbol, { limit: 900 })
+      if (!got.ok) return null
+      return got.data.closes
+    }
+    const got = await fetchMarketDataForEquity(bench.symbol, { range: '2y', interval: '1d' })
+    if (!got.ok) return null
+    return got.data.closes
+  } catch {
+    return null
+  }
+}
+
 function chunk<T>(arr: T[], size: number) {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
@@ -201,12 +220,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom(`backtest:market-audit:v4:${market}`)
+    const kvKey = snapKey.custom(`backtest:market-audit:v5:${market}`)
 
     const compute = async () => {
       const batches = chunk(spec.assets, spec.batchSize)
       const states = []
       const errors: Array<{ symbol: string; error: string }> = []
+      const benchmarkCloses = await fetchBenchmarkCloses(spec)
 
       for (let bi = 0; bi < batches.length; bi++) {
         const group = batches[bi]
@@ -228,8 +248,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 name: asset.name,
                 market: spec.scoreMarket,
                 times: got.data.times,
+                highs: got.data.highs,
+                lows: got.data.lows,
                 closes: got.data.closes,
                 volumes: got.data.volumes,
+                benchmarkCloses,
               },
               spec.kind === 'crypto' ? computeCryptoIndicators : computeEquityIndicators
             )
@@ -263,7 +286,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           processedAssets: states.length,
           skippedAssets: errors.length,
           note:
-            'Dit is een voorspellende event-backtest op de echte score-engine. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
+            'Dit is een voorspellende event-backtest op de echte score-engine, inclusief ADX/ATR-achtige trendkwaliteit en relative-strength filters waar data beschikbaar is. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
         },
         strategies: summarizeMarketAudit(states),
         qualifiedLivePicks,

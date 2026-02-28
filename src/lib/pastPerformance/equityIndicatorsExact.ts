@@ -4,7 +4,7 @@ import { latestTrendFeatures, latestVolatilityFeatures } from '@/lib/taExtras'
 export type FetchOk = {
     ok: true
     source: 'yahoo'
-    data: { times: number[]; closes: number[]; volumes: number[] } // times in ms
+    data: { times: number[]; highs: number[]; lows: number[]; closes: number[]; volumes: number[] } // times in ms
   }
   export type FetchErr = { ok: false; error: string }
   export type FetchResult = FetchOk | FetchErr
@@ -34,23 +34,31 @@ export type FetchOk = {
       const res = j?.chart?.result?.[0]
       const ts: number[] = Array.isArray(res?.timestamp) ? res.timestamp : []
       const quote = res?.indicators?.quote?.[0]
+      const highRaw: Array<number | null> = Array.isArray(quote?.high) ? quote.high : []
+      const lowRaw: Array<number | null> = Array.isArray(quote?.low) ? quote.low : []
       const closeRaw: Array<number | null> = Array.isArray(quote?.close) ? quote.close : []
       const volRaw: Array<number | null> = Array.isArray(quote?.volume) ? quote.volume : []
   
       const times: number[] = []
+      const highs: number[] = []
+      const lows: number[] = []
       const closes: number[] = []
       const volumes: number[] = []
   
       for (let i = 0; i < ts.length; i++) {
         const c = closeRaw[i]
         if (c == null || !Number.isFinite(c)) continue
+        const h = highRaw[i]
+        const l = lowRaw[i]
         times.push(ts[i] * 1000) // ✅ ms like crypto
+        highs.push(h != null && Number.isFinite(h) ? h : c)
+        lows.push(l != null && Number.isFinite(l) ? l : c)
         closes.push(c)
         const v = volRaw[i]
         volumes.push(v != null && Number.isFinite(v) ? v : 0)
       }
   
-      return { ok: true, source: 'yahoo', data: { times, closes, volumes } }
+      return { ok: true, source: 'yahoo', data: { times, highs, lows, closes, volumes } }
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) }
     }

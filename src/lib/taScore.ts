@@ -28,8 +28,11 @@ export type TrendStruct = {
   breakout20?: number | null
   breakout55?: number | null
   stretch20?: number | null
+  adx14?: number | null
+  relBench20?: number | null
+  relBench60?: number | null
 }
-export type VolatilityStruct = { stdev20: number | null }
+export type VolatilityStruct = { stdev20: number | null; atrPct14?: number | null }
 
 export function statusFromScore(score: number): Status {
   if (score >= 66) return 'BUY'
@@ -266,6 +269,9 @@ export function computeScoreStatus(ind: {
   const breakout20 = ind.trend?.breakout20
   const breakout55 = ind.trend?.breakout55
   const stretch20 = ind.trend?.stretch20
+  const adx14 = ind.trend?.adx14
+  const relBench20 = ind.trend?.relBench20
+  const relBench60 = ind.trend?.relBench60
   if (
     typeof ret5 === 'number' ||
     typeof ret20 === 'number' ||
@@ -275,7 +281,10 @@ export function computeScoreStatus(ind: {
     typeof efficiency14 === 'number' ||
     typeof breakout20 === 'number' ||
     typeof breakout55 === 'number' ||
-    typeof stretch20 === 'number'
+    typeof stretch20 === 'number' ||
+    typeof adx14 === 'number' ||
+    typeof relBench20 === 'number' ||
+    typeof relBench60 === 'number'
   ) {
     hasTrend = true
     const mShort = typeof ret5 === 'number'
@@ -298,19 +307,31 @@ export function computeScoreStatus(ind: {
       : 0
     const bo20 = typeof breakout20 === 'number' ? clamp(breakout20, -1, 1) : 0
     const bo55 = typeof breakout55 === 'number' ? clamp(breakout55, -1, 1) : 0
+    const rs20 = typeof relBench20 === 'number'
+      ? clamp(relBench20 / Math.max(1e-9, AGGR.trend.retRefPct * 0.45), -1, 1)
+      : 0
+    const rs60 = typeof relBench60 === 'number'
+      ? clamp(relBench60 / Math.max(1e-9, AGGR.trend.retRefPct * 0.85), -1, 1)
+      : 0
+    const adxConviction = typeof adx14 === 'number'
+      ? clamp((adx14 - 16) / 22, 0, 1)
+      : 0
     const rawMix =
-      0.20 * mShort +
+      0.18 * mShort +
       0.22 * m +
       0.12 * mLong +
       0.10 * p +
       0.08 * pLong +
       0.14 * bo20 +
       0.06 * bo55 +
-      0.08 * e
+      0.08 * e +
+      0.08 * rs20 +
+      0.04 * rs60
     const stretchPenalty = typeof stretch20 === 'number'
       ? clamp((Math.abs(stretch20) - 6) / 10, 0, 1)
       : 0
-    const mix = clamp(rawMix * (1 - 0.30 * stretchPenalty), -1, 1)
+    const convictionBoost = 1 + 0.22 * adxConviction
+    const mix = clamp(rawMix * convictionBoost * (1 - 0.30 * stretchPenalty), -1, 1)
     trendScore = clamp(50 + mix * AGGR.trend.gain, 0, 100)
   }
 
@@ -318,18 +339,40 @@ export function computeScoreStatus(ind: {
   let volRegScore = 50
   let hasVolReg = false
   const stdev20 = ind.volatility?.stdev20
-  if (typeof stdev20 === 'number') {
+  const atrPct14 = ind.volatility?.atrPct14
+  if (typeof stdev20 === 'number' || typeof atrPct14 === 'number') {
     hasVolReg = true
     const { low, mid, high } = AGGR.volReg
-    if (stdev20 <= low) {
-      volRegScore = 45 + (stdev20 / Math.max(1e-9, low)) * 20
-    } else if (stdev20 <= mid) {
-      volRegScore = 65 + ((stdev20 - low) / Math.max(1e-9, mid - low)) * 20
-    } else if (stdev20 <= high) {
-      volRegScore = 85 - ((stdev20 - mid) / Math.max(1e-9, high - mid)) * 55
-    } else {
-      volRegScore = 22
+    let stdevScore = 50
+    if (typeof stdev20 === 'number') {
+      if (stdev20 <= low) {
+        stdevScore = 45 + (stdev20 / Math.max(1e-9, low)) * 20
+      } else if (stdev20 <= mid) {
+        stdevScore = 65 + ((stdev20 - low) / Math.max(1e-9, mid - low)) * 20
+      } else if (stdev20 <= high) {
+        stdevScore = 85 - ((stdev20 - mid) / Math.max(1e-9, high - mid)) * 55
+      } else {
+        stdevScore = 22
+      }
     }
+    let atrScore = 50
+    if (typeof atrPct14 === 'number') {
+      if (atrPct14 <= 0.5) {
+        atrScore = 42 + (atrPct14 / 0.5) * 14
+      } else if (atrPct14 <= 2.2) {
+        atrScore = 56 + ((atrPct14 - 0.5) / 1.7) * 26
+      } else if (atrPct14 <= 8.5) {
+        atrScore = 82 - ((atrPct14 - 2.2) / 6.3) * 46
+      } else {
+        atrScore = 24
+      }
+    }
+    volRegScore =
+      typeof stdev20 === 'number' && typeof atrPct14 === 'number'
+        ? (stdevScore * 0.55) + (atrScore * 0.45)
+        : typeof atrPct14 === 'number'
+          ? atrScore
+          : stdevScore
     volRegScore = clamp(volRegScore, 0, 100)
   }
 
@@ -350,6 +393,9 @@ export function computeScoreStatus(ind: {
   }
   if (hasTrend && typeof breakout20 === 'number') {
     dirs.push(breakout20 > 0.15 ? 1 : breakout20 < -0.15 ? -1 : 0)
+  }
+  if (hasTrend && typeof relBench20 === 'number') {
+    dirs.push(relBench20 > 1.2 ? 1 : relBench20 < -1.2 ? -1 : 0)
   }
   const nonZero = dirs.filter(d => d !== 0)
   if (nonZero.length >= 2) {

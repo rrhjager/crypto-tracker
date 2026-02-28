@@ -49,12 +49,12 @@
    throw lastErr instanceof Error ? lastErr : new Error('Fetch failed');
  }
  
- /** Fetch OHLC arrays (timestamps, close, volume). */
- export async function getYahooDailyOHLC(
-   symbol: string,
-   rangeOrDays: YahooRange | number = '2y',
-   maxPoints = 420
- ): Promise<{ timestamps: number[]; closes: number[]; volumes: number[] }> {
+/** Fetch OHLC arrays (timestamps, high, low, close, volume). */
+export async function getYahooDailyOHLC(
+  symbol: string,
+  rangeOrDays: YahooRange | number = '2y',
+  maxPoints = 420
+): Promise<{ timestamps: number[]; highs: number[]; lows: number[]; closes: number[]; volumes: number[] }> {
    const range =
      typeof rangeOrDays === 'number'
        ? daysToRange(Math.max(1, Math.floor(rangeOrDays)))
@@ -77,16 +77,18 @@
    const r = data?.chart?.result?.[0] ?? {};
    const ts: unknown[] = Array.isArray(r?.timestamp) ? r.timestamp : [];
  
-   const q = r?.indicators?.quote?.[0] ?? {};
-   const closesPrimary: unknown[] = Array.isArray(q?.close) ? q.close : [];
-   const volumesRaw: unknown[] = Array.isArray(q?.volume) ? q.volume : [];
+  const q = r?.indicators?.quote?.[0] ?? {};
+  const highsRaw: unknown[] = Array.isArray(q?.high) ? q.high : [];
+  const lowsRaw: unknown[] = Array.isArray(q?.low) ? q.low : [];
+  const closesPrimary: unknown[] = Array.isArray(q?.close) ? q.close : [];
+  const volumesRaw: unknown[] = Array.isArray(q?.volume) ? q.volume : [];
  
    // Fallback: sommige responses hebben nulls in quote.close maar wel values in adjclose.adjclose
    const adj = r?.indicators?.adjclose?.[0] ?? {};
    const closesAdj: unknown[] = Array.isArray(adj?.adjclose) ? adj.adjclose : [];
  
    // Zip, clean, en keep maxPoints van het einde:
-   const zipped: Array<{ t: number; c: number; v: number }> = [];
+  const zipped: Array<{ t: number; h: number; l: number; c: number; v: number }> = [];
    const N = Array.isArray(ts) ? ts.length : 0;
  
    for (let i = 0; i < N; i++) {
@@ -101,26 +103,34 @@
          ? c1
          : null;
  
-     const v0 = volumesRaw[i];
-     const v =
-       typeof v0 === 'number' && Number.isFinite(v0) ? v0 : 0;
- 
-     if (typeof t === 'number' && Number.isFinite(t) && typeof c === 'number') {
-       zipped.push({ t, c, v });
-     }
-   }
+    const v0 = volumesRaw[i];
+    const v =
+      typeof v0 === 'number' && Number.isFinite(v0) ? v0 : 0;
+    const h0 = highsRaw[i]
+    const l0 = lowsRaw[i]
+    const h =
+      typeof h0 === 'number' && Number.isFinite(h0) ? h0 : typeof c === 'number' ? c : null
+    const l =
+      typeof l0 === 'number' && Number.isFinite(l0) ? l0 : typeof c === 'number' ? c : null
+
+    if (typeof t === 'number' && Number.isFinite(t) && typeof c === 'number' && typeof h === 'number' && typeof l === 'number') {
+      zipped.push({ t, h, l, c, v });
+    }
+  }
  
    const out =
      typeof rangeOrDays === 'number'
        ? zipped.slice(-Math.max(1, Math.floor(rangeOrDays)))
        : zipped.slice(-Math.max(1, Math.min(maxPoints, zipped.length)));
  
-   return {
-     timestamps: out.map(x => x.t),
-     closes: out.map(x => x.c),
-     volumes: out.map(x => x.v),
-   };
- }
+  return {
+    timestamps: out.map(x => x.t),
+    highs: out.map(x => x.h),
+    lows: out.map(x => x.l),
+    closes: out.map(x => x.c),
+    volumes: out.map(x => x.v),
+  };
+}
  
  /** Backward-compatible: get only closes, accepts days or range. */
  export async function getYahooDailyCloses(
