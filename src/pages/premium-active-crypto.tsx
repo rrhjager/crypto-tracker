@@ -490,10 +490,14 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
   const thresholdScore = parseThreshold(context.query.threshold)
 
   try {
+    const forwardedProto = context.req.headers['x-forwarded-proto']
+    const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || 'https')
+    const reqHost = Array.isArray(context.req.headers.host) ? context.req.headers.host[0] : context.req.headers.host
+    const requestBase = reqHost ? `${proto}://${reqHost}` : ''
     const base =
       process.env.NODE_ENV === 'development'
         ? 'http://localhost:3000'
-        : (BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
+        : (requestBase || BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
 
     const r = await fetch(`${base}/api/past-performance/crypto`, { cache: 'no-store' })
     if (!r.ok) {
