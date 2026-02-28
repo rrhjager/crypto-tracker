@@ -147,9 +147,20 @@ export function qualifyActiveSignals<T extends QualifiedSignalCandidate>(items: 
     })
   })
 
-  if (thresholdScore === 80 && !withPeerScores.some((item) => item.quality.qualifies)) {
-    for (const item of withPeerScores) {
-      item.quality.qualifies = item.quality.qualityScore >= 50 && !item.quality.isLateEntry && !item.quality.isOverextended
+  if (thresholdScore === 80) {
+    const eligibleFallback = withPeerScores.filter(
+      (item) => !item.quality.isLateEntry && !item.quality.isOverextended
+    )
+    const minTarget = Math.min(5, eligibleFallback.length)
+    let qualifiedCount = withPeerScores.filter((item) => item.quality.qualifies).length
+
+    if (qualifiedCount < minTarget) {
+      for (const item of eligibleFallback) {
+        if (item.quality.qualifies) continue
+        item.quality.qualifies = true
+        qualifiedCount += 1
+        if (qualifiedCount >= minTarget) break
+      }
     }
   }
 
