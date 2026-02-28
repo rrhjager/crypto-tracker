@@ -1,7 +1,9 @@
 // src/lib/taExtras.ts
 export type TrendStruct = {
   ret20: number | null
+  ret60: number | null
   rangePos20: number | null
+  efficiency14: number | null
 }
 
 export type VolatilityStruct = {
@@ -54,11 +56,31 @@ export function realizedVolatilityAt(closes: number[], i: number, lookback = 20)
   return Math.sqrt(variance)
 }
 
+export function trendEfficiencyAt(closes: number[], i: number, lookback = 14): number | null {
+  if (i < 0 || i - lookback < 0 || i >= closes.length) return null
+  const from = closes[i - lookback]
+  const to = closes[i]
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+
+  let path = 0
+  for (let k = i - lookback + 1; k <= i; k++) {
+    const a = closes[k - 1]
+    const b = closes[k]
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue
+    path += Math.abs(b - a)
+  }
+
+  if (path <= 1e-12) return 0
+  return clamp(Math.abs(to - from) / path, 0, 1)
+}
+
 export function latestTrendFeatures(closes: number[], lookback = 20): TrendStruct {
   const i = closes.length - 1
   return {
     ret20: lookbackReturnPctAt(closes, i, lookback),
+    ret60: lookbackReturnPctAt(closes, i, Math.max(lookback * 3, lookback + 20)),
     rangePos20: rangePositionAt(closes, i, lookback),
+    efficiency14: trendEfficiencyAt(closes, i, 14),
   }
 }
 

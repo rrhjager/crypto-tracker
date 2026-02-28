@@ -18,7 +18,12 @@ export type ScoreMode = 'STANDARD' | 'HIGH_CONF'
 export type MAStruct    = { ma50: number | null; ma200: number | null }
 export type MACDStruct  = { hist: number | null }
 export type VolumeStruct= { ratio: number | null }
-export type TrendStruct = { ret20: number | null; rangePos20: number | null }
+export type TrendStruct = {
+  ret20: number | null
+  ret60?: number | null
+  rangePos20: number | null
+  efficiency14?: number | null
+}
 export type VolatilityStruct = { stdev20: number | null }
 
 export function statusFromScore(score: number): Status {
@@ -163,7 +168,7 @@ const AGGR = {
   macd: { ref: 0.006, scale: 22 }, // 0.6% van MA50 ≈ sterk signaal
   // Volume: center rond 1.0 met hogere gain
   vol: { gain: 45 }, // was ~50±30 → nu ±45
-  // Trend (nieuw): 20d return + positie in 20d range
+  // Trend (nieuw): 20d / 60d return + positie in 20d range + trend efficiency
   trend: { retRefPct: 14, gain: 38 },
   // Vol-regime (nieuw): mild belonen in “handelbare” band, extreem vol afstraffen
   volReg: { low: 0.006, mid: 0.028, high: 0.075 },
@@ -244,20 +249,28 @@ export function computeScoreStatus(ind: {
     volScore = clamp(50 + delta * AGGR.vol.gain, 0, 100)
   }
 
-  // --- Trend (18%) — ret20 + range-pos20
+  // --- Trend (18%) — ret20 + ret60 + range-pos20 + trend efficiency
   let trendScore = 50
   let hasTrend = false
   const ret20 = ind.trend?.ret20
+  const ret60 = ind.trend?.ret60
   const rangePos20 = ind.trend?.rangePos20
-  if (typeof ret20 === 'number' || typeof rangePos20 === 'number') {
+  const efficiency14 = ind.trend?.efficiency14
+  if (typeof ret20 === 'number' || typeof ret60 === 'number' || typeof rangePos20 === 'number' || typeof efficiency14 === 'number') {
     hasTrend = true
     const m = typeof ret20 === 'number'
       ? clamp(ret20 / Math.max(1e-9, AGGR.trend.retRefPct), -1, 1)
       : 0
+    const mLong = typeof ret60 === 'number'
+      ? clamp(ret60 / Math.max(1e-9, AGGR.trend.retRefPct * 2.6), -1, 1)
+      : 0
     const p = typeof rangePos20 === 'number'
       ? clamp((rangePos20 - 0.5) * 2, -1, 1)
       : 0
-    const mix = 0.6 * m + 0.4 * p
+    const e = typeof efficiency14 === 'number'
+      ? clamp((efficiency14 - 0.35) / 0.45, -1, 1)
+      : 0
+    const mix = 0.38 * m + 0.22 * mLong + 0.18 * p + 0.22 * e
     trendScore = clamp(50 + mix * AGGR.trend.gain, 0, 100)
   }
 

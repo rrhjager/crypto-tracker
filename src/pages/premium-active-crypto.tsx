@@ -2,6 +2,7 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import { coinHref } from '@/lib/coins'
+import { qualifyActiveSignals, type QualifiedSignalMetrics } from '@/lib/qualifiedActive'
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 const FRESH_SIGNAL_MAX_DAYS = 10
@@ -16,6 +17,11 @@ type CryptoPick = {
   currentReturnPct: number | null
   valueOf100Now: number | null
   daysSinceSignal: number | null
+  d7Signal: number | null
+  d30Signal: number | null
+  mfeSignal: number | null
+  maeSignal: number | null
+  quality: QualifiedSignalMetrics | null
 }
 
 type Props = {
@@ -42,6 +48,14 @@ type CryptoPastPerformanceRow = {
   nextSignal?: {
     signalReturnPct?: number | null
     daysFromSignal?: number | null
+  } | null
+  perf?: {
+    d7Signal?: number | null
+    d30Signal?: number | null
+  } | null
+  untilNext?: {
+    mfeSignal?: number | null
+    maeSignal?: number | null
   } | null
 }
 
@@ -153,6 +167,11 @@ function buildPick(row: CryptoPastPerformanceRow, thresholdScore: 70 | 80): Cryp
     currentReturnPct,
     valueOf100Now: Number.isFinite(currentReturnPct as number) ? 100 * (1 + Number(currentReturnPct) / 100) : null,
     daysSinceSignal,
+    d7Signal: Number.isFinite(row?.perf?.d7Signal as number) ? Number(row?.perf?.d7Signal) : null,
+    d30Signal: Number.isFinite(row?.perf?.d30Signal as number) ? Number(row?.perf?.d30Signal) : null,
+    mfeSignal: Number.isFinite(row?.untilNext?.mfeSignal as number) ? Number(row?.untilNext?.mfeSignal) : null,
+    maeSignal: Number.isFinite(row?.untilNext?.maeSignal as number) ? Number(row?.untilNext?.maeSignal) : null,
+    quality: null,
   }
 }
 
@@ -193,6 +212,11 @@ function PickCard({
             >
               Sterkte {item.strength}
             </span>
+            {item.quality ? (
+              <span className="rounded-full border border-slate-400/35 bg-slate-100/80 px-2.5 py-1 text-[10px] font-semibold text-slate-900 dark:border-white/15 dark:bg-white/10 dark:text-white/80">
+                Kwaliteit {item.quality.qualityScore}
+              </span>
+            ) : null}
           </div>
           <div className="mt-1 text-sm text-slate-800 dark:text-white/85">{item.name}</div>
           <div className="mt-1 text-[11px] text-slate-700/75 dark:text-white/60">Crypto</div>
@@ -211,7 +235,7 @@ function PickCard({
         <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
           <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Huidige status</div>
           <div className={`mt-1 text-sm font-semibold ${isBuy ? 'text-emerald-900 dark:text-emerald-200' : 'text-rose-900 dark:text-rose-200'}`}>
-            {isBuy ? 'Nu kopen of vasthouden' : 'Nu shorten of short vasthouden'}
+            {isBuy ? 'Nu kopen of vasthouden' : 'Nu shorten of vasthouden'}
           </div>
         </div>
         <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
@@ -252,8 +276,8 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div className="max-w-3xl">
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Top Crypto Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
-                Dit is nu precies een losse cryptolijst. Geen marktfilter. Alleen coins die op dit moment een BUY- of SELL-signaal hebben en een
-                individuele sterkte van minimaal {thresholdScore}. Bovenaan staan alleen verse instapkansen, niet oude trades die al lang lopen.
+                Alleen losse crypto die nu echt door de strengere kwaliteitsfilter komt. Naast sterkte {thresholdScore}+ filteren we nu ook op
+                trendkwaliteit, follow-through, peer-rang en te late instappen.
               </p>
             </div>
 
@@ -277,13 +301,13 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Crypto long</div>
               <div className="mt-1 text-3xl font-semibold text-emerald-900 dark:text-emerald-200">{buyPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live BUY-signalen</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Gekwalificeerde BUY-signalen</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Crypto short</div>
               <div className="mt-1 text-3xl font-semibold text-rose-900 dark:text-rose-200">{sellPicks.length}</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Live SELL-signalen</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Gekwalificeerde SELL-signalen</div>
             </div>
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
@@ -323,22 +347,22 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
         <section className="grid gap-3 md:grid-cols-3">
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 1</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Volg alleen deze lijsten</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Volg alleen deze gekwalificeerde lijst</div>
             <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">
-              Alles buiten deze lijsten negeer je. Groen is long, rood is short.
+              Alles dat te zwak, te laat of te ver opgelopen is, tonen we hier niet meer.
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 2</div>
             <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Blijft hij staan?</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan houd je de long of short vast zolang hij in zijn lijst blijft staan.</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan houd je de positie vast zolang het signaal in deze lijst blijft staan.</div>
           </div>
 
           <div className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 dark:border-white/10 dark:bg-white/5">
             <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Regel 3</div>
             <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Verdwijnt hij?</div>
-            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan sluit je de trade. Zo simpel moet deze pagina zijn.</div>
+            <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Dan sluit je de trade. De oude en minder sterke setups filteren we automatisch weg.</div>
           </div>
         </section>
 
@@ -347,7 +371,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div>
               <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 verse koopkansen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Alleen nieuwe of nog jonge BUY-signalen. Alles dat al langer dan {FRESH_SIGNAL_MAX_DAYS} dagen open staat komt hier niet meer in.
+                Dit zijn de beste nieuwe of nog jonge BUY-signalen na de extra kwaliteitsfilter.
               </p>
             </div>
             <div className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-emerald-900 dark:text-emerald-200">
@@ -374,7 +398,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div>
               <h2 className="text-xl font-semibold text-rose-900 dark:text-rose-200">Top 5 verse shortkansen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Alleen nieuwe of nog jonge SELL-signalen. Alles dat al langer dan {FRESH_SIGNAL_MAX_DAYS} dagen open staat komt hier niet meer in.
+                Dit zijn de beste nieuwe of nog jonge SELL-signalen na de extra kwaliteitsfilter.
               </p>
             </div>
             <div className="rounded-2xl bg-rose-500/15 px-4 py-2 text-center text-rose-900 dark:text-rose-200">
@@ -401,7 +425,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div>
               <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve BUY-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit is de volledige cryptolijst met live BUY en een huidige sterkte van minimaal {thresholdScore}. Hieronder staan dus ook signalen die al langer lopen.
+                Dit zijn alle losse crypto met live BUY die nu nog door de strengere kwaliteitsfilter komen.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -412,7 +436,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
 
           {buyPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse crypto met een BUY-signaal die aan deze sterkte-eis voldoen.
+              Er zijn op dit moment geen losse crypto met een BUY-signaal die door deze strengere filter komen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
@@ -428,7 +452,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
             <div>
               <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Alle actieve SELL-signalen</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit is de volledige cryptolijst met live SELL en een huidige sterkte van minimaal {thresholdScore}. Dit zijn de short-kansen.
+                Dit zijn alle losse crypto met live SELL die nu nog door de strengere kwaliteitsfilter komen.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-2 text-center text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white">
@@ -439,7 +463,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
 
           {sellPicks.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300/60 bg-white/60 px-4 py-6 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
-              Er zijn op dit moment geen losse crypto met een SELL-signaal die aan deze sterkte-eis voldoen.
+              Er zijn op dit moment geen losse crypto met een SELL-signaal die door deze strengere filter komen.
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
@@ -452,8 +476,8 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, thresholdS
 
         <section className="rounded-2xl border border-slate-300/45 bg-white/80 p-4 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
           <span className="font-medium text-slate-900 dark:text-white">{olderBuys.length}</span> BUY-signalen en{' '}
-          <span className="font-medium text-slate-900 dark:text-white">{olderSells.length}</span> SELL-signalen lopen al langer dan {FRESH_SIGNAL_MAX_DAYS}{' '}
-          dagen en staan daarom niet in de bovenste instaplijsten.
+          <span className="font-medium text-slate-900 dark:text-white">{olderSells.length}</span> SELL-signalen zijn nog actief, maar te oud voor de
+          bovenste instaplijsten.
         </section>
       </main>
     </>
@@ -495,16 +519,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
       deduped.set(dedupeKey, existing ? bestOf(existing, pick) : pick)
     }
 
-    const picks = [...deduped.values()].sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'BUY' ? -1 : 1
-      if (b.strength !== a.strength) return b.strength - a.strength
-
-      const aRet = Number.isFinite(a.currentReturnPct as number) ? Number(a.currentReturnPct) : -999999
-      const bRet = Number.isFinite(b.currentReturnPct as number) ? Number(b.currentReturnPct) : -999999
-      if (bRet !== aRet) return bRet - aRet
-
-      return a.symbol.localeCompare(b.symbol)
-    })
+    const picks = qualifyActiveSignals([...deduped.values()], thresholdScore).filter((item) => item.quality.qualifies)
 
     return {
       props: {
