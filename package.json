@@ -6,6 +6,7 @@
     "dev": "next dev -p 3000",
     "build": "prisma migrate deploy && next build",
     "start": "next start -p 3000",
+    "forecast:eval": "node scripts/forecast-eval.mjs",
     "postinstall": "prisma generate",
     "prisma:migrate": "prisma migrate deploy"
   },

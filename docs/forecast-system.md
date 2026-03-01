@@ -140,6 +140,42 @@ curl "https://www.signalhub.tech/api/forecast?symbol=ASML.AS&assetType=equity&ho
 curl "https://www.signalhub.tech/api/forecast?symbol=BTC&assetType=crypto&horizon=7"
 ```
 
+## Reproducible Evaluation Run
+Start the app locally:
+
+```bash
+npm run dev
+```
+
+In a second shell, call the same forecast module through the saved evaluator:
+
+```bash
+npm run forecast:eval -- \
+  --symbol ASML.AS \
+  --asset-type equity \
+  --market AEX \
+  --horizon 14 \
+  --fee-bps-equity 10 \
+  --slippage-bps 10
+```
+
+Crypto example:
+
+```bash
+npm run forecast:eval -- \
+  --symbol BTC \
+  --asset-type crypto \
+  --horizon 7 \
+  --fee-bps-crypto 20 \
+  --slippage-bps 10
+```
+
+The evaluator:
+- hits the same `/api/forecast` route used by the UI
+- passes explicit cost assumptions
+- writes the full JSON response to `tmp/forecast-evals/`
+- prints a compact summary with the live action plus the saved evaluation metrics
+
 ## UI Integration
 Active pages now expose a page-level horizon selector (`7D / 14D / 30D`) and load a cached forecast panel on featured cards.
 
