@@ -2,6 +2,7 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import { HC_MARKET_META } from '@/lib/highConfidence'
+import { ForecastPanel } from '@/components/ForecastPanel'
 
 type StockMarketKey = 'AEX' | 'DAX' | 'DOWJONES' | 'ETFS' | 'FTSE100' | 'HANGSENG' | 'NASDAQ' | 'NIKKEI225' | 'SENSEX' | 'SP500'
 
@@ -24,6 +25,7 @@ type Props = {
   error: string | null
   generatedAt: string
   picks: StockPick[]
+  selectedHorizon: 7 | 14 | 30
 }
 
 type AuditPick = {
@@ -133,7 +135,7 @@ function bestOf(a: StockPick, b: StockPick) {
   return pickScore(b) > pickScore(a) ? b : a
 }
 
-function PickCard({ item, featured = false }: { item: StockPick; featured?: boolean }) {
+function PickCard({ item, featured = false, forecastHorizon = null }: { item: StockPick; featured?: boolean; forecastHorizon?: 7 | 14 | 30 | null }) {
   const isBuy = item.status === 'BUY'
 
   return (
@@ -193,17 +195,21 @@ function PickCard({ item, featured = false }: { item: StockPick; featured?: bool
       </div>
 
       <div className="mt-3 text-[11px] text-slate-700/75 dark:text-white/55">{item.strategyLabel}</div>
+      {featured && forecastHorizon ? (
+        <ForecastPanel symbol={item.symbol} assetType="equity" horizon={forecastHorizon} marketHint={item.market} />
+      ) : null}
     </Link>
   )
 }
 
-export default function PremiumActivePage({ error, generatedAt, picks }: Props) {
+export default function PremiumActivePage({ error, generatedAt, picks, selectedHorizon }: Props) {
   const buyPicks = picks.filter((item) => item.status === 'BUY').sort(sortByBest)
   const sellPicks = picks.filter((item) => item.status === 'SELL').sort(sortByBest)
   const featuredBuys = buyPicks.slice(0, 5)
   const featuredSells = sellPicks.slice(0, 5)
   const hiddenBuys = Math.max(0, buyPicks.length - featuredBuys.length)
   const hiddenSells = Math.max(0, sellPicks.length - featuredSells.length)
+  const horizonOptions: Array<7 | 14 | 30> = [7, 14, 30]
 
   return (
     <>
@@ -223,7 +229,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Premium Aandelen Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
                 Deze pagina toont alleen live aandelen-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.
-                De ruwe scorepool zie je hier dus bewust niet meer.
+                De ruwe scorepool zie je hier dus bewust niet meer. Bovenaan krijgt elk featured signaal nu ook een leakage-free forecast voor {selectedHorizon} dagen.
               </p>
             </div>
 
@@ -241,6 +247,26 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
                 Terug naar home
               </Link>
             </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-600 dark:text-white/55">Forecast horizon</span>
+            {horizonOptions.map((h) => {
+              const active = h === selectedHorizon
+              return (
+                <Link
+                  key={h}
+                  href={`/premium-active?h=${h}`}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] font-medium ${
+                    active
+                      ? 'border-emerald-500/40 bg-emerald-500/12 text-emerald-900 dark:text-emerald-200'
+                      : 'border-slate-300/50 bg-white/70 text-slate-800 hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-white'
+                  }`}
+                >
+                  {h}D
+                </Link>
+              )
+            })}
           </div>
 
           <div className="mt-5 grid gap-3 md:grid-cols-3">
@@ -297,7 +323,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
             <div>
               <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Aanbevolen Nu</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn de aandelen die ik nu zou kopen op basis van de huidige audit-gevalideerde indicatoren. Deze lijst ververst automatisch.
+                Dit zijn de aandelen die ik nu zou kopen op basis van de huidige audit-gevalideerde indicatoren. Elke kaart toont ook een probabilistische {selectedHorizon}D forecast.
               </p>
             </div>
             <div className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-emerald-900 dark:text-emerald-200">
@@ -313,7 +339,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {featuredBuys.map((item) => (
-                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured />
+                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured forecastHorizon={selectedHorizon} />
               ))}
             </div>
           )}
@@ -340,7 +366,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {featuredSells.map((item) => (
-                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured />
+                <PickCard key={`featured-${item.symbol}-${item.status}`} item={item} featured forecastHorizon={selectedHorizon} />
               ))}
             </div>
           )}
@@ -412,6 +438,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
 
 export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
   try {
+    const selectedHorizon = context.query.h === '7' ? 7 : context.query.h === '30' ? 30 : 14
     const forwardedProto = context.req.headers['x-forwarded-proto']
     const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || 'https')
     const reqHost = Array.isArray(context.req.headers.host) ? context.req.headers.host[0] : context.req.headers.host
@@ -453,14 +480,17 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
         error: null,
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks,
+        selectedHorizon,
       },
     }
   } catch (e: any) {
+    const selectedHorizon = context.query.h === '7' ? 7 : context.query.h === '30' ? 30 : 14
     return {
       props: {
         error: e?.message || 'Failed to fetch',
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks: [],
+        selectedHorizon,
       },
     }
   }
