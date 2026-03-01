@@ -220,7 +220,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     cache5min(res, 300, 1800)
 
-    const kvKey = snapKey.custom(`backtest:market-audit:v5:${market}`)
+    const kvKey = snapKey.custom(`backtest:market-audit:v6:${market}`)
 
     const compute = async () => {
       const batches = chunk(spec.assets, spec.batchSize)
@@ -286,7 +286,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           processedAssets: states.length,
           skippedAssets: errors.length,
           note:
-            'Dit is een voorspellende event-backtest op de echte score-engine, inclusief ADX/ATR-achtige trendkwaliteit en relative-strength filters waar data beschikbaar is. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
+            'Dit is een voorspellende event-backtest op de echte score-engine, met een hiërarchische regime-, trend-, breakout- en relative-strength selectie. De live premium rankingfilter wordt hier bewust niet gebruikt als bewijs, omdat die forward-looking velden bevat.',
         },
         strategies: summarizeMarketAudit(states),
         qualifiedLivePicks,

@@ -24,7 +24,11 @@ type TrendSnapshot = {
   ret20: number | null
   ret60?: number | null
   rangePos20: number | null
+  rangePos55?: number | null
   efficiency14?: number | null
+  breakout20?: number | null
+  breakout55?: number | null
+  stretch20?: number | null
   adx14?: number | null
   relBench20?: number | null
   relBench60?: number | null
@@ -198,13 +202,16 @@ function computeEntryQualification(
   let maxScore = 0
 
   const strengthRoom = Math.max(1, 100 - threshold)
-  maxScore += 28
-  score += clamp(((strength - threshold) / strengthRoom) * 28, 0, 28)
+  maxScore += 16
+  score += clamp(((strength - threshold) / strengthRoom) * 16, 0, 16)
 
   const ret20 = readNum(ind.trend?.ret20)
   const ret60 = readNum(ind.trend?.ret60)
   const rangePos20 = readNum(ind.trend?.rangePos20)
-  const efficiency14 = readNum(ind.trend?.efficiency14)
+  const rangePos55 = readNum(ind.trend?.rangePos55)
+  const breakout20 = readNum(ind.trend?.breakout20)
+  const breakout55 = readNum(ind.trend?.breakout55)
+  const stretch20 = readNum(ind.trend?.stretch20)
   const volumeRatio = readNum(ind.volume?.ratio)
   const stdev20 = readNum(ind.volatility?.stdev20)
   const atrPct14 = readNum(ind.volatility?.atrPct14)
@@ -212,109 +219,143 @@ function computeEntryQualification(
   const relBench20 = readNum(ind.trend?.relBench20)
   const relBench60 = readNum(ind.trend?.relBench60)
   const rsi = readNum(ind.rsi)
+  const ma50 = readNum(ind.ma?.ma50)
+  const ma200 = readNum(ind.ma?.ma200)
+  const macdHist = readNum(ind.macd?.hist)
 
-  maxScore += 18
+  maxScore += 24
   if (Number.isFinite(ret20)) {
-    if ((status === 'BUY' && ret20 > 0) || (status === 'SELL' && ret20 < 0)) score += 10
-    else score += 2
+    const favorable = (status === 'BUY' && ret20 > 0) || (status === 'SELL' && ret20 < 0)
+    if (favorable && Math.abs(ret20) >= 2.5) score += 12
+    else if (favorable) score += 8
+    else score += 1
   } else {
     score += 5
   }
   if (Number.isFinite(ret60)) {
-    if ((status === 'BUY' && ret60 > 0) || (status === 'SELL' && ret60 < 0)) score += 8
-    else score += 2
+    const favorable = (status === 'BUY' && ret60 > 0) || (status === 'SELL' && ret60 < 0)
+    if (favorable && Math.abs(ret60) >= 4) score += 12
+    else if (favorable) score += 8
+    else score += 1
   } else {
-    score += 4
+    score += 5
   }
 
   maxScore += 16
   if (Number.isFinite(rangePos20)) {
     if (status === 'BUY') {
-      if (rangePos20 >= 0.58) score += 10
-      else if (rangePos20 >= 0.48) score += 6
-      else score += 2
+      if (rangePos20 >= 0.58) score += 6
+      else if (rangePos20 >= 0.48) score += 4
+      else score += 1
     } else {
-      if (rangePos20 <= 0.42) score += 10
-      else if (rangePos20 <= 0.52) score += 6
-      else score += 2
+      if (rangePos20 <= 0.42) score += 6
+      else if (rangePos20 <= 0.52) score += 4
+      else score += 1
     }
-  } else {
-    score += 5
-  }
-  if (Number.isFinite(efficiency14)) {
-    score += clamp(efficiency14, 0, 1) * 6
   } else {
     score += 3
   }
-
-  maxScore += 14
-  if (Number.isFinite(adx14)) {
-    if (adx14 >= 24) score += 8
-    else if (adx14 >= 18) score += 5
-    else score += 2
-  } else {
-    score += 4
-  }
-  if (Number.isFinite(relBench20)) {
-    if ((status === 'BUY' && relBench20 >= 1.0) || (status === 'SELL' && relBench20 <= -1.0)) score += 4
-    else if ((status === 'BUY' && relBench20 >= 0) || (status === 'SELL' && relBench20 <= 0)) score += 2
-    else score += 0
+  if (Number.isFinite(rangePos55)) {
+    if (status === 'BUY') score += rangePos55 >= 0.55 ? 3 : rangePos55 >= 0.48 ? 2 : 0
+    else score += rangePos55 <= 0.45 ? 3 : rangePos55 <= 0.52 ? 2 : 0
   } else {
     score += 1.5
   }
-  if (Number.isFinite(relBench60)) {
-    if ((status === 'BUY' && relBench60 >= 1.5) || (status === 'SELL' && relBench60 <= -1.5)) score += 2
-    else if ((status === 'BUY' && relBench60 >= 0) || (status === 'SELL' && relBench60 <= 0)) score += 1
+  if (Number.isFinite(breakout20)) {
+    if ((status === 'BUY' && breakout20 >= 0.18) || (status === 'SELL' && breakout20 <= -0.18)) score += 5
+    else if ((status === 'BUY' && breakout20 > 0) || (status === 'SELL' && breakout20 < 0)) score += 3
+  } else {
+    score += 1.5
+  }
+  if (Number.isFinite(breakout55)) {
+    if ((status === 'BUY' && breakout55 >= 0.12) || (status === 'SELL' && breakout55 <= -0.12)) score += 2
+    else if ((status === 'BUY' && breakout55 > 0) || (status === 'SELL' && breakout55 < 0)) score += 1
   } else {
     score += 1
   }
 
-  maxScore += 12
-  if (Number.isFinite(rsi)) {
-    if (status === 'BUY') {
-      if (rsi >= 48 && rsi <= 69) score += 12
-      else if (rsi > 69 && rsi <= 75) score += 6
-      else if (rsi >= 40) score += 8
-      else score += 2
-    } else {
-      if (rsi >= 31 && rsi <= 52) score += 12
-      else if (rsi >= 25 && rsi < 31) score += 6
-      else if (rsi <= 60) score += 8
-      else score += 2
-    }
+  maxScore += 14
+  if (Number.isFinite(relBench20)) {
+    if ((status === 'BUY' && relBench20 >= 1.0) || (status === 'SELL' && relBench20 <= -1.0)) score += 9
+    else if ((status === 'BUY' && relBench20 >= 0) || (status === 'SELL' && relBench20 <= 0)) score += 5
+    else score += 0
   } else {
-    score += 6
+    score += 4
   }
-
-  maxScore += 10
-  if (Number.isFinite(volumeRatio)) {
-    if (volumeRatio >= 0.95 && volumeRatio <= 2.2) score += 10
-    else if (volumeRatio >= 0.75) score += 6
-    else score += 3
+  if (Number.isFinite(relBench60)) {
+    if ((status === 'BUY' && relBench60 >= 1.5) || (status === 'SELL' && relBench60 <= -1.5)) score += 5
+    else if ((status === 'BUY' && relBench60 >= 0) || (status === 'SELL' && relBench60 <= 0)) score += 2
   } else {
-    score += 5
+    score += 2
   }
 
   maxScore += 16
+  if (Number.isFinite(adx14)) {
+    if (adx14 >= 24) score += 7
+    else if (adx14 >= 18) score += 5
+    else if (adx14 >= 14) score += 2
+    else score += 0
+  } else {
+    score += 4
+  }
   let volScore = 0
   let volCount = 0
   if (Number.isFinite(stdev20)) {
     volCount += 1
-    if (stdev20 >= 0.008 && stdev20 <= 0.09) volScore += 16
-    else if (stdev20 <= 0.12) volScore += 10
-    else volScore += 4
+    if (stdev20 >= 0.008 && stdev20 <= 0.09) volScore += 9
+    else if (stdev20 <= 0.12) volScore += 5
+    else volScore += 1
   }
   if (Number.isFinite(atrPct14)) {
     volCount += 1
-    if (atrPct14 >= 0.6 && atrPct14 <= 8.5) volScore += 16
-    else if (atrPct14 <= 11) volScore += 10
-    else volScore += 4
+    if (atrPct14 >= 0.6 && atrPct14 <= 8.5) volScore += 9
+    else if (atrPct14 <= 11) volScore += 5
+    else volScore += 1
   }
   if (volCount) score += volScore / volCount
-  else score += 8
+  else score += 5
+
+  maxScore += 6
+  let timingScore = 0
+  if (Number.isFinite(rsi)) {
+    if (status === 'BUY') {
+      if (rsi >= 46 && rsi <= 64) timingScore = 6
+      else if ((rsi >= 40 && rsi < 46) || (rsi > 64 && rsi <= 72)) timingScore = 4
+      else timingScore = 1
+    } else {
+      if (rsi >= 36 && rsi <= 54) timingScore = 6
+      else if ((rsi >= 28 && rsi < 36) || (rsi > 54 && rsi <= 62)) timingScore = 4
+      else timingScore = 1
+    }
+  } else {
+    timingScore = 3
+  }
+  if (Number.isFinite(stretch20) && Math.abs(stretch20) > 9) timingScore = Math.max(0, timingScore - 2)
+  score += timingScore
+
+  maxScore += 4
+  if (Number.isFinite(volumeRatio)) {
+    if (volumeRatio >= 0.95 && volumeRatio <= 2.4) score += 4
+    else if (volumeRatio >= 0.70) score += 2
+    else score += 1
+  } else {
+    score += 2
+  }
+
+  maxScore += 4
+  if (Number.isFinite(ma50) && Number.isFinite(ma200)) {
+    if ((status === 'BUY' && ma50 > ma200) || (status === 'SELL' && ma50 < ma200)) score += 2
+  } else {
+    score += 1
+  }
+  if (Number.isFinite(macdHist)) {
+    if ((status === 'BUY' && macdHist >= 0) || (status === 'SELL' && macdHist <= 0)) score += 2
+  } else {
+    score += 1
+  }
 
   const qualityScore = Math.round((score / Math.max(1, maxScore)) * 100)
-  const minQuality = threshold === 80 ? 66 : 58
+  const minQuality = threshold === 80 ? 72 : 64
 
   return {
     qualityScore,

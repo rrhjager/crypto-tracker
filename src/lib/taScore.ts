@@ -41,6 +41,7 @@ export function statusFromScore(score: number): Status {
 }
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
+const scoreToDir = (score: number) => clamp((score - 50) / 50, -1, 1)
 
 type WeightKey = 'ma' | 'rsi' | 'macd' | 'vol' | 'trend' | 'volReg' | 'consensus'
 
@@ -201,6 +202,11 @@ export function computeScoreStatus(ind: {
   const market = normalizeScoreMarket(ctx?.market) ?? 'DEFAULT'
   const mode = normalizeScoreMode(ctx?.mode)
   const profile = MARKET_PROFILES[market]
+  let trendBias = 0
+  let breakoutBias = 0
+  let relativeBias = 0
+  let adxConviction = 0
+  let stretchPenalty = 0
 
   // --- MA (24%)
   let maScore = 50
@@ -313,25 +319,33 @@ export function computeScoreStatus(ind: {
     const rs60 = typeof relBench60 === 'number'
       ? clamp(relBench60 / Math.max(1e-9, AGGR.trend.retRefPct * 0.85), -1, 1)
       : 0
-    const adxConviction = typeof adx14 === 'number'
+    adxConviction = typeof adx14 === 'number'
       ? clamp((adx14 - 16) / 22, 0, 1)
       : 0
-    const rawMix =
-      0.18 * mShort +
-      0.22 * m +
-      0.12 * mLong +
+    breakoutBias = clamp((bo20 * 0.68) + (bo55 * 0.32), -1, 1)
+    relativeBias = clamp((rs20 * 0.68) + (rs60 * 0.32), -1, 1)
+    trendBias = clamp(
+      0.24 * m +
+      0.18 * mLong +
+      0.10 * mShort +
       0.10 * p +
       0.08 * pLong +
-      0.14 * bo20 +
-      0.06 * bo55 +
-      0.08 * e +
-      0.08 * rs20 +
-      0.04 * rs60
-    const stretchPenalty = typeof stretch20 === 'number'
+      0.12 * e +
+      0.10 * breakoutBias +
+      0.08 * relativeBias,
+      -1,
+      1
+    )
+    const directionalMix = clamp(
+      (trendBias * 0.62) + (breakoutBias * 0.22) + (relativeBias * 0.16),
+      -1,
+      1
+    )
+    stretchPenalty = typeof stretch20 === 'number'
       ? clamp((Math.abs(stretch20) - 6) / 10, 0, 1)
       : 0
-    const convictionBoost = 1 + 0.22 * adxConviction
-    const mix = clamp(rawMix * convictionBoost * (1 - 0.30 * stretchPenalty), -1, 1)
+    const convictionBoost = 1 + 0.18 * adxConviction
+    const mix = clamp(directionalMix * convictionBoost * (1 - 0.32 * stretchPenalty), -1, 1)
     trendScore = clamp(50 + mix * AGGR.trend.gain, 0, 100)
   }
 
@@ -416,22 +430,51 @@ export function computeScoreStatus(ind: {
   if (!parts.length) return { score: 50, status: 'HOLD', confidence: 0, market, mode }
 
   const wSum = parts.reduce((s, p) => s + p.w, 0)
-  const rawScore = parts.reduce((s, p) => s + p.v * (p.w / Math.max(1e-9, wSum)), 0)
 
   const maxWeight = (Object.keys(BASE_WEIGHTS) as WeightKey[]).reduce((s, k) => s + weightFor(market, k), 0)
   const coverage = clamp(wSum / Math.max(1e-9, maxWeight), 0, 1)
 
-  const directional = parts.map(p => ({
-    w: p.w,
-    dir: clamp((p.v - 50) / 50, -1, 1),
-  }))
-  const signed = directional.reduce((s, p) => s + p.w * p.dir, 0)
-  const absSigned = directional.reduce((s, p) => s + p.w * Math.abs(p.dir), 0)
-  const alignment = absSigned > 1e-9 ? clamp(Math.abs(signed) / absSigned, 0, 1) : 0
-  const strength = wSum > 1e-9 ? clamp(absSigned / wSum, 0, 1) : 0
-  const confidence = clamp(0.45 * coverage + 0.30 * strength + 0.25 * alignment, 0, 1)
+  const directionParts: Array<{ w: number; dir: number }> = []
+  if (hasTrend) directionParts.push({ w: 0.46, dir: scoreToDir(trendScore) })
+  if (hasConsensus) directionParts.push({ w: 0.14, dir: scoreToDir(consensusScore) })
+  if (hasMA) directionParts.push({ w: 0.14, dir: scoreToDir(maScore) })
+  if (hasMACD) directionParts.push({ w: 0.10, dir: scoreToDir(macdScore) })
+  if (hasRSI) directionParts.push({ w: 0.08, dir: scoreToDir(rsiScore) })
+  if (hasVOL) directionParts.push({ w: 0.04, dir: scoreToDir(volScore) })
+  if (hasTrend && Math.abs(relativeBias) > 1e-9) directionParts.push({ w: 0.04, dir: relativeBias })
 
-  const score = Math.round(clamp(rawScore, 0, 100))
+  const dirWeight = directionParts.reduce((s, p) => s + p.w, 0)
+  const signed = directionParts.reduce((s, p) => s + p.w * p.dir, 0)
+  const absSigned = directionParts.reduce((s, p) => s + p.w * Math.abs(p.dir), 0)
+  const alignment = absSigned > 1e-9 ? clamp(Math.abs(signed) / absSigned, 0, 1) : 0
+  const directionalStrength = dirWeight > 1e-9 ? clamp(absSigned / dirWeight, 0, 1) : 0
+  const direction = dirWeight > 1e-9 ? clamp(signed / dirWeight, -1, 1) : 0
+
+  const volatilityGate = hasVolReg ? clamp((volRegScore - 35) / 50, 0, 1) : 0.55
+  const breakoutLift = hasTrend ? clamp((Math.abs(breakoutBias) - 0.08) / 0.92, 0, 1) : 0
+  const relativeLift = hasTrend ? clamp((Math.abs(relativeBias) - 0.05) / 0.95, 0, 1) : 0
+  const volumeLift = hasVOL ? clamp((volScore - 45) / 35, 0, 1) : 0.4
+  const timingPenalty = hasRSI ? clamp((Math.abs(scoreToDir(rsiScore)) - 0.72) / 0.28, 0, 1) : 0
+  const triggerLift = clamp((0.52 * breakoutLift) + (0.28 * relativeLift) + (0.20 * volumeLift), 0, 1)
+  const exhaustionPenalty = clamp((0.55 * stretchPenalty) + (0.45 * timingPenalty), 0, 1)
+  const regimeGate = clamp(0.18 + (0.34 * volatilityGate) + (0.30 * (hasTrend ? adxConviction : 0.45)) + (0.18 * coverage), 0, 1)
+  const effectiveStrength = clamp(
+    directionalStrength * (0.74 + (0.18 * triggerLift) + (0.08 * alignment)) * regimeGate * (1 - (0.50 * exhaustionPenalty)),
+    0,
+    1
+  )
+  const directionalScore = 50 + (direction * effectiveStrength * 52)
+  const confidence = clamp(
+    (0.20 * coverage) +
+    (0.22 * alignment) +
+    (0.24 * regimeGate) +
+    (0.18 * triggerLift) +
+    (0.16 * effectiveStrength),
+    0,
+    1
+  )
+
+  const score = Math.round(clamp(directionalScore, 0, 100))
 
   let { buy, sell, minConfidence } = profile.thresholds
   if (mode === 'HIGH_CONF') {
@@ -442,10 +485,14 @@ export function computeScoreStatus(ind: {
   const softMin = Math.max(0.45, minConfidence - (mode === 'HIGH_CONF' ? 0.06 : 0.08))
 
   let status: Status = 'HOLD'
-  if (score >= buy && confidence >= minConfidence) status = 'BUY'
-  else if (score <= sell && confidence >= minConfidence) status = 'SELL'
-  else if (score >= buy + 12 && confidence >= softMin) status = 'BUY'
-  else if (score <= sell - 12 && confidence >= softMin) status = 'SELL'
+  const hardRegime = mode === 'HIGH_CONF' ? 0.52 : 0.42
+  const softRegime = mode === 'HIGH_CONF' ? 0.46 : 0.36
+  const hardStrength = mode === 'HIGH_CONF' ? 0.34 : 0.26
+  const softStrength = mode === 'HIGH_CONF' ? 0.28 : 0.22
+  if (regimeGate >= hardRegime && effectiveStrength >= hardStrength && score >= buy && confidence >= minConfidence) status = 'BUY'
+  else if (regimeGate >= hardRegime && effectiveStrength >= hardStrength && score <= sell && confidence >= minConfidence) status = 'SELL'
+  else if (regimeGate >= softRegime && effectiveStrength >= softStrength && score >= buy + 10 && confidence >= softMin) status = 'BUY'
+  else if (regimeGate >= softRegime && effectiveStrength >= softStrength && score <= sell - 10 && confidence >= softMin) status = 'SELL'
 
   return { score, status, confidence, market, mode }
 }
