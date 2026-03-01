@@ -134,7 +134,8 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
           <div className="mt-4 rounded-2xl border border-slate-300/45 bg-white/75 px-4 py-3 text-[12px] text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
             <span className="font-medium text-slate-900 dark:text-white">{data.meta.note}</span> Gestart op{' '}
             {formatDateTime(data.meta.startedAt)}. Nu open kapitaal: {formatMoney(data.summary.totalCommittedEur)}. Huidige signalen
-            in de bronlaag: {data.meta.currentSignals}.
+            in de bronlaag: {data.meta.currentSignals}. De tracker wordt elk uur server-side ververst en synct ook opnieuw
+            wanneer deze pagina opent.
           </div>
 
           <div className="mt-5 grid gap-5 xl:grid-cols-2">

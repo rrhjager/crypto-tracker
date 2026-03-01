@@ -178,101 +178,19 @@ function dedupeSignals(signals: ForwardSignal[]) {
 }
 
 async function getEquitySignals(origin: string): Promise<{ signals: ForwardSignal[]; sourceMode: ForwardSourceMode }> {
-  const auditSignals: ForwardSignal[] = []
-
-  for (const market of EQUITY_MARKETS) {
-    const audit = await fetchJson<{ qualifiedLivePicks?: MarketAuditPick[] }>(`${origin}/api/backtest/market-audit?market=${market}`)
-    for (const row of audit?.qualifiedLivePicks || []) {
-      const symbol = String(row?.symbol || '').trim().toUpperCase()
-      const name = String(row?.name || symbol).trim()
-      const side = row?.status
-      if (!symbol || !name || (side !== 'BUY' && side !== 'SELL')) continue
-      auditSignals.push({ symbol, name, side, sourceMode: 'audit' })
-    }
-  }
-  if (auditSignals.length > 0) {
-    return { signals: dedupeSignals(auditSignals), sourceMode: 'audit' }
-  }
-
-  const premium = await fetchJson<{ signals?: { all?: PremiumSignal[] } }>(`${origin}/api/market/premium-active?targetWinrate=0.7&maxSignalsGlobal=160`)
-  const fallbackSignals = (premium?.signals?.all || [])
-    .map((row): ForwardSignal | null => {
-      const market = String(row?.market || '').trim().toUpperCase()
-      if (!market || market === 'CRYPTO') return null
-      const symbol = String(row?.symbol || '').trim().toUpperCase()
-      const name = String(row?.name || symbol).trim()
-      const side = row?.status
-      if (!symbol || !name || (side !== 'BUY' && side !== 'SELL')) return null
-      return { symbol, name, side, sourceMode: 'fallback' }
-    })
-    .filter((row): row is ForwardSignal => !!row)
-  if (fallbackSignals.length > 0) {
-    return { signals: dedupeSignals(fallbackSignals), sourceMode: 'fallback' }
-  }
-
-  const raw = await fetchJson<TopSignalsResponse>(`${origin}/api/screener/top-signals`)
-  const rawSignals: ForwardSignal[] = []
-  for (const row of raw?.markets || []) {
-    if (row?.topBuy && String(row.topBuy.signal || '').toUpperCase() === 'BUY') {
-      const symbol = String(row.topBuy.symbol || '').trim().toUpperCase()
-      if (symbol) rawSignals.push({ symbol, name: String(row.topBuy.name || symbol).trim(), side: 'BUY', sourceMode: 'raw' })
-    }
-    if (row?.topSell && String(row.topSell.signal || '').toUpperCase() === 'SELL') {
-      const symbol = String(row.topSell.symbol || '').trim().toUpperCase()
-      if (symbol) rawSignals.push({ symbol, name: String(row.topSell.name || symbol).trim(), side: 'SELL', sourceMode: 'raw' })
-    }
-  }
-  return { signals: dedupeSignals(rawSignals), sourceMode: 'raw' }
+  const audit = await getEquitySignalsByMode(origin, 'audit')
+  if (audit.signals.length > 0) return audit
+  const fallback = await getEquitySignalsByMode(origin, 'fallback')
+  if (fallback.signals.length > 0) return fallback
+  return getEquitySignalsByMode(origin, 'raw')
 }
 
 async function getCryptoSignals(origin: string): Promise<{ signals: ForwardSignal[]; sourceMode: ForwardSourceMode }> {
-  const audit = await fetchJson<{ qualifiedLivePicks?: MarketAuditPick[] }>(`${origin}/api/backtest/market-audit?market=crypto`)
-  const auditSignals = (audit?.qualifiedLivePicks || [])
-    .map((row): ForwardSignal | null => {
-      const symbol = String(row?.symbol || '').trim().toUpperCase()
-      const name = String(row?.name || symbol).trim()
-      const side = row?.status
-      if (!symbol || !name || (side !== 'BUY' && side !== 'SELL')) return null
-      return { symbol, name, side, sourceMode: 'audit' }
-    })
-    .filter((row): row is ForwardSignal => !!row)
-  if (auditSignals.length > 0) {
-    return { signals: dedupeSignals(auditSignals), sourceMode: 'audit' }
-  }
-
-  const premium = await fetchJson<{ signals?: { all?: PremiumSignal[] } }>(`${origin}/api/market/premium-active?targetWinrate=0.7&maxSignalsGlobal=160`)
-  const fallbackSignals = (premium?.signals?.all || [])
-    .map((row): ForwardSignal | null => {
-      const market = String(row?.market || '').trim().toUpperCase()
-      if (market !== 'CRYPTO') return null
-      const symbol = String(row?.symbol || '').trim().toUpperCase()
-      const name = String(row?.name || symbol).trim()
-      const side = row?.status
-      if (!symbol || !name || (side !== 'BUY' && side !== 'SELL')) return null
-      return { symbol, name, side, sourceMode: 'fallback' }
-    })
-    .filter((row): row is ForwardSignal => !!row)
-  if (fallbackSignals.length > 0) {
-    return { signals: dedupeSignals(fallbackSignals), sourceMode: 'fallback' }
-  }
-
-  const [buys, movers] = await Promise.all([
-    fetchJson<CoinHomeBuysResponse>(`${origin}/api/coin/home-buys`),
-    fetchJson<CoinTopMoversResponse>(`${origin}/api/coin/top-movers`),
-  ])
-  const rawSignals: ForwardSignal[] = []
-  for (const row of buys?.items || []) {
-    const symbol = String(row?.symbol || '').trim().toUpperCase()
-    if (!symbol || !COIN_SET.has(symbol)) continue
-    rawSignals.push({ symbol, name: String(row?.name || symbol).trim(), side: 'BUY', sourceMode: 'raw' })
-  }
-  for (const row of movers?.losers || []) {
-    const symbol = String(row?.symbol || '').trim().toUpperCase()
-    const pct = safeNumber(row?.pct)
-    if (!symbol || !COIN_SET.has(symbol) || pct == null || pct >= -0.25) continue
-    rawSignals.push({ symbol, name: String(row?.name || symbol).trim(), side: 'SELL', sourceMode: 'raw' })
-  }
-  return { signals: dedupeSignals(rawSignals), sourceMode: 'raw' }
+  const audit = await getCryptoSignalsByMode(origin, 'audit')
+  if (audit.signals.length > 0) return audit
+  const fallback = await getCryptoSignalsByMode(origin, 'fallback')
+  if (fallback.signals.length > 0) return fallback
+  return getCryptoSignalsByMode(origin, 'raw')
 }
 
 async function getCurrentPrices(origin: string, symbols: string[]): Promise<Record<string, number>> {
