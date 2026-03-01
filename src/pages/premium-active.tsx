@@ -213,6 +213,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
           name="description"
           content="Alleen audit-gevalideerde live aandelen-signalen. Deze pagina toont uitsluitend huidige BUY- en SELL-signalen die out-of-sample door de backtest zijn gekomen."
         />
+        <meta httpEquiv="refresh" content="60" />
       </Head>
 
       <main className="max-w-screen-xl mx-auto px-4 pt-10 pb-16 space-y-6">
@@ -258,7 +259,7 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Databron</div>
               <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Audit</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt}</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh 60s</div>
             </div>
           </div>
         </section>
@@ -294,9 +295,9 @@ export default function PremiumActivePage({ error, generatedAt, picks }: Props) 
         <section className="rounded-3xl border border-emerald-400/35 bg-white/85 p-5 dark:border-emerald-500/25 dark:bg-white/5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Top 5 koopkansen</h2>
+              <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-200">Aanbevolen Nu</h2>
               <p className="text-sm text-slate-700/80 dark:text-white/65">
-                Dit zijn de best gevalideerde live BUY-signalen van dit moment.
+                Dit zijn de aandelen die ik nu zou kopen op basis van de huidige audit-gevalideerde indicatoren. Deze lijst ververst automatisch.
               </p>
             </div>
             <div className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-emerald-900 dark:text-emerald-200">
