@@ -1,5 +1,5 @@
 import type { NextApiRequest } from 'next'
-import { COIN_SET } from '@/lib/coins'
+import { COIN_SET, findCoin } from '@/lib/coins'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
@@ -56,7 +56,7 @@ export type ForwardClosedTrade = {
 }
 
 type ForwardTrackerState = {
-  version: 1
+  version: number
   assetType: ForwardAssetType
   principalPerTradeEur: number
   startedAt: string
@@ -124,12 +124,12 @@ type QuotesResponse = {
 }
 
 const EQUITY_MARKETS = ['aex', 'dax', 'dowjones', 'etfs', 'ftse100', 'hangseng', 'nasdaq', 'nikkei225', 'sensex', 'sp500'] as const
-const TRACKER_VERSION = 1
+const TRACKER_VERSION = 2
 const PRINCIPAL_PER_TRADE_EUR = 1000
 const MAX_CLOSED_TRADES = 200
 
 function trackerKey(assetType: ForwardAssetType) {
-  return `paper-forward:v1:${assetType}`
+  return `paper-forward:v${TRACKER_VERSION}:${assetType}`
 }
 
 function msToIso(ms: number) {
@@ -193,7 +193,46 @@ async function getCryptoSignals(origin: string): Promise<{ signals: ForwardSigna
   return getCryptoSignalsByMode(origin, 'raw')
 }
 
-async function getCurrentPrices(origin: string, symbols: string[]): Promise<Record<string, number>> {
+async function fetchBinanceSpotPrice(pair: string): Promise<number | null> {
+  try {
+    const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${encodeURIComponent(pair)}`, {
+      cache: 'no-store',
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { price?: string | number }
+    const price = Number(data?.price)
+    return Number.isFinite(price) && price > 0 ? price : null
+  } catch {
+    return null
+  }
+}
+
+async function getCryptoCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
+  const unique = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))]
+  if (!unique.length) return {}
+
+  const out: Record<string, number> = {}
+  const rows = await Promise.all(
+    unique.map(async (symbol) => {
+      const pair = findCoin(symbol)?.pairUSD?.binance
+      if (!pair) return { symbol, price: null as number | null }
+      const price = await fetchBinanceSpotPrice(pair)
+      return { symbol, price }
+    })
+  )
+
+  for (const row of rows) {
+    if (row.price != null) out[row.symbol] = row.price
+  }
+
+  return out
+}
+
+async function getCurrentPrices(origin: string, assetType: ForwardAssetType, symbols: string[]): Promise<Record<string, number>> {
+  if (assetType === 'crypto') {
+    return getCryptoCurrentPrices(symbols)
+  }
+
   const unique = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))]
   if (!unique.length) return {}
   const data = await fetchJson<QuotesResponse>(`${origin}/api/quotes?symbols=${encodeURIComponent(unique.join(','))}`)
@@ -390,7 +429,7 @@ export async function syncForwardTracker(
   for (const signal of signals) signalMap.set(signal.symbol, signal)
 
   const symbolsForPricing = [...new Set([...signals.map((s) => s.symbol), ...Object.keys(current.openPositions)])]
-  const priceMap = await getCurrentPrices(origin, symbolsForPricing)
+  const priceMap = await getCurrentPrices(origin, assetType, symbolsForPricing)
   const stamp = nowStamp()
 
   const nextState: ForwardTrackerState = {
