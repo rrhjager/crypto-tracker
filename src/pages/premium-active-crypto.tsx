@@ -174,7 +174,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks }: P
           name="description"
           content="Alleen audit-gevalideerde live crypto-signalen. Deze pagina toont uitsluitend huidige BUY- en SELL-signalen die out-of-sample door de backtest zijn gekomen."
         />
-        <meta httpEquiv="refresh" content="60" />
+        <meta httpEquiv="refresh" content="3600" />
       </Head>
 
       <main className="max-w-screen-xl mx-auto px-4 pt-10 pb-16 space-y-6">
@@ -220,7 +220,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks }: P
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Databron</div>
               <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Audit</div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh 60s</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh elk uur</div>
             </div>
           </div>
         </section>
