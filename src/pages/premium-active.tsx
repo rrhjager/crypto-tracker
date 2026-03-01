@@ -3,6 +3,7 @@ import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import { HC_MARKET_META } from '@/lib/highConfidence'
 import { ForecastPanel } from '@/components/ForecastPanel'
+import { ForwardTrackerPanel } from '@/components/ForwardTrackerPanel'
 
 type StockMarketKey = 'AEX' | 'DAX' | 'DOWJONES' | 'ETFS' | 'FTSE100' | 'HANGSENG' | 'NASDAQ' | 'NIKKEI225' | 'SENSEX' | 'SP500'
 
@@ -518,6 +519,8 @@ export default function PremiumActivePage({ error, generatedAt, picks, selectedH
           <span className="font-medium text-slate-900 dark:text-white">{hiddenSells}</span> SELL-signalen staan niet in de bovenste blokken,
           maar wel in de volledige audit-lijsten hieronder. Dubbele symbolen uit meerdere indexen tonen we maar een keer.
         </section>
+
+        <ForwardTrackerPanel assetType="equity" sourceMode={sourceMode} />
       </main>
     </>
   )

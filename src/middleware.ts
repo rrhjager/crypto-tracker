@@ -75,10 +75,19 @@ function isSameOrigin(req: NextRequest) {
   const host = req.headers.get('host') || ''
   const origin = req.headers.get('origin') || ''
   const referer = req.headers.get('referer') || ''
-  const allowed = ['signalhub.tech','www.signalhub.tech','localhost:3000']
-  const okHost    = allowed.some(h => host.endsWith(h))
-  const okOrigin  = !origin  || allowed.some(h => origin.includes(h))
-  const okReferer = !referer || allowed.some(h => referer.includes(h))
+  const allowed = ['signalhub.tech','www.signalhub.tech']
+  const okHost =
+    allowed.some(h => host.endsWith(h)) ||
+    host === 'localhost' ||
+    host.startsWith('localhost:')
+  const okOrigin =
+    !origin ||
+    allowed.some(h => origin.includes(h)) ||
+    origin.includes('localhost:')
+  const okReferer =
+    !referer ||
+    allowed.some(h => referer.includes(h)) ||
+    referer.includes('localhost:')
   return okHost && okOrigin && okReferer
 }
 
