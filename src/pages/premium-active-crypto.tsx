@@ -1,7 +1,8 @@
 import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
-import { coinHref } from '@/lib/coins'
+import useSWR from 'swr'
+import { COIN_SET, coinHref } from '@/lib/coins'
 import { ForecastPanel } from '@/components/ForecastPanel'
 
 type CryptoPick = {
@@ -14,7 +15,7 @@ type CryptoPick = {
   strategyLabel: string
   validationWinrate: number
   validationAvgReturnPct: number
-  trainingTrades: number
+  trainingTrades: number | null
   validationTrades: number
 }
 
@@ -23,6 +24,7 @@ type Props = {
   generatedAt: string
   picks: CryptoPick[]
   selectedHorizon: 7 | 14 | 30
+  sourceMode: 'audit' | 'fallback' | 'raw'
 }
 
 type AuditPick = {
@@ -38,6 +40,34 @@ type AuditPick = {
   validationTrades?: number
 }
 
+type FallbackSignal = {
+  market?: string
+  symbol?: string
+  name?: string
+  href?: string
+  status?: 'BUY' | 'SELL'
+  score?: number
+  strength?: number
+  horizon?: string
+  validationWinrate?: number
+  validationReturnPct?: number
+  validationTrades?: number
+}
+
+type CoinGeckoMarket = {
+  symbol?: string
+  name?: string
+  price_change_percentage_24h?: number
+}
+
+type CoinHomeBuysResponse = {
+  items?: Array<{ symbol?: string; name?: string; score?: number }>
+}
+
+type CoinTopMoversResponse = {
+  losers?: Array<{ symbol?: string; name?: string; pct?: number }>
+}
+
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
 
 function formatPct(v: number | null | undefined, digits = 1) {
@@ -47,11 +77,15 @@ function formatPct(v: number | null | undefined, digits = 1) {
 }
 
 function pickScore(item: CryptoPick) {
+  const winrate = Number.isFinite(item.validationWinrate) ? item.validationWinrate : 0
+  const avgReturn = Number.isFinite(item.validationAvgReturnPct) ? item.validationAvgReturnPct : 0
+  const validationTrades = Number.isFinite(item.validationTrades) ? item.validationTrades : 0
+  const trainingTrades = Number.isFinite(item.trainingTrades as number) ? Number(item.trainingTrades) : 0
   return (
-    item.validationWinrate * 100 +
-    item.validationAvgReturnPct * 8 +
-    item.validationTrades * 1.5 +
-    item.trainingTrades * 0.35 +
+    winrate * 100 +
+    avgReturn * 8 +
+    validationTrades * 1.5 +
+    trainingTrades * 0.35 +
     item.strength * 0.12
   )
 }
@@ -63,6 +97,10 @@ function sortByBest(a: CryptoPick, b: CryptoPick) {
   if (b.validationAvgReturnPct !== a.validationAvgReturnPct) return b.validationAvgReturnPct - a.validationAvgReturnPct
   if (b.strength !== a.strength) return b.strength - a.strength
   return a.symbol.localeCompare(b.symbol)
+}
+
+function bestOf(a: CryptoPick, b: CryptoPick) {
+  return pickScore(b) > pickScore(a) ? b : a
 }
 
 function buildPick(raw: AuditPick): CryptoPick | null {
@@ -96,8 +134,41 @@ function buildPick(raw: AuditPick): CryptoPick | null {
   }
 }
 
+function buildFallbackPick(raw: FallbackSignal): CryptoPick | null {
+  const market = String(raw?.market || '').trim().toUpperCase()
+  if (market !== 'CRYPTO') return null
+
+  const symbol = String(raw?.symbol || '').trim().toUpperCase()
+  const name = String(raw?.name || symbol).trim()
+  const status = raw?.status
+  const score = Number(raw?.score)
+  const strength = Number(raw?.strength)
+  const validationWinrate = Number(raw?.validationWinrate)
+  const validationAvgReturnPct = Number(raw?.validationReturnPct)
+  const validationTrades = Number(raw?.validationTrades)
+
+  if (!symbol || !name || (status !== 'BUY' && status !== 'SELL')) return null
+  if (!Number.isFinite(score) || !Number.isFinite(strength)) return null
+  if (!Number.isFinite(validationWinrate) || !Number.isFinite(validationAvgReturnPct) || !Number.isFinite(validationTrades)) return null
+
+  return {
+    symbol,
+    name,
+    href: String(raw?.href || coinHref(symbol)),
+    status,
+    score: Math.round(score),
+    strength: Math.round(strength),
+    strategyLabel: `Fallback: actief signaal · ${String(raw?.horizon || '').trim() || 'lopende horizon'}`,
+    validationWinrate,
+    validationAvgReturnPct,
+    trainingTrades: null,
+    validationTrades: Math.round(validationTrades),
+  }
+}
+
 function PickCard({ item, featured = false, forecastHorizon = null }: { item: CryptoPick; featured?: boolean; forecastHorizon?: 7 | 14 | 30 | null }) {
   const isBuy = item.status === 'BUY'
+  const hasValidation = Number.isFinite(item.validationWinrate) && Number.isFinite(item.validationAvgReturnPct)
 
   return (
     <Link
@@ -132,10 +203,10 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: Cr
         </div>
 
         <div className="rounded-2xl border border-white/40 bg-white/70 px-3 py-2 text-right dark:border-white/10 dark:bg-white/10">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Validatie winrate</div>
-          <div className="text-base font-semibold text-slate-900 dark:text-white">{formatPct(item.validationWinrate * 100)}</div>
-          <div className={`text-[11px] ${item.validationAvgReturnPct >= 0 ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>
-            {formatPct(item.validationAvgReturnPct)} gem. per trade
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">{hasValidation ? 'Validatie winrate' : 'Live score-model'}</div>
+          <div className="text-base font-semibold text-slate-900 dark:text-white">{hasValidation ? formatPct(item.validationWinrate * 100) : `${item.score}/100`}</div>
+          <div className={`text-[11px] ${hasValidation && item.validationAvgReturnPct >= 0 ? 'text-emerald-800 dark:text-emerald-200' : hasValidation ? 'text-rose-800 dark:text-rose-200' : 'text-slate-700/75 dark:text-white/60'}`}>
+            {hasValidation ? `${formatPct(item.validationAvgReturnPct)} gem. per trade` : 'Ruwe live fallback zonder audit-trades'}
           </div>
         </div>
       </div>
@@ -148,9 +219,9 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: Cr
           </div>
         </div>
         <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Train / test</div>
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">{item.trainingTrades != null ? 'Train / test' : item.validationTrades > 0 ? 'Validatie' : 'Bron'}</div>
           <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-            {item.trainingTrades} / {item.validationTrades} trades
+            {item.trainingTrades != null ? `${item.trainingTrades} / ${item.validationTrades} trades` : item.validationTrades > 0 ? `${item.validationTrades} trades` : 'Live fallback'}
           </div>
         </div>
       </div>
@@ -163,9 +234,65 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: Cr
   )
 }
 
-export default function PremiumActiveCryptoPage({ error, generatedAt, picks, selectedHorizon }: Props) {
-  const buyPicks = picks.filter((item) => item.status === 'BUY').sort(sortByBest)
-  const sellPicks = picks.filter((item) => item.status === 'SELL').sort(sortByBest)
+const fetcher = async (url: string) => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export default function PremiumActiveCryptoPage({ error, generatedAt, picks, selectedHorizon, sourceMode }: Props) {
+  const shouldLoadClientFallback = picks.length === 0 && sourceMode === 'audit'
+  const { data: clientBuyData } = useSWR<CoinHomeBuysResponse>(shouldLoadClientFallback ? '/api/coin/home-buys' : null, fetcher, {
+    revalidateOnFocus: false,
+  })
+  const { data: clientMoverData } = useSWR<CoinTopMoversResponse>(shouldLoadClientFallback ? '/api/coin/top-movers' : null, fetcher, {
+    revalidateOnFocus: false,
+  })
+
+  const clientFallbackPicks: CryptoPick[] = []
+  for (const row of clientBuyData?.items || []) {
+    const symbol = String(row?.symbol || '').trim().toUpperCase()
+    if (!symbol) continue
+    const score = Math.max(60, Math.min(100, Math.round(Number(row?.score) || 70)))
+    clientFallbackPicks.push({
+      symbol,
+      name: String(row?.name || symbol).trim(),
+      href: coinHref(symbol),
+      status: 'BUY',
+      score,
+      strength: score,
+      strategyLabel: 'Ruwe live buy fallback',
+      validationWinrate: Number.NaN,
+      validationAvgReturnPct: Number.NaN,
+      trainingTrades: null,
+      validationTrades: 0,
+    })
+  }
+  for (const row of clientMoverData?.losers || []) {
+    const symbol = String(row?.symbol || '').trim().toUpperCase()
+    if (!symbol || !COIN_SET.has(symbol)) continue
+    const pct = Math.abs(Number(row?.pct) || 0)
+    const strength = Math.max(60, Math.min(100, Math.round(60 + pct * 4)))
+    clientFallbackPicks.push({
+      symbol,
+      name: String(row?.name || symbol).trim(),
+      href: coinHref(symbol),
+      status: 'SELL',
+      score: Math.max(0, 100 - strength),
+      strength,
+      strategyLabel: 'Ruwe live short fallback',
+      validationWinrate: Number.NaN,
+      validationAvgReturnPct: Number.NaN,
+      trainingTrades: null,
+      validationTrades: 0,
+    })
+  }
+
+  const effectivePicks = clientFallbackPicks.length > 0 ? [...new Map(clientFallbackPicks.map((item) => [`${item.symbol}::${item.status}`, item])).values()].sort(sortByBest) : picks
+  const effectiveSourceMode: 'audit' | 'fallback' | 'raw' = clientFallbackPicks.length > 0 ? 'raw' : sourceMode
+
+  const buyPicks = effectivePicks.filter((item) => item.status === 'BUY').sort(sortByBest)
+  const sellPicks = effectivePicks.filter((item) => item.status === 'SELL').sort(sortByBest)
   const featuredBuys = buyPicks.slice(0, 5)
   const featuredSells = sellPicks.slice(0, 5)
   const hiddenBuys = Math.max(0, buyPicks.length - featuredBuys.length)
@@ -189,8 +316,12 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
             <div className="max-w-3xl">
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Premium Crypto Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
-                Deze pagina toont alleen live crypto-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.
-                De ruwe scorepool zie je hier dus bewust niet meer. Bovenaan krijgt elk featured signaal nu ook een leakage-free forecast voor {selectedHorizon} dagen.
+                {effectiveSourceMode === 'audit'
+                  ? 'Deze pagina toont live crypto-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.'
+                  : effectiveSourceMode === 'fallback'
+                    ? 'De strikte audit had nu geen live picks. Daarom toont deze pagina automatisch de beste actieve fallback-signalen uit de premium-filter, met dezelfde forecastlaag erbovenop.'
+                    : 'Audit en premium-filter waren nu leeg. Daarom tonen we de ruwe live top-signalen uit de fallback-bronnen zodat de pagina niet leeg blijft.'}{' '}
+                Bovenaan krijgt elk featured signaal een leakage-free forecast voor {selectedHorizon} dagen.
               </p>
             </div>
 
@@ -245,11 +376,21 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Databron</div>
-              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Audit</div>
+              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">
+                {effectiveSourceMode === 'audit' ? 'Audit' : effectiveSourceMode === 'fallback' ? 'Fallback' : 'Live score'}
+              </div>
               <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh elk uur</div>
             </div>
           </div>
         </section>
+
+        {effectiveSourceMode !== 'audit' && (
+          <section className="rounded-2xl border border-amber-400/45 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+            {effectiveSourceMode === 'fallback'
+              ? 'De strikte audit-filter had nu geen live crypto. Daarom tonen we automatisch de beste fallback-signalen zodat deze pagina niet leeg blijft.'
+              : 'Zelfs de premium fallback was nu leeg. Daarom tonen we de ruwe live top-signalen uit de fallback-bronnen als laatste vangnet.'}
+          </section>
+        )}
 
         {error && (
           <section className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
@@ -409,13 +550,108 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
           generatedAt: new Date().toLocaleString('nl-NL'),
           picks: [],
           selectedHorizon,
+          sourceMode: 'audit',
         },
       }
     }
 
     const data = await r.json()
     const rawPicks = Array.isArray(data?.qualifiedLivePicks) ? (data.qualifiedLivePicks as AuditPick[]) : []
-    const picks = rawPicks.map(buildPick).filter((item): item is CryptoPick => !!item).sort(sortByBest)
+    let picks = rawPicks.map(buildPick).filter((item): item is CryptoPick => !!item).sort(sortByBest)
+    let sourceMode: 'audit' | 'fallback' | 'raw' = 'audit'
+
+    if (picks.length === 0) {
+      const fallbackRes = await fetch(`${base}/api/market/premium-active?targetWinrate=0.7&maxSignalsGlobal=160`, { cache: 'no-store' })
+      if (fallbackRes.ok) {
+        const fallbackData = await fallbackRes.json()
+        const fallbackSignals = Array.isArray(fallbackData?.signals?.all) ? (fallbackData.signals.all as FallbackSignal[]) : []
+        const fallbackPicks = fallbackSignals.map(buildFallbackPick).filter((item): item is CryptoPick => !!item).sort(sortByBest)
+        if (fallbackPicks.length > 0) {
+          picks = fallbackPicks
+          sourceMode = 'fallback'
+        }
+      }
+    }
+
+    if (picks.length === 0) {
+      const rawPicks: CryptoPick[] = []
+      const cgRes = await fetch(
+        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=200&page=1&price_change_percentage=24h',
+        {
+          cache: 'no-store',
+          headers: {
+            accept: 'application/json',
+            'user-agent': process.env.SEC_USER_AGENT || 'SignalHub/1.0',
+          },
+        }
+      )
+
+      if (cgRes.ok) {
+        const markets = (await cgRes.json()) as CoinGeckoMarket[]
+        const filtered = (Array.isArray(markets) ? markets : [])
+          .map((row) => ({
+            symbol: String(row?.symbol || '').trim().toUpperCase(),
+            name: String(row?.name || '').trim(),
+            pct: Number(row?.price_change_percentage_24h ?? Number.NaN),
+          }))
+          .filter((row) => row.symbol && COIN_SET.has(row.symbol) && Number.isFinite(row.pct))
+
+        const gainers = [...filtered]
+          .filter((row) => row.pct > 0.25)
+          .sort((a, b) => b.pct - a.pct)
+          .slice(0, 8)
+
+        const losers = [...filtered]
+          .filter((row) => row.pct < -0.25)
+          .sort((a, b) => a.pct - b.pct)
+          .slice(0, 8)
+
+        for (const row of gainers) {
+          const score = Math.max(60, Math.min(100, Math.round(60 + row.pct * 4)))
+          rawPicks.push({
+            symbol: row.symbol,
+            name: row.name || row.symbol,
+            href: coinHref(row.symbol),
+            status: 'BUY',
+            score,
+            strength: score,
+            strategyLabel: 'Ruwe live buy fallback',
+            validationWinrate: Number.NaN,
+            validationAvgReturnPct: Number.NaN,
+            trainingTrades: null,
+            validationTrades: 0,
+          })
+        }
+
+        for (const row of losers) {
+          const strength = Math.max(60, Math.min(100, Math.round(60 + Math.abs(row.pct) * 4)))
+          rawPicks.push({
+            symbol: row.symbol,
+            name: row.name || row.symbol,
+            href: coinHref(row.symbol),
+            status: 'SELL',
+            score: Math.max(0, 100 - strength),
+            strength,
+            strategyLabel: 'Ruwe live short fallback',
+            validationWinrate: Number.NaN,
+            validationAvgReturnPct: Number.NaN,
+            trainingTrades: null,
+            validationTrades: 0,
+          })
+        }
+      }
+
+      if (rawPicks.length > 0) {
+        const dedupedRaw = new Map<string, CryptoPick>()
+        for (const pick of rawPicks) {
+          const dedupeKey = `${pick.symbol}::${pick.status}`
+          const existing = dedupedRaw.get(dedupeKey)
+          dedupedRaw.set(dedupeKey, existing ? bestOf(existing, pick) : pick)
+        }
+        picks = [...dedupedRaw.values()].sort(sortByBest)
+        sourceMode = 'raw'
+      }
+    }
 
     return {
       props: {
@@ -423,6 +659,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks,
         selectedHorizon,
+        sourceMode,
       },
     }
   } catch (e: any) {
@@ -433,6 +670,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks: [],
         selectedHorizon,
+        sourceMode: 'audit',
       },
     }
   }

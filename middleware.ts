@@ -33,6 +33,10 @@ const PUBLIC_ALLOW = [
   // Market Intel (server-side geaggregeerd)
   '/api/market/',
 
+  // Screeners and coin fallback feeds used by active pages
+  '/api/screener/',
+  '/api/coin/',
+
   // Backtest audits
   '/api/backtest/',
 

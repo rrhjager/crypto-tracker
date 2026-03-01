@@ -17,7 +17,7 @@ type StockPick = {
   strategyLabel: string
   validationWinrate: number
   validationAvgReturnPct: number
-  trainingTrades: number
+  trainingTrades: number | null
   validationTrades: number
 }
 
@@ -26,6 +26,7 @@ type Props = {
   generatedAt: string
   picks: StockPick[]
   selectedHorizon: 7 | 14 | 30
+  sourceMode: 'audit' | 'fallback' | 'raw'
 }
 
 type AuditPick = {
@@ -40,6 +41,40 @@ type AuditPick = {
   validationAvgReturnPct?: number
   trainingTrades?: number
   validationTrades?: number
+}
+
+type FallbackSignal = {
+  market?: string
+  symbol?: string
+  name?: string
+  href?: string
+  status?: 'BUY' | 'SELL'
+  score?: number
+  strength?: number
+  horizon?: string
+  validationWinrate?: number
+  validationReturnPct?: number
+  validationTrades?: number
+}
+
+type RawTopSignalsResponse = {
+  markets?: Array<{
+    market?: string
+    topBuy?: { symbol?: string; name?: string; score?: number; signal?: string } | null
+    topSell?: { symbol?: string; name?: string; score?: number; signal?: string } | null
+  }>
+}
+
+const RAW_MARKET_MAP: Record<string, StockMarketKey> = {
+  AEX: 'AEX',
+  'S&P 500': 'SP500',
+  NASDAQ: 'NASDAQ',
+  'Dow Jones': 'DOWJONES',
+  DAX: 'DAX',
+  'FTSE 100': 'FTSE100',
+  'Nikkei 225': 'NIKKEI225',
+  'Hang Seng': 'HANGSENG',
+  Sensex: 'SENSEX',
 }
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') || ''
@@ -81,11 +116,15 @@ function formatPct(v: number | null | undefined, digits = 1) {
 }
 
 function pickScore(item: StockPick) {
+  const winrate = Number.isFinite(item.validationWinrate) ? item.validationWinrate : 0
+  const avgReturn = Number.isFinite(item.validationAvgReturnPct) ? item.validationAvgReturnPct : 0
+  const validationTrades = Number.isFinite(item.validationTrades) ? item.validationTrades : 0
+  const trainingTrades = Number.isFinite(item.trainingTrades as number) ? Number(item.trainingTrades) : 0
   return (
-    item.validationWinrate * 100 +
-    item.validationAvgReturnPct * 8 +
-    item.validationTrades * 1.5 +
-    item.trainingTrades * 0.35 +
+    winrate * 100 +
+    avgReturn * 8 +
+    validationTrades * 1.5 +
+    trainingTrades * 0.35 +
     item.strength * 0.12
   )
 }
@@ -131,12 +170,46 @@ function buildPick(market: StockMarketKey, raw: AuditPick): StockPick | null {
   }
 }
 
+function buildFallbackPick(raw: FallbackSignal): StockPick | null {
+  const market = String(raw?.market || '').trim().toUpperCase()
+  if (!market || market === 'CRYPTO' || !(market in DETAIL_BASE)) return null
+
+  const symbol = String(raw?.symbol || '').trim().toUpperCase()
+  const name = String(raw?.name || symbol).trim()
+  const status = raw?.status
+  const score = Number(raw?.score)
+  const strength = Number(raw?.strength)
+  const validationWinrate = Number(raw?.validationWinrate)
+  const validationAvgReturnPct = Number(raw?.validationReturnPct)
+  const validationTrades = Number(raw?.validationTrades)
+
+  if (!symbol || !name || (status !== 'BUY' && status !== 'SELL')) return null
+  if (!Number.isFinite(score) || !Number.isFinite(strength)) return null
+  if (!Number.isFinite(validationWinrate) || !Number.isFinite(validationAvgReturnPct) || !Number.isFinite(validationTrades)) return null
+
+  return {
+    market: market as StockMarketKey,
+    symbol,
+    name,
+    href: String(raw?.href || detailHref(market as StockMarketKey, symbol)),
+    status,
+    score: Math.round(score),
+    strength: Math.round(strength),
+    strategyLabel: `Fallback: actief signaal · ${String(raw?.horizon || '').trim() || 'lopende horizon'}`,
+    validationWinrate,
+    validationAvgReturnPct,
+    trainingTrades: null,
+    validationTrades: Math.round(validationTrades),
+  }
+}
+
 function bestOf(a: StockPick, b: StockPick) {
   return pickScore(b) > pickScore(a) ? b : a
 }
 
 function PickCard({ item, featured = false, forecastHorizon = null }: { item: StockPick; featured?: boolean; forecastHorizon?: 7 | 14 | 30 | null }) {
   const isBuy = item.status === 'BUY'
+  const hasValidation = Number.isFinite(item.validationWinrate) && Number.isFinite(item.validationAvgReturnPct)
 
   return (
     <Link
@@ -171,10 +244,10 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: St
         </div>
 
         <div className="rounded-2xl border border-white/40 bg-white/70 px-3 py-2 text-right dark:border-white/10 dark:bg-white/10">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Validatie winrate</div>
-          <div className="text-base font-semibold text-slate-900 dark:text-white">{formatPct(item.validationWinrate * 100)}</div>
-          <div className={`text-[11px] ${item.validationAvgReturnPct >= 0 ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'}`}>
-            {formatPct(item.validationAvgReturnPct)} gem. per trade
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">{hasValidation ? 'Validatie winrate' : 'Live score-model'}</div>
+          <div className="text-base font-semibold text-slate-900 dark:text-white">{hasValidation ? formatPct(item.validationWinrate * 100) : `${item.score}/100`}</div>
+          <div className={`text-[11px] ${hasValidation && item.validationAvgReturnPct >= 0 ? 'text-emerald-800 dark:text-emerald-200' : hasValidation ? 'text-rose-800 dark:text-rose-200' : 'text-slate-700/75 dark:text-white/60'}`}>
+            {hasValidation ? `${formatPct(item.validationAvgReturnPct)} gem. per trade` : 'Ruwe live fallback zonder audit-trades'}
           </div>
         </div>
       </div>
@@ -187,9 +260,9 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: St
           </div>
         </div>
         <div className="rounded-2xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
-          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">Train / test</div>
+          <div className="text-[10px] font-medium text-slate-600 dark:text-white/55">{item.trainingTrades != null ? 'Train / test' : item.validationTrades > 0 ? 'Validatie' : 'Bron'}</div>
           <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-            {item.trainingTrades} / {item.validationTrades} trades
+            {item.trainingTrades != null ? `${item.trainingTrades} / ${item.validationTrades} trades` : item.validationTrades > 0 ? `${item.validationTrades} trades` : 'Live fallback'}
           </div>
         </div>
       </div>
@@ -202,7 +275,7 @@ function PickCard({ item, featured = false, forecastHorizon = null }: { item: St
   )
 }
 
-export default function PremiumActivePage({ error, generatedAt, picks, selectedHorizon }: Props) {
+export default function PremiumActivePage({ error, generatedAt, picks, selectedHorizon, sourceMode }: Props) {
   const buyPicks = picks.filter((item) => item.status === 'BUY').sort(sortByBest)
   const sellPicks = picks.filter((item) => item.status === 'SELL').sort(sortByBest)
   const featuredBuys = buyPicks.slice(0, 5)
@@ -228,8 +301,12 @@ export default function PremiumActivePage({ error, generatedAt, picks, selectedH
             <div className="max-w-3xl">
               <h1 className="text-3xl font-semibold text-slate-900 dark:text-white">Premium Aandelen Signalen</h1>
               <p className="mt-2 text-sm text-slate-800/85 dark:text-white/70">
-                Deze pagina toont alleen live aandelen-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.
-                De ruwe scorepool zie je hier dus bewust niet meer. Bovenaan krijgt elk featured signaal nu ook een leakage-free forecast voor {selectedHorizon} dagen.
+                {sourceMode === 'audit'
+                  ? 'Deze pagina toont live aandelen-signalen die nu open staan én out-of-sample positief bleven in de audit-backtest.'
+                  : sourceMode === 'fallback'
+                    ? 'De strikte audit had nu geen live picks. Daarom toont deze pagina automatisch de beste actieve fallback-signalen uit de premium-filter, met dezelfde forecastlaag erbovenop.'
+                    : 'Audit en premium-filter waren nu leeg. Daarom tonen we de ruwe live top-signalen uit de score-engine als laatste fallback zodat de pagina niet leeg blijft.'}{' '}
+                Bovenaan krijgt elk featured signaal een leakage-free forecast voor {selectedHorizon} dagen.
               </p>
             </div>
 
@@ -284,11 +361,21 @@ export default function PremiumActivePage({ error, generatedAt, picks, selectedH
 
             <div className="rounded-2xl border border-white/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Databron</div>
-              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">Audit</div>
+              <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">
+                {sourceMode === 'audit' ? 'Audit' : sourceMode === 'fallback' ? 'Fallback' : 'Live score'}
+              </div>
               <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh elk uur</div>
             </div>
           </div>
         </section>
+
+        {sourceMode !== 'audit' && (
+          <section className="rounded-2xl border border-amber-400/45 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+            {sourceMode === 'fallback'
+              ? 'De strikte audit-filter had nu geen live aandelen. Daarom tonen we automatisch de beste fallback-signalen zodat deze pagina niet leeg blijft.'
+              : 'Zelfs de premium fallback was nu leeg. Daarom tonen we de ruwe live top-signalen uit de score-engine als laatste vangnet.'}
+          </section>
+        )}
 
         {error && (
           <section className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
@@ -473,7 +560,98 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
       }
     }
 
-    const picks = [...deduped.values()].sort(sortByBest)
+    let picks = [...deduped.values()].sort(sortByBest)
+    let sourceMode: 'audit' | 'fallback' | 'raw' = 'audit'
+
+    if (picks.length === 0) {
+      const fallbackRes = await fetch(`${base}/api/market/premium-active?targetWinrate=0.7&maxSignalsGlobal=160`, { cache: 'no-store' })
+      if (fallbackRes.ok) {
+        const fallbackData = await fallbackRes.json()
+        const fallbackSignals = Array.isArray(fallbackData?.signals?.all) ? (fallbackData.signals.all as FallbackSignal[]) : []
+        const fallbackDeduped = new Map<string, StockPick>()
+
+        for (const raw of fallbackSignals) {
+          const pick = buildFallbackPick(raw)
+          if (!pick) continue
+          const dedupeKey = `${pick.symbol}::${pick.status}`
+          const existing = fallbackDeduped.get(dedupeKey)
+          fallbackDeduped.set(dedupeKey, existing ? bestOf(existing, pick) : pick)
+        }
+
+        const fallbackPicks = [...fallbackDeduped.values()].sort(sortByBest)
+        if (fallbackPicks.length > 0) {
+          picks = fallbackPicks
+          sourceMode = 'fallback'
+        }
+      }
+    }
+
+    if (picks.length === 0) {
+      const rawRes = await fetch(`${base}/api/screener/top-signals`, { cache: 'no-store' })
+      if (rawRes.ok) {
+        const rawData = (await rawRes.json()) as RawTopSignalsResponse
+        const rawPicks: StockPick[] = []
+
+        for (const marketRow of rawData.markets || []) {
+          const mappedMarket = RAW_MARKET_MAP[String(marketRow?.market || '').trim()]
+          if (!mappedMarket) continue
+
+          const topBuy = marketRow?.topBuy
+          if (topBuy && String(topBuy.signal || '').toUpperCase() === 'BUY') {
+            const symbol = String(topBuy.symbol || '').trim().toUpperCase()
+            if (symbol) {
+              rawPicks.push({
+                market: mappedMarket,
+                symbol,
+                name: String(topBuy.name || symbol).trim(),
+                href: detailHref(mappedMarket, symbol),
+                status: 'BUY',
+                score: Math.round(Number(topBuy.score) || 0),
+                strength: Math.round(Number(topBuy.score) || 0),
+                strategyLabel: 'Ruwe live score fallback',
+                validationWinrate: Number.NaN,
+                validationAvgReturnPct: Number.NaN,
+                trainingTrades: null,
+                validationTrades: 0,
+              })
+            }
+          }
+
+          const topSell = marketRow?.topSell
+          if (topSell && String(topSell.signal || '').toUpperCase() === 'SELL') {
+            const symbol = String(topSell.symbol || '').trim().toUpperCase()
+            const rawScore = Math.round(Number(topSell.score) || 0)
+            if (symbol) {
+              rawPicks.push({
+                market: mappedMarket,
+                symbol,
+                name: String(topSell.name || symbol).trim(),
+                href: detailHref(mappedMarket, symbol),
+                status: 'SELL',
+                score: rawScore,
+                strength: Math.max(0, Math.min(100, 100 - rawScore)),
+                strategyLabel: 'Ruwe live score fallback',
+                validationWinrate: Number.NaN,
+                validationAvgReturnPct: Number.NaN,
+                trainingTrades: null,
+                validationTrades: 0,
+              })
+            }
+          }
+        }
+
+        if (rawPicks.length > 0) {
+          const dedupedRaw = new Map<string, StockPick>()
+          for (const pick of rawPicks) {
+            const dedupeKey = `${pick.symbol}::${pick.status}`
+            const existing = dedupedRaw.get(dedupeKey)
+            dedupedRaw.set(dedupeKey, existing ? bestOf(existing, pick) : pick)
+          }
+          picks = [...dedupedRaw.values()].sort(sortByBest)
+          sourceMode = 'raw'
+        }
+      }
+    }
 
     return {
       props: {
@@ -481,6 +659,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks,
         selectedHorizon,
+        sourceMode,
       },
     }
   } catch (e: any) {
@@ -491,6 +670,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (context) => 
         generatedAt: new Date().toLocaleString('nl-NL'),
         picks: [],
         selectedHorizon,
+        sourceMode: 'audit',
       },
     }
   }
