@@ -147,6 +147,14 @@ type TopSignalsResponse = {
   }>
 }
 
+type ScoreBatchResponse = {
+  items?: Array<{
+    symbol?: string
+    score?: number | null
+    status?: 'BUY' | 'HOLD' | 'SELL' | 'NA'
+  }>
+}
+
 type CoinHomeBuysResponse = {
   items?: Array<{ symbol?: string; name?: string; score?: number }>
 }
@@ -458,19 +466,50 @@ async function getEquitySignalsByMode(origin: string, sourceMode?: ForwardSource
     return { signals: dedupeSignals(auditSignals), sourceMode: 'audit' }
   }
   if (sourceMode === 'fallback') {
-    const premium = await fetchJson<{ signals?: { all?: PremiumSignal[] } }>(`${origin}/api/market/premium-active?targetWinrate=0.7&maxSignalsGlobal=160`)
-    const fallbackSignals = (premium?.signals?.all || [])
-      .map((row): ForwardSignal | null => {
-        const market = String(row?.market || '').trim().toUpperCase()
-        if (!market || market === 'CRYPTO') return null
-        const symbol = String(row?.symbol || '').trim().toUpperCase()
-        const name = String(row?.name || symbol).trim()
-        const side = row?.status
-        if (!symbol || !name || (side !== 'BUY' && side !== 'SELL')) return null
-        return { symbol, name, side, sourceMode: 'fallback' }
+    const raw = await fetchJson<TopSignalsResponse>(`${origin}/api/screener/top-signals`)
+    const candidates: ForwardSignal[] = []
+    for (const row of raw?.markets || []) {
+      if (row?.topBuy && String(row.topBuy.signal || '').toUpperCase() === 'BUY') {
+        const symbol = String(row.topBuy.symbol || '').trim().toUpperCase()
+        if (symbol) candidates.push({ symbol, name: String(row.topBuy.name || symbol).trim(), side: 'BUY', sourceMode: 'fallback' })
+      }
+      if (row?.topSell && String(row.topSell.signal || '').toUpperCase() === 'SELL') {
+        const symbol = String(row.topSell.symbol || '').trim().toUpperCase()
+        if (symbol) candidates.push({ symbol, name: String(row.topSell.name || symbol).trim(), side: 'SELL', sourceMode: 'fallback' })
+      }
+    }
+
+    const dedupedCandidates = dedupeSignals(candidates)
+    if (!dedupedCandidates.length) return { signals: [], sourceMode: 'fallback' }
+
+    const scoreBatch = await fetchJson<ScoreBatchResponse>(
+      `${origin}/api/indicators/score-batch?symbols=${encodeURIComponent(dedupedCandidates.map((row) => row.symbol).join(','))}`
+    )
+    const scoreMap = new Map(
+      (scoreBatch?.items || []).map((row) => [
+        String(row?.symbol || '').trim().toUpperCase(),
+        {
+          score: safeNumber(row?.score),
+          status: row?.status,
+        },
+      ])
+    )
+
+    const filtered = dedupedCandidates
+      .map((row) => {
+        const batch = scoreMap.get(row.symbol)
+        if (!batch || batch.score == null) return null
+        if (batch.status !== row.side) return null
+        const strength = row.side === 'BUY' ? batch.score : 100 - batch.score
+        if (strength < 75) return null
+        return { row, strength }
       })
-      .filter((row): row is ForwardSignal => !!row)
-    return { signals: dedupeSignals(fallbackSignals), sourceMode: 'fallback' }
+      .filter((row): row is { row: ForwardSignal; strength: number } => !!row)
+      .sort((a, b) => b.strength - a.strength)
+      .slice(0, 6)
+      .map((row) => row.row)
+
+    return { signals: filtered, sourceMode: 'fallback' }
   }
   if (sourceMode === 'raw') {
     const raw = await fetchJson<TopSignalsResponse>(`${origin}/api/screener/top-signals`)
