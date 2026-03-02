@@ -161,7 +161,7 @@ type QuotesResponse = {
 
 const EQUITY_MARKETS = ['aex', 'dax', 'dowjones', 'etfs', 'ftse100', 'hangseng', 'nasdaq', 'nikkei225', 'sensex', 'sp500'] as const
 const TRACKER_VERSION_BY_ASSET: Record<ForwardAssetType, number> = {
-  equity: 3,
+  equity: 4,
   crypto: 2,
 }
 const PRINCIPAL_PER_TRADE_EUR = 1000
@@ -591,19 +591,8 @@ export async function syncForwardTracker(
 
     if (!liveSignal) {
       if (isEquity) {
-        const pending = nextState.pendingExits?.[symbol]
-        const seenCount = pending?.reason === 'signal_removed' ? pending.seenCount + 1 : 1
-        nextState.pendingExits![symbol] = {
-          symbol,
-          reason: 'signal_removed',
-          firstSeenAt: pending?.reason === 'signal_removed' ? pending.firstSeenAt : stamp.iso,
-          firstSeenAtMs: pending?.reason === 'signal_removed' ? pending.firstSeenAtMs : stamp.ms,
-          lastSeenAt: stamp.iso,
-          lastSeenAtMs: stamp.ms,
-          seenCount,
-        }
-        const heldLongEnough = stamp.ms - open.openedAtMs >= EQUITY_MIN_HOLD_MS
-        if (!heldLongEnough || seenCount < EQUITY_EXIT_CONFIRMATIONS) continue
+        delete nextState.pendingExits?.[symbol]
+        continue
       }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
@@ -696,7 +685,7 @@ export async function syncForwardTracker(
       sourceMode,
       currentSignals: signals.length,
       note: isEquity
-        ? 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Aandelen sluiten pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        ? 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
         : 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
       costs: {
         feeBpsRoundTrip: costModel.feeBpsRoundTrip,
