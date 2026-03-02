@@ -161,7 +161,7 @@ type QuotesResponse = {
 
 const EQUITY_MARKETS = ['aex', 'dax', 'dowjones', 'etfs', 'ftse100', 'hangseng', 'nasdaq', 'nikkei225', 'sensex', 'sp500'] as const
 const TRACKER_VERSION_BY_ASSET: Record<ForwardAssetType, number> = {
-  equity: 4,
+  equity: 5,
   crypto: 2,
 }
 const PRINCIPAL_PER_TRADE_EUR = 1000
@@ -277,7 +277,7 @@ async function getEquitySignals(origin: string): Promise<{ signals: ForwardSigna
   if (audit.signals.length > 0) return audit
   const fallback = await getEquitySignalsByMode(origin, 'fallback')
   if (fallback.signals.length > 0) return fallback
-  return getEquitySignalsByMode(origin, 'raw')
+  return { signals: [], sourceMode: 'fallback' }
 }
 
 async function getCryptoSignals(origin: string): Promise<{ signals: ForwardSignal[]; sourceMode: ForwardSourceMode }> {
@@ -542,7 +542,12 @@ async function getCryptoSignalsByMode(origin: string, sourceMode?: ForwardSource
 }
 
 async function getCurrentSignals(origin: string, assetType: ForwardAssetType, preferredSourceMode?: ForwardSourceMode) {
-  if (assetType === 'equity') return getEquitySignalsByMode(origin, preferredSourceMode)
+  if (assetType === 'equity') {
+    if (preferredSourceMode === 'audit' || preferredSourceMode === 'fallback') {
+      return getEquitySignalsByMode(origin, preferredSourceMode)
+    }
+    return getEquitySignals(origin)
+  }
   return getCryptoSignalsByMode(origin, preferredSourceMode)
 }
 
@@ -685,7 +690,7 @@ export async function syncForwardTracker(
       sourceMode,
       currentSignals: signals.length,
       note: isEquity
-        ? 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
         : 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
       costs: {
         feeBpsRoundTrip: costModel.feeBpsRoundTrip,

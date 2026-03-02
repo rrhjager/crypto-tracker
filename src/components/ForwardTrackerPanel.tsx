@@ -66,7 +66,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
             Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
             <span className="font-medium text-slate-900 dark:text-white">€1000</span>.{' '}
             {assetType === 'equity'
-              ? 'Aandelen sluiten alleen op een tegengesteld signaal, na bevestiging en minimaal 24 uur hold.'
+              ? 'Aandelen openen alleen uit audit/fallback en sluiten alleen op een tegengesteld signaal, na bevestiging en minimaal 24 uur hold.'
               : 'Bij een statusflip of wanneer het signaal verdwijnt, sluit de trade automatisch.'}{' '}
             Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
           </p>
