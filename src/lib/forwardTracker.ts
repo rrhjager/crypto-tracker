@@ -4,6 +4,7 @@ import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
 export type ForwardSourceMode = 'audit' | 'fallback' | 'raw'
+export type ForwardStrategy = 'standard' | 'high_move'
 export type ForwardSide = 'BUY' | 'SELL'
 export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell'
 
@@ -94,6 +95,7 @@ type ForwardTrackerState = {
 export type ForwardTrackerResponse = {
   meta: {
     assetType: ForwardAssetType
+    strategy: ForwardStrategy
     startedAt: string
     lastSyncAt: string
     principalPerTradeEur: number
@@ -155,6 +157,15 @@ type ScoreBatchResponse = {
   }>
 }
 
+type ForecastApiResponse = {
+  probUp?: number
+  confidence?: number
+  expectedReturn?: number | null
+  positionSize?: number
+  action?: 'LONG' | 'HOLD' | 'EXIT'
+  regime?: 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL'
+}
+
 type CoinHomeBuysResponse = {
   items?: Array<{ symbol?: string; name?: string; score?: number }>
 }
@@ -179,6 +190,10 @@ const FEE_BPS_CRYPTO_ROUND_TRIP = 20
 const SLIPPAGE_BPS_ROUND_TRIP = 10
 const EQUITY_MIN_HOLD_MS = 24 * 60 * 60 * 1000
 const EQUITY_EXIT_CONFIRMATIONS = 2
+const HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT = 4
+const HIGH_MOVE_CRYPTO_MIN_CONFIDENCE = 60
+const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
+const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
 
 type TrackerCostModel = {
   feeBpsRoundTrip: number
@@ -187,8 +202,16 @@ type TrackerCostModel = {
   perSideBps: number
 }
 
-function trackerKey(assetType: ForwardAssetType) {
+function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
+  if (strategy === 'high_move') {
+    return `paper-forward:v1:${assetType}:high_move`
+  }
   return `paper-forward:v${TRACKER_VERSION_BY_ASSET[assetType]}:${assetType}`
+}
+
+function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) {
+  if (strategy === 'high_move') return 1
+  return TRACKER_VERSION_BY_ASSET[assetType]
 }
 
 function msToIso(ms: number) {
@@ -347,10 +370,10 @@ async function getCurrentPrices(origin: string, assetType: ForwardAssetType, sym
   return out
 }
 
-function createEmptyState(assetType: ForwardAssetType): ForwardTrackerState {
+function createEmptyState(assetType: ForwardAssetType, strategy: ForwardStrategy): ForwardTrackerState {
   const stamp = nowStamp()
   return {
-    version: TRACKER_VERSION_BY_ASSET[assetType],
+    version: trackerVersion(assetType, strategy),
     assetType,
     principalPerTradeEur: PRINCIPAL_PER_TRADE_EUR,
     startedAt: stamp.iso,
@@ -590,16 +613,64 @@ async function getCurrentSignals(origin: string, assetType: ForwardAssetType, pr
   return getCryptoSignalsByMode(origin, preferredSourceMode)
 }
 
+async function filterHighMoveCryptoSignals(origin: string, signals: ForwardSignal[]): Promise<ForwardSignal[]> {
+  const deduped = dedupeSignals(signals)
+  if (!deduped.length) return []
+
+  const results = await Promise.all(
+    deduped.map(async (signal) => {
+      const forecast = await fetchJson<ForecastApiResponse>(
+        `${origin}/api/forecast?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
+      )
+      const expectedReturn = safeNumber(forecast?.expectedReturn)
+      const confidence = safeNumber(forecast?.confidence)
+      const probUp = safeNumber(forecast?.probUp)
+      const positionSize = safeNumber(forecast?.positionSize)
+      const action = forecast?.action
+      const regime = forecast?.regime
+      if (expectedReturn == null || confidence == null || probUp == null || positionSize == null || !action || !regime) return null
+
+      if (signal.side === 'BUY') {
+        if (action !== 'LONG') return null
+        if (regime === 'RISK_OFF') return null
+        if (confidence < HIGH_MOVE_CRYPTO_MIN_CONFIDENCE) return null
+        if (expectedReturn < HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT) return null
+        if (positionSize < 0.2) return null
+        return {
+          ...signal,
+          name: `${signal.name}`,
+        }
+      }
+
+      if (confidence < HIGH_MOVE_CRYPTO_MIN_CONFIDENCE) return null
+      if (expectedReturn > -HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT) return null
+      if (probUp > 0.4) return null
+      return {
+        ...signal,
+        name: `${signal.name}`,
+      }
+    })
+  )
+
+  return results.filter((row): row is ForwardSignal => !!row)
+}
+
 export async function syncForwardTracker(
   req: NextApiRequest,
   assetType: ForwardAssetType,
-  preferredSourceMode?: ForwardSourceMode
+  preferredSourceMode?: ForwardSourceMode,
+  strategy: ForwardStrategy = 'standard'
 ): Promise<ForwardTrackerResponse> {
   const origin = baseUrl(req)
-  const key = trackerKey(assetType)
-  const current = (await kvGetJSON<ForwardTrackerState>(key)) || createEmptyState(assetType)
+  const key = trackerKey(assetType, strategy)
+  const current = (await kvGetJSON<ForwardTrackerState>(key)) || createEmptyState(assetType, strategy)
 
-  const { signals, sourceMode } = await getCurrentSignals(origin, assetType, preferredSourceMode)
+  const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
+  const sourceMode = currentSignalsResp.sourceMode
+  const signals =
+    assetType === 'crypto' && strategy === 'high_move'
+      ? await filterHighMoveCryptoSignals(origin, currentSignalsResp.signals)
+      : currentSignalsResp.signals
   const signalMap = new Map<string, ForwardSignal>()
   for (const signal of signals) signalMap.set(signal.symbol, signal)
 
@@ -607,6 +678,8 @@ export async function syncForwardTracker(
   const priceMap = await getCurrentPrices(origin, assetType, symbolsForPricing)
   const stamp = nowStamp()
   const isEquity = assetType === 'equity'
+  const isHighMoveCrypto = assetType === 'crypto' && strategy === 'high_move'
+  const usesStickyExits = isEquity || isHighMoveCrypto
 
   const nextState: ForwardTrackerState = {
     ...current,
@@ -628,7 +701,7 @@ export async function syncForwardTracker(
       open.lastMarkedAt = stamp.iso
     }
 
-    if (isEquity && liveSignal?.side === open.side) {
+    if (usesStickyExits && liveSignal?.side === open.side) {
       delete nextState.pendingExits?.[symbol]
       continue
     }
@@ -637,6 +710,21 @@ export async function syncForwardTracker(
       if (isEquity) {
         delete nextState.pendingExits?.[symbol]
         continue
+      }
+      if (isHighMoveCrypto) {
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === 'signal_removed' ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason: 'signal_removed',
+          firstSeenAt: pending?.reason === 'signal_removed' ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === 'signal_removed' ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_MOVE_CRYPTO_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS) continue
       }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
@@ -662,6 +750,22 @@ export async function syncForwardTracker(
         }
         const heldLongEnough = stamp.ms - open.openedAtMs >= EQUITY_MIN_HOLD_MS
         if (!heldLongEnough || seenCount < EQUITY_EXIT_CONFIRMATIONS) continue
+      }
+      if (isHighMoveCrypto) {
+        const reason = liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell'
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === reason ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason,
+          firstSeenAt: pending?.reason === reason ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === reason ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_MOVE_CRYPTO_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS) continue
       }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(
@@ -723,6 +827,7 @@ export async function syncForwardTracker(
   return {
     meta: {
       assetType,
+      strategy,
       startedAt: nextState.startedAt,
       lastSyncAt: nextState.lastSyncAt,
       principalPerTradeEur: nextState.principalPerTradeEur,
@@ -730,6 +835,8 @@ export async function syncForwardTracker(
       currentSignals: signals.length,
       note: isEquity
         ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        : isHighMoveCrypto
+          ? 'Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= 60. Hij houdt minimaal 48 uur vast en sluit pas na 2 opeenvolgende exitsignalen.'
         : 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
       costs: {
         feeBpsRoundTrip: costModel.feeBpsRoundTrip,

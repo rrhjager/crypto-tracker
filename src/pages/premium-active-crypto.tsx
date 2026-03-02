@@ -527,7 +527,20 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           maar wel in de volledige audit-lijsten hieronder.
         </section>
 
-        <ForwardTrackerPanel assetType="crypto" sourceMode={effectiveSourceMode} />
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          title="Forward test vanaf nu"
+          description="Dit is de huidige crypto-papertracker. Elke BUY of SELL opent fictief €1000 en sluit bij een statusflip of als het signaal verdwijnt. Hiermee vergelijk je de bestaande, snellere variant."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="high_move"
+          title="Forward test grote moves"
+          description="Dit is de strengere crypto-variant voor grotere marges. Hij opent alleen als de 14D forecast minimaal circa 4% move verwacht bij voldoende confidence, houdt minimaal 48 uur aan en wacht op 2 opeenvolgende exitsignalen."
+        />
       </main>
     </>
   )

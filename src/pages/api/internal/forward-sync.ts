@@ -17,6 +17,7 @@ type Resp = {
   ranAt: string
   equity: SyncSummary
   crypto: SyncSummary
+  cryptoHighMove: SyncSummary
 }
 
 function summarize(data: Awaited<ReturnType<typeof syncForwardTracker>>): SyncSummary {
@@ -39,9 +40,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     res.setHeader('Cache-Control', 'no-store')
 
-    const [equity, crypto] = await Promise.all([
+    const [equity, crypto, cryptoHighMove] = await Promise.all([
       syncForwardTracker(req, 'equity'),
       syncForwardTracker(req, 'crypto'),
+      syncForwardTracker(req, 'crypto', undefined, 'high_move'),
     ])
 
     return res.status(200).json({
@@ -49,6 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       ranAt: new Date().toISOString(),
       equity: summarize(equity),
       crypto: summarize(crypto),
+      cryptoHighMove: summarize(cryptoHighMove),
     })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })

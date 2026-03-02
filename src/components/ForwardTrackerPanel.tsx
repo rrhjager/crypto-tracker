@@ -1,9 +1,12 @@
 import useSWR from 'swr'
-import type { ForwardAssetType, ForwardSourceMode, ForwardTrackerResponse } from '@/lib/forwardTracker'
+import type { ForwardAssetType, ForwardSourceMode, ForwardStrategy, ForwardTrackerResponse } from '@/lib/forwardTracker'
 
 type Props = {
   assetType: ForwardAssetType
   sourceMode: ForwardSourceMode
+  strategy?: ForwardStrategy
+  title?: string
+  description?: string
 }
 
 const fetcher = async (url: string) => {
@@ -46,9 +49,9 @@ function sidePill(side: 'BUY' | 'SELL') {
     : 'bg-rose-600 text-white'
 }
 
-export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
+export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standard', title, description }: Props) {
   const { data, error } = useSWR<ForwardTrackerResponse>(
-    `/api/market/forward-tracker?assetType=${assetType}&sourceMode=${sourceMode}`,
+    `/api/market/forward-tracker?assetType=${assetType}&sourceMode=${sourceMode}&strategy=${strategy}`,
     fetcher,
     {
       revalidateOnFocus: false,
@@ -61,14 +64,18 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
     <section className="rounded-3xl border border-slate-300/45 bg-white/85 p-5 dark:border-white/10 dark:bg-white/5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-3xl">
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Forward test vanaf nu</h2>
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white">{title || 'Forward test vanaf nu'}</h2>
           <p className="mt-1 text-sm text-slate-700/80 dark:text-white/65">
-            Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
-            <span className="font-medium text-slate-900 dark:text-white">€1000</span>.{' '}
-            {assetType === 'equity'
-              ? 'Aandelen openen alleen uit audit/fallback en sluiten alleen op een tegengesteld signaal, na bevestiging en minimaal 24 uur hold.'
-              : 'Bij een statusflip of wanneer het signaal verdwijnt, sluit de trade automatisch.'}{' '}
-            Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
+            {description || (
+              <>
+                Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
+                <span className="font-medium text-slate-900 dark:text-white">€1000</span>.{' '}
+                {assetType === 'equity'
+                  ? 'Aandelen openen alleen uit audit/fallback en sluiten alleen op een tegengesteld signaal, na bevestiging en minimaal 24 uur hold.'
+                  : 'Bij een statusflip of wanneer het signaal verdwijnt, sluit de trade automatisch.'}{' '}
+                Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
+              </>
+            )}
           </p>
         </div>
 

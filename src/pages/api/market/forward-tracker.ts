@@ -5,6 +5,7 @@ import {
   syncForwardTracker,
   type ForwardAssetType,
   type ForwardSourceMode,
+  type ForwardStrategy,
   type ForwardTrackerResponse,
 } from '@/lib/forwardTracker'
 
@@ -23,6 +24,13 @@ function parseSourceMode(raw: string | string[] | undefined): ForwardSourceMode 
   return undefined
 }
 
+function parseStrategy(raw: string | string[] | undefined): ForwardStrategy {
+  const value = String(Array.isArray(raw) ? raw[0] : raw || '')
+    .trim()
+    .toLowerCase()
+  return value === 'high_move' ? 'high_move' : 'standard'
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse<ForwardTrackerResponse | ErrorResp>) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST')
@@ -33,7 +41,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     res.setHeader('Cache-Control', 'no-store')
     const assetType = parseAssetType(req.method === 'GET' ? req.query.assetType : (req.body?.assetType as string | undefined))
     const sourceMode = parseSourceMode(req.method === 'GET' ? req.query.sourceMode : (req.body?.sourceMode as string | undefined))
-    const data = await syncForwardTracker(req, assetType, sourceMode)
+    const strategy = parseStrategy(req.method === 'GET' ? req.query.strategy : (req.body?.strategy as string | undefined))
+    const data = await syncForwardTracker(req, assetType, sourceMode, strategy)
     return res.status(200).json(data)
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
