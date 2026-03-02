@@ -28,6 +28,16 @@ type PersistedOpenPosition = {
   lastMarkedAt: string
 }
 
+type PersistedPendingExit = {
+  symbol: string
+  reason: ForwardExitReason
+  firstSeenAt: string
+  firstSeenAtMs: number
+  lastSeenAt: string
+  lastSeenAtMs: number
+  seenCount: number
+}
+
 export type ForwardOpenPosition = PersistedOpenPosition & {
   currentPrice: number
   currentValueEur: number
@@ -77,6 +87,7 @@ type ForwardTrackerState = {
   lastSyncAt: string
   lastSyncAtMs: number
   openPositions: Record<string, PersistedOpenPosition>
+  pendingExits?: Record<string, PersistedPendingExit>
   closedTrades: PersistedClosedTrade[]
 }
 
@@ -149,12 +160,17 @@ type QuotesResponse = {
 }
 
 const EQUITY_MARKETS = ['aex', 'dax', 'dowjones', 'etfs', 'ftse100', 'hangseng', 'nasdaq', 'nikkei225', 'sensex', 'sp500'] as const
-const TRACKER_VERSION = 2
+const TRACKER_VERSION_BY_ASSET: Record<ForwardAssetType, number> = {
+  equity: 3,
+  crypto: 2,
+}
 const PRINCIPAL_PER_TRADE_EUR = 1000
 const MAX_CLOSED_TRADES = 200
 const FEE_BPS_EQUITY_ROUND_TRIP = 10
 const FEE_BPS_CRYPTO_ROUND_TRIP = 20
 const SLIPPAGE_BPS_ROUND_TRIP = 10
+const EQUITY_MIN_HOLD_MS = 24 * 60 * 60 * 1000
+const EQUITY_EXIT_CONFIRMATIONS = 2
 
 type TrackerCostModel = {
   feeBpsRoundTrip: number
@@ -164,7 +180,7 @@ type TrackerCostModel = {
 }
 
 function trackerKey(assetType: ForwardAssetType) {
-  return `paper-forward:v${TRACKER_VERSION}:${assetType}`
+  return `paper-forward:v${TRACKER_VERSION_BY_ASSET[assetType]}:${assetType}`
 }
 
 function msToIso(ms: number) {
@@ -326,7 +342,7 @@ async function getCurrentPrices(origin: string, assetType: ForwardAssetType, sym
 function createEmptyState(assetType: ForwardAssetType): ForwardTrackerState {
   const stamp = nowStamp()
   return {
-    version: TRACKER_VERSION,
+    version: TRACKER_VERSION_BY_ASSET[assetType],
     assetType,
     principalPerTradeEur: PRINCIPAL_PER_TRADE_EUR,
     startedAt: stamp.iso,
@@ -334,6 +350,7 @@ function createEmptyState(assetType: ForwardAssetType): ForwardTrackerState {
     lastSyncAt: stamp.iso,
     lastSyncAtMs: stamp.ms,
     openPositions: {},
+    pendingExits: {},
     closedTrades: [],
   }
 }
@@ -545,12 +562,14 @@ export async function syncForwardTracker(
   const symbolsForPricing = [...new Set([...signals.map((s) => s.symbol), ...Object.keys(current.openPositions)])]
   const priceMap = await getCurrentPrices(origin, assetType, symbolsForPricing)
   const stamp = nowStamp()
+  const isEquity = assetType === 'equity'
 
   const nextState: ForwardTrackerState = {
     ...current,
     lastSyncAt: stamp.iso,
     lastSyncAtMs: stamp.ms,
     openPositions: { ...current.openPositions },
+    pendingExits: { ...(current.pendingExits || {}) },
     closedTrades: [...current.closedTrades],
   }
 
@@ -565,21 +584,65 @@ export async function syncForwardTracker(
       open.lastMarkedAt = stamp.iso
     }
 
+    if (isEquity && liveSignal?.side === open.side) {
+      delete nextState.pendingExits?.[symbol]
+      continue
+    }
+
     if (!liveSignal) {
+      if (isEquity) {
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === 'signal_removed' ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason: 'signal_removed',
+          firstSeenAt: pending?.reason === 'signal_removed' ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === 'signal_removed' ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= EQUITY_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < EQUITY_EXIT_CONFIRMATIONS) continue
+      }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
         delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
       }
       continue
     }
 
     if (liveSignal.side !== open.side) {
+      if (isEquity) {
+        const reason = liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell'
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === reason ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason,
+          firstSeenAt: pending?.reason === reason ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === reason ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= EQUITY_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < EQUITY_EXIT_CONFIRMATIONS) continue
+      }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(
           closePosition(assetType, open, currentPrice, liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell', stamp.ms)
         )
         delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
       }
+    }
+  }
+
+  if (nextState.pendingExits) {
+    for (const symbol of Object.keys(nextState.pendingExits)) {
+      if (!nextState.openPositions[symbol]) delete nextState.pendingExits[symbol]
     }
   }
 
@@ -600,6 +663,7 @@ export async function syncForwardTracker(
       lastPrice: currentPrice,
       lastMarkedAt: stamp.iso,
     }
+    delete nextState.pendingExits?.[signal.symbol]
   }
 
   if (nextState.closedTrades.length > MAX_CLOSED_TRADES) {
@@ -631,7 +695,9 @@ export async function syncForwardTracker(
       principalPerTradeEur: nextState.principalPerTradeEur,
       sourceMode,
       currentSignals: signals.length,
-      note: 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
+      note: isEquity
+        ? 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Aandelen sluiten pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        : 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
       costs: {
         feeBpsRoundTrip: costModel.feeBpsRoundTrip,
         slippageBpsRoundTrip: costModel.slippageBpsRoundTrip,

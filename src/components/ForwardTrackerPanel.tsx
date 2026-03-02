@@ -65,7 +65,8 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
           <p className="mt-1 text-sm text-slate-700/80 dark:text-white/65">
             Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
             <span className="font-medium text-slate-900 dark:text-white">€1000</span>. Bij een statusflip of wanneer het signaal
-            verdwijnt, sluit de trade automatisch. Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
+            verdwijnt, sluit de trade automatisch{assetType === 'equity' ? ' na bevestiging en minimaal 24 uur hold' : ''}. Bruto
+            toont alleen de pure koersverandering. Netto trekt fees en slippage af.
           </p>
         </div>
 
