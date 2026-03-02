@@ -31,12 +31,16 @@ type PersistedOpenPosition = {
 export type ForwardOpenPosition = PersistedOpenPosition & {
   currentPrice: number
   currentValueEur: number
+  netCurrentValueEur: number
   unrealizedPnlEur: number
   unrealizedReturnPct: number
+  unrealizedNetPnlEur: number
+  unrealizedNetReturnPct: number
+  estimatedCostsEur: number
   daysOpen: number
 }
 
-export type ForwardClosedTrade = {
+type PersistedClosedTrade = {
   symbol: string
   name: string
   side: ForwardSide
@@ -50,9 +54,18 @@ export type ForwardClosedTrade = {
   principalEur: number
   pnlEur: number
   returnPct: number
+  costsEur?: number
+  netPnlEur?: number
+  netReturnPct?: number
   daysOpen: number
   exitReason: ForwardExitReason
   sourceModeAtOpen: ForwardSourceMode
+}
+
+export type ForwardClosedTrade = PersistedClosedTrade & {
+  costsEur: number
+  netPnlEur: number
+  netReturnPct: number
 }
 
 type ForwardTrackerState = {
@@ -64,7 +77,7 @@ type ForwardTrackerState = {
   lastSyncAt: string
   lastSyncAtMs: number
   openPositions: Record<string, PersistedOpenPosition>
-  closedTrades: ForwardClosedTrade[]
+  closedTrades: PersistedClosedTrade[]
 }
 
 export type ForwardTrackerResponse = {
@@ -76,14 +89,26 @@ export type ForwardTrackerResponse = {
     sourceMode: ForwardSourceMode
     currentSignals: number
     note: string
+    costs: {
+      feeBpsRoundTrip: number
+      slippageBpsRoundTrip: number
+      totalBpsRoundTrip: number
+    }
   }
   summary: {
     openTrades: number
     closedTrades: number
     realizedPnlEur: number
+    realizedNetPnlEur: number
     unrealizedPnlEur: number
+    unrealizedNetPnlEur: number
     totalPnlEur: number
+    totalNetPnlEur: number
+    realizedCostsEur: number
+    estimatedOpenCostsEur: number
+    totalCostsEur: number
     winRateClosed: number | null
+    winRateClosedNet: number | null
     totalCommittedEur: number
   }
   openPositions: ForwardOpenPosition[]
@@ -127,6 +152,16 @@ const EQUITY_MARKETS = ['aex', 'dax', 'dowjones', 'etfs', 'ftse100', 'hangseng',
 const TRACKER_VERSION = 2
 const PRINCIPAL_PER_TRADE_EUR = 1000
 const MAX_CLOSED_TRADES = 200
+const FEE_BPS_EQUITY_ROUND_TRIP = 10
+const FEE_BPS_CRYPTO_ROUND_TRIP = 20
+const SLIPPAGE_BPS_ROUND_TRIP = 10
+
+type TrackerCostModel = {
+  feeBpsRoundTrip: number
+  slippageBpsRoundTrip: number
+  totalBpsRoundTrip: number
+  perSideBps: number
+}
 
 function trackerKey(assetType: ForwardAssetType) {
   return `paper-forward:v${TRACKER_VERSION}:${assetType}`
@@ -151,6 +186,50 @@ function daysBetween(fromMs: number, toMs: number) {
 
 function safeNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function getCostModel(assetType: ForwardAssetType): TrackerCostModel {
+  const feeBpsRoundTrip = assetType === 'equity' ? FEE_BPS_EQUITY_ROUND_TRIP : FEE_BPS_CRYPTO_ROUND_TRIP
+  const slippageBpsRoundTrip = SLIPPAGE_BPS_ROUND_TRIP
+  const totalBpsRoundTrip = feeBpsRoundTrip + slippageBpsRoundTrip
+  return {
+    feeBpsRoundTrip,
+    slippageBpsRoundTrip,
+    totalBpsRoundTrip,
+    perSideBps: totalBpsRoundTrip / 2,
+  }
+}
+
+function costFromBps(notional: number, bps: number) {
+  return (Math.max(0, notional) * Math.max(0, bps)) / 10_000
+}
+
+function computeMarkedTrade(
+  assetType: ForwardAssetType,
+  side: ForwardSide,
+  quantity: number,
+  entryPrice: number,
+  markPrice: number,
+  principalEur: number
+) {
+  const grossPnlEur =
+    side === 'BUY' ? quantity * (markPrice - entryPrice) : quantity * (entryPrice - markPrice)
+  const currentValueEur = principalEur + grossPnlEur
+  const model = getCostModel(assetType)
+  const entryNotional = quantity * entryPrice
+  const exitNotional = quantity * markPrice
+  const costsEur = costFromBps(entryNotional, model.perSideBps) + costFromBps(exitNotional, model.perSideBps)
+  const netPnlEur = grossPnlEur - costsEur
+
+  return {
+    grossPnlEur,
+    grossReturnPct: (grossPnlEur / Math.max(1, principalEur)) * 100,
+    currentValueEur,
+    costsEur,
+    netPnlEur,
+    netReturnPct: (netPnlEur / Math.max(1, principalEur)) * 100,
+    netCurrentValueEur: principalEur + netPnlEur,
+  }
 }
 
 function baseUrl(req: NextApiRequest) {
@@ -260,15 +339,20 @@ function createEmptyState(assetType: ForwardAssetType): ForwardTrackerState {
 }
 
 function closePosition(
+  assetType: ForwardAssetType,
   position: PersistedOpenPosition,
   exitPrice: number,
   exitReason: ForwardExitReason,
   closedAtMs: number
-): ForwardClosedTrade {
-  const pnlEur =
-    position.side === 'BUY'
-      ? position.quantity * (exitPrice - position.entryPrice)
-      : position.quantity * (position.entryPrice - exitPrice)
+): PersistedClosedTrade {
+  const marked = computeMarkedTrade(
+    assetType,
+    position.side,
+    position.quantity,
+    position.entryPrice,
+    exitPrice,
+    position.principalEur
+  )
   return {
     symbol: position.symbol,
     name: position.name,
@@ -281,25 +365,55 @@ function closePosition(
     exitPrice,
     quantity: position.quantity,
     principalEur: position.principalEur,
-    pnlEur,
-    returnPct: (pnlEur / Math.max(1, position.principalEur)) * 100,
+    pnlEur: marked.grossPnlEur,
+    returnPct: marked.grossReturnPct,
+    costsEur: marked.costsEur,
+    netPnlEur: marked.netPnlEur,
+    netReturnPct: marked.netReturnPct,
     daysOpen: daysBetween(position.openedAtMs, closedAtMs),
     exitReason,
     sourceModeAtOpen: position.sourceModeAtOpen,
   }
 }
 
-function hydrateOpenPosition(position: PersistedOpenPosition, currentPrice: number, nowMs: number): ForwardOpenPosition {
-  const pnlEur =
-    position.side === 'BUY'
-      ? position.quantity * (currentPrice - position.entryPrice)
-      : position.quantity * (position.entryPrice - currentPrice)
+function hydrateClosedTrade(assetType: ForwardAssetType, trade: PersistedClosedTrade): ForwardClosedTrade {
+  const marked = computeMarkedTrade(assetType, trade.side, trade.quantity, trade.entryPrice, trade.exitPrice, trade.principalEur)
+  const costsEur = safeNumber(trade.costsEur) ?? marked.costsEur
+  const netPnlEur = safeNumber(trade.netPnlEur) ?? trade.pnlEur - costsEur
+  const netReturnPct = safeNumber(trade.netReturnPct) ?? (netPnlEur / Math.max(1, trade.principalEur)) * 100
+
+  return {
+    ...trade,
+    costsEur,
+    netPnlEur,
+    netReturnPct,
+  }
+}
+
+function hydrateOpenPosition(
+  assetType: ForwardAssetType,
+  position: PersistedOpenPosition,
+  currentPrice: number,
+  nowMs: number
+): ForwardOpenPosition {
+  const marked = computeMarkedTrade(
+    assetType,
+    position.side,
+    position.quantity,
+    position.entryPrice,
+    currentPrice,
+    position.principalEur
+  )
   return {
     ...position,
     currentPrice,
-    currentValueEur: position.principalEur + pnlEur,
-    unrealizedPnlEur: pnlEur,
-    unrealizedReturnPct: (pnlEur / Math.max(1, position.principalEur)) * 100,
+    currentValueEur: marked.currentValueEur,
+    netCurrentValueEur: marked.netCurrentValueEur,
+    unrealizedPnlEur: marked.grossPnlEur,
+    unrealizedReturnPct: marked.grossReturnPct,
+    unrealizedNetPnlEur: marked.netPnlEur,
+    unrealizedNetReturnPct: marked.netReturnPct,
+    estimatedCostsEur: marked.costsEur,
     daysOpen: daysBetween(position.openedAtMs, nowMs),
   }
 }
@@ -453,7 +567,7 @@ export async function syncForwardTracker(
 
     if (!liveSignal) {
       if (currentPrice != null && currentPrice > 0) {
-        nextState.closedTrades.unshift(closePosition(open, currentPrice, 'signal_removed', stamp.ms))
+        nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
         delete nextState.openPositions[symbol]
       }
       continue
@@ -462,7 +576,7 @@ export async function syncForwardTracker(
     if (liveSignal.side !== open.side) {
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(
-          closePosition(open, currentPrice, liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell', stamp.ms)
+          closePosition(assetType, open, currentPrice, liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell', stamp.ms)
         )
         delete nextState.openPositions[symbol]
       }
@@ -495,13 +609,19 @@ export async function syncForwardTracker(
   await kvSetJSON(key, nextState)
 
   const openPositions = Object.values(nextState.openPositions)
-    .map((position) => hydrateOpenPosition(position, priceMap[position.symbol] ?? position.lastPrice, stamp.ms))
+    .map((position) => hydrateOpenPosition(assetType, position, priceMap[position.symbol] ?? position.lastPrice, stamp.ms))
     .sort((a, b) => b.openedAtMs - a.openedAtMs)
 
-  const closedTrades = [...nextState.closedTrades].sort((a, b) => b.closedAtMs - a.closedAtMs)
+  const closedTrades = [...nextState.closedTrades].map((trade) => hydrateClosedTrade(assetType, trade)).sort((a, b) => b.closedAtMs - a.closedAtMs)
+  const costModel = getCostModel(assetType)
   const realizedPnlEur = closedTrades.reduce((sum, trade) => sum + trade.pnlEur, 0)
+  const realizedNetPnlEur = closedTrades.reduce((sum, trade) => sum + trade.netPnlEur, 0)
   const unrealizedPnlEur = openPositions.reduce((sum, position) => sum + position.unrealizedPnlEur, 0)
+  const unrealizedNetPnlEur = openPositions.reduce((sum, position) => sum + position.unrealizedNetPnlEur, 0)
+  const realizedCostsEur = closedTrades.reduce((sum, trade) => sum + trade.costsEur, 0)
+  const estimatedOpenCostsEur = openPositions.reduce((sum, position) => sum + position.estimatedCostsEur, 0)
   const wins = closedTrades.filter((trade) => trade.pnlEur > 0).length
+  const winsNet = closedTrades.filter((trade) => trade.netPnlEur > 0).length
 
   return {
     meta: {
@@ -511,15 +631,27 @@ export async function syncForwardTracker(
       principalPerTradeEur: nextState.principalPerTradeEur,
       sourceMode,
       currentSignals: signals.length,
-      note: 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt.',
+      note: 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
+      costs: {
+        feeBpsRoundTrip: costModel.feeBpsRoundTrip,
+        slippageBpsRoundTrip: costModel.slippageBpsRoundTrip,
+        totalBpsRoundTrip: costModel.totalBpsRoundTrip,
+      },
     },
     summary: {
       openTrades: openPositions.length,
       closedTrades: closedTrades.length,
       realizedPnlEur,
+      realizedNetPnlEur,
       unrealizedPnlEur,
+      unrealizedNetPnlEur,
       totalPnlEur: realizedPnlEur + unrealizedPnlEur,
+      totalNetPnlEur: realizedNetPnlEur + unrealizedNetPnlEur,
+      realizedCostsEur,
+      estimatedOpenCostsEur,
+      totalCostsEur: realizedCostsEur + estimatedOpenCostsEur,
       winRateClosed: closedTrades.length ? wins / closedTrades.length : null,
+      winRateClosedNet: closedTrades.length ? winsNet / closedTrades.length : null,
       totalCommittedEur: openPositions.length * nextState.principalPerTradeEur,
     },
     openPositions,

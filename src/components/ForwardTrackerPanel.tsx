@@ -65,7 +65,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
           <p className="mt-1 text-sm text-slate-700/80 dark:text-white/65">
             Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
             <span className="font-medium text-slate-900 dark:text-white">€1000</span>. Bij een statusflip of wanneer het signaal
-            verdwijnt, sluit de trade automatisch. Dit is de live paper-trading teller vanaf de eerste sync.
+            verdwijnt, sluit de trade automatisch. Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
           </p>
         </div>
 
@@ -106,27 +106,39 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
               <div className="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">{data.summary.closedTrades}</div>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Gerealiseerd</div>
-              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.realizedPnlEur)}`}>
-                {formatMoney(data.summary.realizedPnlEur)}
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Gerealiseerd netto</div>
+              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.realizedNetPnlEur)}`}>
+                {formatMoney(data.summary.realizedNetPnlEur)}
+              </div>
+              <div className={`mt-1 text-[11px] ${pnlClass(data.summary.realizedPnlEur)}`}>
+                Bruto {formatMoney(data.summary.realizedPnlEur)}
               </div>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Ongerealiseerd</div>
-              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.unrealizedPnlEur)}`}>
-                {formatMoney(data.summary.unrealizedPnlEur)}
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Ongerealiseerd netto</div>
+              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.unrealizedNetPnlEur)}`}>
+                {formatMoney(data.summary.unrealizedNetPnlEur)}
+              </div>
+              <div className={`mt-1 text-[11px] ${pnlClass(data.summary.unrealizedPnlEur)}`}>
+                Bruto {formatMoney(data.summary.unrealizedPnlEur)}
               </div>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Totaal fictief</div>
-              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.totalPnlEur)}`}>
-                {formatMoney(data.summary.totalPnlEur)}
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Totaal netto</div>
+              <div className={`mt-1 text-2xl font-semibold ${pnlClass(data.summary.totalNetPnlEur)}`}>
+                {formatMoney(data.summary.totalNetPnlEur)}
+              </div>
+              <div className={`mt-1 text-[11px] ${pnlClass(data.summary.totalPnlEur)}`}>
+                Bruto {formatMoney(data.summary.totalPnlEur)}
               </div>
             </div>
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
-              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Winrate gesloten</div>
+              <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Winrate netto</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">
-                {data.summary.winRateClosed == null ? '-' : formatPct(data.summary.winRateClosed * 100)}
+                {data.summary.winRateClosedNet == null ? '-' : formatPct(data.summary.winRateClosedNet * 100)}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-700/75 dark:text-white/55">
+                Bruto {data.summary.winRateClosed == null ? '-' : formatPct(data.summary.winRateClosed * 100)}
               </div>
             </div>
           </div>
@@ -134,8 +146,10 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
           <div className="mt-4 rounded-2xl border border-slate-300/45 bg-white/75 px-4 py-3 text-[12px] text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
             <span className="font-medium text-slate-900 dark:text-white">{data.meta.note}</span> Gestart op{' '}
             {formatDateTime(data.meta.startedAt)}. Nu open kapitaal: {formatMoney(data.summary.totalCommittedEur)}. Huidige signalen
-            in de bronlaag: {data.meta.currentSignals}. De tracker wordt elk uur server-side ververst en synct ook opnieuw
-            wanneer deze pagina opent.
+            in de bronlaag: {data.meta.currentSignals}. Kostenmodel: {data.meta.costs.feeBpsRoundTrip} bps fee +{' '}
+            {data.meta.costs.slippageBpsRoundTrip} bps slippage round-trip ({data.meta.costs.totalBpsRoundTrip} bps totaal). Totale
+            kostendruk nu: {formatMoney(data.summary.totalCostsEur)}. De tracker wordt elk uur server-side ververst en synct ook
+            opnieuw wanneer deze pagina opent.
           </div>
 
           <div className="mt-5 grid gap-5 xl:grid-cols-2">
@@ -166,11 +180,38 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
                           </div>
                           <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">{position.name}</div>
                         </div>
-                        <div className="text-right">
-                          <div className={`text-sm font-semibold ${pnlClass(position.unrealizedPnlEur)}`}>
-                            {formatMoney(position.unrealizedPnlEur)}
+                        <div className="grid grid-cols-3 gap-3 text-right">
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Bruto
+                            </div>
+                            <div className={`mt-1 text-sm font-semibold ${pnlClass(position.unrealizedPnlEur)}`}>
+                              {formatMoney(position.unrealizedPnlEur)}
+                            </div>
+                            <div className={`text-[11px] ${pnlClass(position.unrealizedPnlEur)}`}>
+                              {formatPct(position.unrealizedReturnPct)}
+                            </div>
                           </div>
-                          <div className={`text-[11px] ${pnlClass(position.unrealizedPnlEur)}`}>{formatPct(position.unrealizedReturnPct)}</div>
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Netto
+                            </div>
+                            <div className={`mt-1 text-sm font-semibold ${pnlClass(position.unrealizedNetPnlEur)}`}>
+                              {formatMoney(position.unrealizedNetPnlEur)}
+                            </div>
+                            <div className={`text-[11px] ${pnlClass(position.unrealizedNetPnlEur)}`}>
+                              {formatPct(position.unrealizedNetReturnPct)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Kosten
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                              {formatMoney(position.estimatedCostsEur)}
+                            </div>
+                            <div className="text-[11px] text-slate-700/75 dark:text-white/55">fees + slip</div>
+                          </div>
                         </div>
                       </div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -187,6 +228,9 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
                         <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 text-[11px] dark:border-white/10 dark:bg-white/5">
                           <div className="text-slate-600 dark:text-white/55">Waarde nu</div>
                           <div className="mt-1 font-medium text-slate-900 dark:text-white">{formatMoney(position.currentValueEur)}</div>
+                          <div className="mt-1 text-[10px] text-slate-700/75 dark:text-white/55">
+                            Netto {formatMoney(position.netCurrentValueEur)}
+                          </div>
                         </div>
                         <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 text-[11px] dark:border-white/10 dark:bg-white/5">
                           <div className="text-slate-600 dark:text-white/55">Dagen open</div>
@@ -226,9 +270,32 @@ export function ForwardTrackerPanel({ assetType, sourceMode }: Props) {
                           </div>
                           <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">{trade.name}</div>
                         </div>
-                        <div className="text-right">
-                          <div className={`text-sm font-semibold ${pnlClass(trade.pnlEur)}`}>{formatMoney(trade.pnlEur)}</div>
-                          <div className={`text-[11px] ${pnlClass(trade.pnlEur)}`}>{formatPct(trade.returnPct)}</div>
+                        <div className="grid grid-cols-3 gap-3 text-right">
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Bruto
+                            </div>
+                            <div className={`mt-1 text-sm font-semibold ${pnlClass(trade.pnlEur)}`}>{formatMoney(trade.pnlEur)}</div>
+                            <div className={`text-[11px] ${pnlClass(trade.pnlEur)}`}>{formatPct(trade.returnPct)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Netto
+                            </div>
+                            <div className={`mt-1 text-sm font-semibold ${pnlClass(trade.netPnlEur)}`}>
+                              {formatMoney(trade.netPnlEur)}
+                            </div>
+                            <div className={`text-[11px] ${pnlClass(trade.netPnlEur)}`}>{formatPct(trade.netReturnPct)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                              Kosten
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                              {formatMoney(trade.costsEur)}
+                            </div>
+                            <div className="text-[11px] text-slate-700/75 dark:text-white/55">fees + slip</div>
+                          </div>
                         </div>
                       </div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
