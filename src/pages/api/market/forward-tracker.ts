@@ -28,6 +28,7 @@ function parseStrategy(raw: string | string[] | undefined): ForwardStrategy {
   const value = String(Array.isArray(raw) ? raw[0] : raw || '')
     .trim()
     .toLowerCase()
+  if (value === 'high_move_relaxed') return 'high_move_relaxed'
   return value === 'high_move' ? 'high_move' : 'standard'
 }
 

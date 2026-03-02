@@ -541,6 +541,14 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           title="Forward test grote moves"
           description="Dit is de strengere crypto-variant voor grotere marges. Hij opent alleen als de 14D forecast minimaal circa 4% move verwacht bij voldoende confidence, houdt minimaal 48 uur aan en wacht op 2 opeenvolgende exitsignalen."
         />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="high_move_relaxed"
+          title="Forward test grote moves (lagere confidence)"
+          description="Dit is dezelfde 14D grote-move crypto-variant, maar met een lagere confidence-drempel. Hij vraagt nog steeds circa 4% verwachte move, houdt minimaal 48 uur aan en wacht op 2 opeenvolgende exitsignalen, zodat je dit direct kunt vergelijken met de striktere variant."
+        />
       </main>
     </>
   )
