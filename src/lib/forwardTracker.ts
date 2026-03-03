@@ -1,5 +1,5 @@
 import type { NextApiRequest } from 'next'
-import { COIN_SET, findCoin } from '@/lib/coins'
+import { COINS, COIN_SET, findCoin } from '@/lib/coins'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
@@ -210,6 +210,13 @@ type TrackerCostModel = {
   totalBpsRoundTrip: number
   perSideBps: number
 }
+
+let bestSingleUniverseCache:
+  | {
+      expiresAtMs: number
+      rows: ForwardSignal[]
+    }
+  | null = null
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
   if (
@@ -705,52 +712,66 @@ async function filterHighMoveCryptoSignals(
   return results.filter((row): row is ForwardSignal => !!row)
 }
 
-async function rankBestSingleCryptoSignals(origin: string, signals: ForwardSignal[]): Promise<ForwardSignal[]> {
-  const deduped = dedupeSignals(signals)
-  if (!deduped.length) return []
+async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSignal[]> {
+  if (bestSingleUniverseCache && bestSingleUniverseCache.expiresAtMs > Date.now()) {
+    return bestSingleUniverseCache.rows
+  }
+
+  const universe = COINS.map((coin) => ({
+    symbol: coin.symbol.toUpperCase(),
+    name: coin.name,
+  }))
+  if (!universe.length) return []
 
   const ranked = await Promise.all(
-    deduped.map(async (signal) => {
+    universe.map(async (coin) => {
       const forecast = await fetchJson<ForecastApiResponse>(
-        `${origin}/api/forecast?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
+        `${origin}/api/forecast?symbol=${encodeURIComponent(coin.symbol)}&assetType=crypto&horizon=14`
       )
       const probUp = safeNumber(forecast?.probUp)
       const confidence = safeNumber(forecast?.confidence)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
-      const positionSize = safeNumber(forecast?.positionSize)
 
       if (probUp == null || confidence == null) {
         return null
       }
 
-      if (signal.side === 'BUY') {
-        if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
-        if (probUp < BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
-      } else {
-        if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
-        if (probUp > 1 - BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
-      }
+      if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
 
-      const directionalProb = signal.side === 'BUY' ? probUp : 1 - probUp
+      const side: ForwardSide = probUp >= 0.5 ? 'BUY' : 'SELL'
+      const directionalProb = side === 'BUY' ? probUp : 1 - probUp
+      if (directionalProb < BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
+
       const directionalExpectedReturn =
-        expectedReturn == null ? 0 : signal.side === 'BUY' ? expectedReturn : -expectedReturn
+        expectedReturn == null ? 0 : side === 'BUY' ? expectedReturn : -expectedReturn
       const rankScore =
         (directionalProb * 120) +
         (confidence * 1.0) +
-        (directionalExpectedReturn * 4) +
-        ((positionSize ?? 0) * 10)
+        (directionalExpectedReturn * 4)
 
       return {
-        signal,
+        signal: {
+          symbol: coin.symbol,
+          name: coin.name,
+          side,
+          sourceMode: 'raw' as const,
+        },
         rankScore,
       }
     })
   )
 
-  return ranked
-    .filter((row): row is { signal: ForwardSignal; rankScore: number } => !!row)
+  const rows = ranked
+    .filter((row): row is NonNullable<(typeof ranked)[number]> => row != null)
     .sort((a, b) => b.rankScore - a.rankScore)
     .map((row) => row.signal)
+
+  bestSingleUniverseCache = {
+    expiresAtMs: Date.now() + 5 * 60_000,
+    rows,
+  }
+
+  return rows
 }
 
 export async function syncForwardTracker(
@@ -768,7 +789,7 @@ export async function syncForwardTracker(
   const isBestSingleCrypto = assetType === 'crypto' && isBestSingleCryptoStrategy(strategy)
   const bestSingleCandidates =
     isBestSingleCrypto
-      ? await rankBestSingleCryptoSignals(origin, currentSignalsResp.signals)
+      ? await rankBestSingleCryptoSignals(origin)
       : null
   let signals =
     assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
