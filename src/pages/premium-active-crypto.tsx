@@ -542,6 +542,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
             { label: 'Standaard', strategy: 'standard' },
             { label: 'Grote moves', strategy: 'high_move' },
             { label: 'Lagere confidence', strategy: 'high_move_relaxed' },
+            { label: 'Beste 1 tegelijk', strategy: 'best_single' },
           ]}
         />
 
@@ -566,6 +567,14 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           strategy="high_move_relaxed"
           title="Forward test grote moves (lagere confidence)"
           description="Dit is dezelfde 14D grote-move crypto-variant, maar met een lagere confidence-drempel. Hij vraagt nog steeds circa 4% verwachte move, houdt minimaal 48 uur aan en wacht op 2 opeenvolgende exitsignalen, zodat je dit direct kunt vergelijken met de striktere variant."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single"
+          title="Forward test beste 1 crypto tegelijk"
+          description="Deze variant gebruikt steeds maar één positie van €1000. Hij kiest alleen de best gerankte crypto op basis van het confluence-model (hoogste netto edge en confidence). Pas als die trade sluit, mag de volgende beste crypto openen."
         />
       </main>
     </>

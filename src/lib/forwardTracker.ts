@@ -4,7 +4,7 @@ import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
 export type ForwardSourceMode = 'audit' | 'fallback' | 'raw'
-export type ForwardStrategy = 'standard' | 'high_move' | 'high_move_relaxed'
+export type ForwardStrategy = 'standard' | 'high_move' | 'high_move_relaxed' | 'best_single'
 export type ForwardSide = 'BUY' | 'SELL'
 export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell'
 
@@ -166,6 +166,22 @@ type ForecastApiResponse = {
   regime?: 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL'
 }
 
+type ForecastCompareApiResponse = {
+  scenarios?: Array<{
+    key?: string
+    probUp?: number
+    confidence?: number
+    expectedReturn?: number | null
+    edgeAfterCosts?: number | null
+    action?: 'LONG' | 'HOLD' | 'EXIT'
+    positionSize?: number
+    evaluation?: {
+      hitRate?: number | null
+      compoundedValueOf100?: number | null
+    }
+  }>
+}
+
 type CoinHomeBuysResponse = {
   items?: Array<{ symbol?: string; name?: string; score?: number }>
 }
@@ -193,6 +209,8 @@ const EQUITY_EXIT_CONFIRMATIONS = 2
 const HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT = 4
 const HIGH_MOVE_CRYPTO_MIN_CONFIDENCE = 60
 const HIGH_MOVE_CRYPTO_RELAXED_MIN_CONFIDENCE = 55
+const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
+const BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS = 0.5
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
 
@@ -204,14 +222,14 @@ type TrackerCostModel = {
 }
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  if (strategy === 'high_move' || strategy === 'high_move_relaxed') {
+  if (strategy === 'high_move' || strategy === 'high_move_relaxed' || strategy === 'best_single') {
     return `paper-forward:v1:${assetType}:${strategy}`
   }
   return `paper-forward:v${TRACKER_VERSION_BY_ASSET[assetType]}:${assetType}`
 }
 
 function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  if (strategy === 'high_move' || strategy === 'high_move_relaxed') return 1
+  if (strategy === 'high_move' || strategy === 'high_move_relaxed' || strategy === 'best_single') return 1
   return TRACKER_VERSION_BY_ASSET[assetType]
 }
 
@@ -671,6 +689,72 @@ async function filterHighMoveCryptoSignals(
   return results.filter((row): row is ForwardSignal => !!row)
 }
 
+async function rankBestSingleCryptoSignals(origin: string, signals: ForwardSignal[]): Promise<ForwardSignal[]> {
+  const deduped = dedupeSignals(signals)
+  if (!deduped.length) return []
+
+  const ranked = await Promise.all(
+    deduped.map(async (signal) => {
+      const compare = await fetchJson<ForecastCompareApiResponse>(
+        `${origin}/api/forecast/compare?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
+      )
+      const confluence = (compare?.scenarios || []).find((row) => String(row?.key || '').trim() === 'confluence')
+      if (!confluence) return null
+
+      const probUp = safeNumber(confluence.probUp)
+      const confidence = safeNumber(confluence.confidence)
+      const edgeAfterCosts = safeNumber(confluence.edgeAfterCosts)
+      const positionSize = safeNumber(confluence.positionSize)
+      const hitRate = safeNumber(confluence.evaluation?.hitRate)
+      const compoundedValueOf100 = safeNumber(confluence.evaluation?.compoundedValueOf100)
+      const action = confluence.action
+
+      if (
+        probUp == null ||
+        confidence == null ||
+        edgeAfterCosts == null ||
+        positionSize == null ||
+        hitRate == null ||
+        compoundedValueOf100 == null ||
+        !action
+      ) {
+        return null
+      }
+
+      if (signal.side === 'BUY') {
+        if (action !== 'LONG') return null
+        if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
+        if (edgeAfterCosts < BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS) return null
+        if (positionSize < 0.2) return null
+      } else {
+        if (action !== 'EXIT') return null
+        if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
+        if (edgeAfterCosts > -BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS) return null
+        if (probUp > 0.45) return null
+      }
+
+      const directionalProb = signal.side === 'BUY' ? probUp : 1 - probUp
+      const rankScore =
+        (directionalProb * 100) +
+        (confidence * 0.7) +
+        (Math.abs(edgeAfterCosts) * 12) +
+        (hitRate * 30) +
+        (Math.max(0, compoundedValueOf100 - 100) * 0.25) +
+        (positionSize * 15)
+
+      return {
+        signal,
+        rankScore,
+      }
+    })
+  )
+
+  return ranked
+    .filter((row): row is { signal: ForwardSignal; rankScore: number } => !!row)
+    .sort((a, b) => b.rankScore - a.rankScore)
+    .map((row) => row.signal)
+}
+
 export async function syncForwardTracker(
   req: NextApiRequest,
   assetType: ForwardAssetType,
@@ -683,10 +767,28 @@ export async function syncForwardTracker(
 
   const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
   const sourceMode = currentSignalsResp.sourceMode
-  const signals =
+  const bestSingleCandidates =
+    assetType === 'crypto' && strategy === 'best_single'
+      ? await rankBestSingleCryptoSignals(origin, currentSignalsResp.signals)
+      : null
+  let signals =
     assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
       ? await filterHighMoveCryptoSignals(origin, currentSignalsResp.signals, strategy)
+      : assetType === 'crypto' && strategy === 'best_single'
+        ? []
       : currentSignalsResp.signals
+
+  if (assetType === 'crypto' && strategy === 'best_single') {
+    const existingOpen = Object.values(current.openPositions)
+      .sort((a, b) => b.openedAtMs - a.openedAtMs)[0]
+    if (existingOpen) {
+      const liveCurrent = currentSignalsResp.signals.find((row) => row.symbol === existingOpen.symbol)
+      signals = liveCurrent ? [liveCurrent] : []
+    } else {
+      signals = (bestSingleCandidates || []).slice(0, 1)
+    }
+  }
+
   const signalMap = new Map<string, ForwardSignal>()
   for (const signal of signals) signalMap.set(signal.symbol, signal)
 
@@ -799,7 +901,12 @@ export async function syncForwardTracker(
     }
   }
 
-  for (const signal of signals) {
+  let entrySignals = signals
+  if (assetType === 'crypto' && strategy === 'best_single' && Object.keys(nextState.openPositions).length === 0) {
+    entrySignals = (bestSingleCandidates || []).slice(0, 1)
+  }
+
+  for (const signal of entrySignals) {
     if (nextState.openPositions[signal.symbol]) continue
     const currentPrice = priceMap[signal.symbol]
     if (currentPrice == null || currentPrice <= 0) continue
@@ -851,6 +958,8 @@ export async function syncForwardTracker(
       currentSignals: signals.length,
       note: isEquity
         ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        : assetType === 'crypto' && strategy === 'best_single'
+          ? 'Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan. Alleen de best gerankte coin op basis van het confluence-model (hoogste netto edge + confidence) mag openen; na sluiten wordt pas de volgende beste gekozen.'
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy

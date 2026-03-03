@@ -105,7 +105,7 @@ export function ForwardTrackerCompare({ assetType, sourceMode, rows }: Props) {
       ) : null}
 
       {data ? (
-        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {data.map((row, index) => {
             const tracker = row.data
             const net = tracker?.summary.totalNetPnlEur ?? 0
