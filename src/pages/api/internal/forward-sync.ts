@@ -21,6 +21,9 @@ type Resp = {
   cryptoHighMoveRelaxed: SyncSummary
   cryptoBestSingleHighHit: SyncSummary
   cryptoBestSingle: SyncSummary
+  cryptoBestSingle1d: SyncSummary
+  cryptoBestSingle3d: SyncSummary
+  cryptoBestSingle5d: SyncSummary
   cryptoBestSingle2x: SyncSummary
   cryptoBestSingle5x: SyncSummary
 }
@@ -45,13 +48,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     res.setHeader('Cache-Control', 'no-store')
 
-    const [equity, crypto, cryptoHighMove, cryptoHighMoveRelaxed, cryptoBestSingleHighHit, cryptoBestSingle, cryptoBestSingle2x, cryptoBestSingle5x] = await Promise.all([
+    const [
+      equity,
+      crypto,
+      cryptoHighMove,
+      cryptoHighMoveRelaxed,
+      cryptoBestSingleHighHit,
+      cryptoBestSingle,
+      cryptoBestSingle1d,
+      cryptoBestSingle3d,
+      cryptoBestSingle5d,
+      cryptoBestSingle2x,
+      cryptoBestSingle5x,
+    ] = await Promise.all([
       syncForwardTracker(req, 'equity'),
       syncForwardTracker(req, 'crypto'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move_relaxed'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single_high_hit'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_1d'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_3d'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_5d'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single_2x'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single_5x'),
     ])
@@ -65,6 +83,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       cryptoHighMoveRelaxed: summarize(cryptoHighMoveRelaxed),
       cryptoBestSingleHighHit: summarize(cryptoBestSingleHighHit),
       cryptoBestSingle: summarize(cryptoBestSingle),
+      cryptoBestSingle1d: summarize(cryptoBestSingle1d),
+      cryptoBestSingle3d: summarize(cryptoBestSingle3d),
+      cryptoBestSingle5d: summarize(cryptoBestSingle5d),
       cryptoBestSingle2x: summarize(cryptoBestSingle2x),
       cryptoBestSingle5x: summarize(cryptoBestSingle5x),
     })

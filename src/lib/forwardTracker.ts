@@ -1,6 +1,6 @@
 import type { NextApiRequest } from 'next'
 import { COINS, COIN_SET, findCoin } from '@/lib/coins'
-import { buildForecast, type ForecastOutput } from '@/lib/forecastEngine'
+import { buildForecast, type ForecastHorizon, type ForecastOutput } from '@/lib/forecastEngine'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
@@ -11,6 +11,9 @@ export type ForwardStrategy =
   | 'high_move_relaxed'
   | 'best_single_high_hit'
   | 'best_single'
+  | 'best_single_1d'
+  | 'best_single_3d'
+  | 'best_single_5d'
   | 'best_single_2x'
   | 'best_single_5x'
 export type ForwardSide = 'BUY' | 'SELL'
@@ -232,12 +235,7 @@ type TrackerCostModel = {
   perSideBps: number
 }
 
-let bestSingleUniverseCache:
-  | {
-      expiresAtMs: number
-      rows: ForwardSignal[]
-    }
-  | null = null
+const bestSingleUniverseCache = new Map<string, { expiresAtMs: number; rows: ForwardSignal[] }>()
 const cryptoForecastCache = new Map<string, { expiresAtMs: number; value: ForecastOutput | null }>()
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
@@ -246,6 +244,9 @@ function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
     strategy === 'high_move_relaxed' ||
     strategy === 'best_single_high_hit' ||
     strategy === 'best_single' ||
+    strategy === 'best_single_1d' ||
+    strategy === 'best_single_3d' ||
+    strategy === 'best_single_5d' ||
     strategy === 'best_single_2x' ||
     strategy === 'best_single_5x'
   ) {
@@ -260,6 +261,9 @@ function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) 
     strategy === 'high_move_relaxed' ||
     strategy === 'best_single_high_hit' ||
     strategy === 'best_single' ||
+    strategy === 'best_single_1d' ||
+    strategy === 'best_single_3d' ||
+    strategy === 'best_single_5d' ||
     strategy === 'best_single_2x' ||
     strategy === 'best_single_5x'
   ) {
@@ -349,17 +353,17 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   }
 }
 
-async function getCryptoForecast14d(symbol: string): Promise<ForecastOutput | null> {
-  const key = symbol.trim().toUpperCase()
+async function getCryptoForecast(symbol: string, horizon: ForecastHorizon): Promise<ForecastOutput | null> {
+  const key = `${symbol.trim().toUpperCase()}:${horizon}`
   const cached = cryptoForecastCache.get(key)
   const nowMs = Date.now()
   if (cached && cached.expiresAtMs > nowMs) return cached.value
 
   try {
     const value = await buildForecast({
-      symbol: key,
+      symbol: symbol.trim().toUpperCase(),
       assetType: 'crypto',
-      horizon: 14,
+      horizon,
     })
     cryptoForecastCache.set(key, { expiresAtMs: nowMs + 5 * 60_000, value })
     return value
@@ -695,8 +699,19 @@ function isHighMoveCryptoStrategy(
 
 function isBestSingleCryptoStrategy(
   strategy: ForwardStrategy
-): strategy is Extract<ForwardStrategy, 'best_single_high_hit' | 'best_single' | 'best_single_2x' | 'best_single_5x'> {
-  return strategy === 'best_single_high_hit' || strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
+): strategy is Extract<
+  ForwardStrategy,
+  'best_single_high_hit' | 'best_single' | 'best_single_1d' | 'best_single_3d' | 'best_single_5d' | 'best_single_2x' | 'best_single_5x'
+> {
+  return (
+    strategy === 'best_single_high_hit' ||
+    strategy === 'best_single' ||
+    strategy === 'best_single_1d' ||
+    strategy === 'best_single_3d' ||
+    strategy === 'best_single_5d' ||
+    strategy === 'best_single_2x' ||
+    strategy === 'best_single_5x'
+  )
 }
 
 function isLeveragedBestSingleCryptoStrategy(
@@ -709,6 +724,13 @@ function bestSingleLeverageMultiplier(strategy: ForwardStrategy) {
   if (strategy === 'best_single_5x') return 5
   if (strategy === 'best_single_2x') return 2
   return 1
+}
+
+function bestSingleForecastHorizon(strategy: ForwardStrategy): ForecastHorizon {
+  if (strategy === 'best_single_1d') return 1
+  if (strategy === 'best_single_3d') return 3
+  if (strategy === 'best_single_5d') return 5
+  return 14
 }
 
 function isHighHitCryptoStrategy(
@@ -768,7 +790,7 @@ async function filterHighMoveCryptoSignals(
 
   const results = await Promise.all(
     deduped.map(async (signal) => {
-      const forecast = await getCryptoForecast14d(signal.symbol)
+      const forecast = await getCryptoForecast(signal.symbol, 14)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
       const confidence = safeNumber(forecast?.confidence)
       const probUp = safeNumber(forecast?.probUp)
@@ -802,9 +824,18 @@ async function filterHighMoveCryptoSignals(
   return results.filter((row): row is ForwardSignal => !!row)
 }
 
-async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSignal[]> {
-  if (bestSingleUniverseCache && bestSingleUniverseCache.expiresAtMs > Date.now()) {
-    return bestSingleUniverseCache.rows
+async function rankBestSingleCryptoSignals(
+  origin: string,
+  strategy: Extract<
+    ForwardStrategy,
+    'best_single_high_hit' | 'best_single' | 'best_single_1d' | 'best_single_3d' | 'best_single_5d' | 'best_single_2x' | 'best_single_5x'
+  >
+): Promise<ForwardSignal[]> {
+  const horizon = bestSingleForecastHorizon(strategy)
+  const cacheKey = `${strategy}:${horizon}`
+  const cached = bestSingleUniverseCache.get(cacheKey)
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return cached.rows
   }
 
   const universe = COINS.map((coin) => ({
@@ -815,7 +846,7 @@ async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSigna
 
   const ranked = await Promise.all(
     universe.map(async (coin) => {
-      const forecast = await getCryptoForecast14d(coin.symbol)
+      const forecast = await getCryptoForecast(coin.symbol, horizon)
       const probUp = safeNumber(forecast?.probUp)
       const confidence = safeNumber(forecast?.confidence)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
@@ -855,21 +886,21 @@ async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSigna
     .sort((a, b) => b.rankScore - a.rankScore)
     .map((row) => row.signal)
 
-  bestSingleUniverseCache = {
+  bestSingleUniverseCache.set(cacheKey, {
     expiresAtMs: Date.now() + 5 * 60_000,
     rows,
-  }
+  })
 
   return rows
 }
 
 async function rankHighHitCryptoSignals(origin: string): Promise<ForwardSignal[]> {
-  const rows = await rankBestSingleCryptoSignals(origin)
+  const rows = await rankBestSingleCryptoSignals(origin, 'best_single_high_hit')
   if (!rows.length) return []
 
   const filtered = await Promise.all(
     rows.map(async (signal) => {
-      const forecast = await getCryptoForecast14d(signal.symbol)
+      const forecast = await getCryptoForecast(signal.symbol, 14)
       const probUp = safeNumber(forecast?.probUp)
       const confidence = safeNumber(forecast?.confidence)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
@@ -909,7 +940,9 @@ export async function syncForwardTracker(
   const isBestSingleCrypto = assetType === 'crypto' && isBestSingleCryptoStrategy(strategy)
   const isHighHitCrypto = assetType === 'crypto' && isHighHitCryptoStrategy(strategy)
   const bestSingleCandidates =
-    isBestSingleCrypto ? (isHighHitCrypto ? await rankHighHitCryptoSignals(origin) : await rankBestSingleCryptoSignals(origin)) : null
+    isBestSingleCrypto
+      ? (isHighHitCrypto ? await rankHighHitCryptoSignals(origin) : await rankBestSingleCryptoSignals(origin, strategy))
+      : null
   let signals =
     assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
       ? await filterHighMoveCryptoSignals(origin, currentSignalsResp.signals, strategy)
@@ -1167,7 +1200,7 @@ export async function syncForwardTracker(
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
-            ).toFixed(0)} notional). ${isHighHitCryptoStrategy(strategy) ? `Deze high hit-rate variant gebruikt een minder strenge maar nog steeds selectieve 14D filter (hogere confidence + hogere directionele kans dan standaard), houdt maximaal 1 coin tegelijk aan en sluit sneller op een kleine take-profit (${HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT.toFixed(1)}%) of ruimere stop (${HIGH_HIT_CRYPTO_STOP_LOSS_PCT.toFixed(1)}%) om de trefkans op te voeren.` : `Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`}${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
+            ).toFixed(0)} notional). ${isHighHitCryptoStrategy(strategy) ? `Deze high hit-rate variant gebruikt een minder strenge maar nog steeds selectieve 14D filter (hogere confidence + hogere directionele kans dan standaard), houdt maximaal 1 coin tegelijk aan en sluit sneller op een kleine take-profit (${HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT.toFixed(1)}%) of ruimere stop (${HIGH_HIT_CRYPTO_STOP_LOSS_PCT.toFixed(1)}%) om de trefkans op te voeren.` : `Hij gebruikt dezelfde ${bestSingleForecastHorizon(strategy)}D forecast-score voor de volledige crypto-universe en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`}${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy

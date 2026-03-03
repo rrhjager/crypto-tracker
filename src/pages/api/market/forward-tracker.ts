@@ -30,6 +30,9 @@ function parseStrategy(raw: string | string[] | undefined): ForwardStrategy {
     .toLowerCase()
   if (value === 'best_single_5x') return 'best_single_5x'
   if (value === 'best_single_2x') return 'best_single_2x'
+  if (value === 'best_single_5d') return 'best_single_5d'
+  if (value === 'best_single_3d') return 'best_single_3d'
+  if (value === 'best_single_1d') return 'best_single_1d'
   if (value === 'best_single') return 'best_single'
   if (value === 'best_single_high_hit') return 'best_single_high_hit'
   if (value === 'high_move_relaxed') return 'high_move_relaxed'

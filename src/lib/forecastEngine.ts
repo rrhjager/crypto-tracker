@@ -12,7 +12,7 @@ import {
 import type { ScoreMarket } from '@/lib/taScore'
 
 export type ForecastAssetType = 'equity' | 'crypto'
-export type ForecastHorizon = 7 | 14 | 30
+export type ForecastHorizon = 1 | 3 | 5 | 7 | 14 | 30
 export type ForecastAction = 'LONG' | 'HOLD' | 'EXIT'
 export type ForecastRegime = 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL'
 
@@ -435,7 +435,7 @@ function getCosts(input: ForecastInput): ForecastCosts {
 
 function normalizeHorizon(value: number | string | null | undefined): ForecastHorizon {
   const n = Number(value)
-  if (n === 7 || n === 14 || n === 30) return n
+  if (n === 1 || n === 3 || n === 5 || n === 7 || n === 14 || n === 30) return n
   return 14
 }
 

@@ -29,7 +29,7 @@ function parseAssetType(raw: string | string[] | undefined): ForecastAssetType {
 
 function parseHorizon(raw: string | string[] | undefined): ForecastHorizon {
   const value = Number(Array.isArray(raw) ? raw[0] : raw || 14)
-  if (value === 7 || value === 14 || value === 30) return value
+  if (value === 1 || value === 3 || value === 5 || value === 7 || value === 14 || value === 30) return value
   return 14
 }
 

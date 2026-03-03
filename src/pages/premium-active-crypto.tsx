@@ -307,6 +307,9 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
     { label: 'Lagere confidence', strategy: 'high_move_relaxed' as const },
     { label: 'Beste 1 (high hit-rate)', strategy: 'best_single_high_hit' as const },
     { label: 'Beste 1 (1x)', strategy: 'best_single' as const },
+    { label: 'Beste 1 (1D)', strategy: 'best_single_1d' as const },
+    { label: 'Beste 1 (3D)', strategy: 'best_single_3d' as const },
+    { label: 'Beste 1 (5D)', strategy: 'best_single_5d' as const },
     { label: 'Beste 1 (2x)', strategy: 'best_single_2x' as const },
     { label: 'Beste 1 (5x)', strategy: 'best_single_5x' as const },
   ]
@@ -610,6 +613,41 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           strategy="best_single_5x"
           title="Forward test beste 1 crypto tegelijk (5x leverage)"
           description="Dit is dezelfde single-crypto strategie, maar met 5x leverage op €1000 margin. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, maar dan met grotere exposure."
+        />
+
+        <section className="rounded-3xl border border-cyan-300/45 bg-white/85 p-5 dark:border-cyan-500/25 dark:bg-white/5">
+          <div className="max-w-3xl">
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Kortere horizon tests onder 14D</h2>
+            <p className="mt-1 text-sm text-slate-700/80 dark:text-white/65">
+              Dit zijn dezelfde beste-1-crypto strategieën, maar dan op kortere forecast-horizons. Zo vergelijk je direct of 1D, 3D
+              of 5D beter bij kleinere, snellere netto winsten past dan de huidige 14D-variant. Elke variant houdt nog steeds maar
+              één coin tegelijk aan met €1000 zonder leverage en mag zowel LONG als SHORT kiezen.
+            </p>
+          </div>
+        </section>
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_1d"
+          title="Forward test beste 1 crypto tegelijk (1D)"
+          description="Deze variant gebruikt exact dezelfde beste-1 selectie als de 14D-versie, maar de forecast draait op 1D. Hij kiest steeds de beste LONG of SHORT uit de volledige crypto-universe, met maximaal één open positie van €1000 zonder leverage."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_3d"
+          title="Forward test beste 1 crypto tegelijk (3D)"
+          description="Deze variant gebruikt dezelfde beste-1 selectie, maar op een 3D forecast-horizon. Dit is de middenweg tussen ultra-korte ritten en de tragere 14D swinglogica."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_5d"
+          title="Forward test beste 1 crypto tegelijk (5D)"
+          description="Deze variant gebruikt dezelfde beste-1 selectie, maar op een 5D forecast-horizon. Daarmee kun je direct vergelijken of een iets langere korte swing beter werkt dan 1D en 3D."
         />
 
         <BestCryptoStrategyPanel sourceMode={effectiveSourceMode} rows={trackerRows} />

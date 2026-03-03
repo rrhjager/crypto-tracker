@@ -53,6 +53,9 @@ function isBestSingleStrategy(strategy: ForwardStrategy) {
   return (
     strategy === 'best_single_high_hit' ||
     strategy === 'best_single' ||
+    strategy === 'best_single_1d' ||
+    strategy === 'best_single_3d' ||
+    strategy === 'best_single_5d' ||
     strategy === 'best_single_2x' ||
     strategy === 'best_single_5x'
   )
