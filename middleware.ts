@@ -33,6 +33,9 @@ const PUBLIC_ALLOW = [
   // Market Intel (server-side geaggregeerd)
   '/api/market/',
 
+  // Forecast endpoints used by live compare panels
+  '/api/forecast',
+
   // Screeners and coin fallback feeds used by active pages
   '/api/screener/',
   '/api/coin/',
