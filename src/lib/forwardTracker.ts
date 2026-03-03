@@ -213,12 +213,12 @@ const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
 const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.5
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
-const HIGH_HIT_CRYPTO_MIN_CONFIDENCE = 70
-const HIGH_HIT_CRYPTO_MIN_DIRECTIONAL_PROB = 0.58
-const HIGH_HIT_CRYPTO_MIN_EXPECTED_PCT = 1.5
+const HIGH_HIT_CRYPTO_MIN_CONFIDENCE = 64
+const HIGH_HIT_CRYPTO_MIN_DIRECTIONAL_PROB = 0.55
+const HIGH_HIT_CRYPTO_MIN_EXPECTED_PCT = 0.9
 const HIGH_HIT_CRYPTO_MIN_HOLD_MS = 24 * 60 * 60 * 1000
 const HIGH_HIT_CRYPTO_EXIT_CONFIRMATIONS = 2
-const HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT = 2.5
+const HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT = 2.0
 const HIGH_HIT_CRYPTO_STOP_LOSS_PCT = 4.5
 const BITUNIX_TIER1_MMR_DEFAULT = 0.0065
 const BITUNIX_TIER1_MMR_MAJOR = 0.005
@@ -1167,7 +1167,7 @@ export async function syncForwardTracker(
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
-            ).toFixed(0)} notional). ${isHighHitCryptoStrategy(strategy) ? `Deze high hit-rate variant neemt alleen de allersterkste 14D setups (hoge confidence + hoge directionele kans), houdt maximaal 1 coin tegelijk aan en sluit sneller op een kleine take-profit (${HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT.toFixed(1)}%) of ruimere stop (${HIGH_HIT_CRYPTO_STOP_LOSS_PCT.toFixed(1)}%) om de trefkans op te voeren.` : `Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`}${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
+            ).toFixed(0)} notional). ${isHighHitCryptoStrategy(strategy) ? `Deze high hit-rate variant gebruikt een minder strenge maar nog steeds selectieve 14D filter (hogere confidence + hogere directionele kans dan standaard), houdt maximaal 1 coin tegelijk aan en sluit sneller op een kleine take-profit (${HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT.toFixed(1)}%) of ruimere stop (${HIGH_HIT_CRYPTO_STOP_LOSS_PCT.toFixed(1)}%) om de trefkans op te voeren.` : `Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`}${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy

@@ -593,7 +593,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           sourceMode={effectiveSourceMode}
           strategy="best_single_high_hit"
           title="Forward test beste 1 crypto tegelijk (high hit-rate)"
-          description="Dit is de nieuwe hitrate-variant. Hij kiest ook maar 1 crypto tegelijk, maar alleen bij veel hogere confidence en directionele kans. Hij pakt sneller winst op kleine moves en accepteert een ruimere stop om de trefkans op te voeren."
+          description="Dit is de hitrate-variant als apart blok. Hij kiest ook maar 1 crypto tegelijk, met nog steeds hogere confidence en directionele kans dan standaard, maar nu iets ruimer zodat hij vaker setups pakt. Hij pakt sneller winst op kleine moves en accepteert een ruimere stop om de trefkans op te voeren."
         />
 
         <ForwardTrackerPanel
