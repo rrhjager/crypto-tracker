@@ -48,9 +48,15 @@ function pnlClass(value: number) {
 }
 
 function cardTone(index: number) {
-  if (index === 0) return 'border-sky-300/50 bg-sky-50/70 dark:border-sky-500/25 dark:bg-sky-950/10'
-  if (index === 1) return 'border-emerald-300/50 bg-emerald-50/70 dark:border-emerald-500/25 dark:bg-emerald-950/10'
-  return 'border-amber-300/50 bg-amber-50/70 dark:border-amber-500/25 dark:bg-amber-950/10'
+  const tones = [
+    'border-sky-300/50 bg-sky-50/70 dark:border-sky-500/25 dark:bg-sky-950/10',
+    'border-emerald-300/50 bg-emerald-50/70 dark:border-emerald-500/25 dark:bg-emerald-950/10',
+    'border-amber-300/50 bg-amber-50/70 dark:border-amber-500/25 dark:bg-amber-950/10',
+    'border-violet-300/50 bg-violet-50/70 dark:border-violet-500/25 dark:bg-violet-950/10',
+    'border-rose-300/50 bg-rose-50/70 dark:border-rose-500/25 dark:bg-rose-950/10',
+    'border-cyan-300/50 bg-cyan-50/70 dark:border-cyan-500/25 dark:bg-cyan-950/10',
+  ]
+  return tones[index % tones.length]
 }
 
 export function ForwardTrackerCompare({ assetType, sourceMode, rows }: Props) {
@@ -87,7 +93,7 @@ export function ForwardTrackerCompare({ assetType, sourceMode, rows }: Props) {
         <div>
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Vergelijking forward tests</h2>
           <p className="mt-1 text-sm text-slate-700/80 dark:text-white/65">
-            Compacte vergelijking van de drie crypto-varianten. Zo zie je direct welke variant netto het beste presteert.
+            Compacte vergelijking van de crypto-varianten. Zo zie je direct welke variant netto het beste presteert.
           </p>
         </div>
       </div>
@@ -105,7 +111,7 @@ export function ForwardTrackerCompare({ assetType, sourceMode, rows }: Props) {
       ) : null}
 
       {data ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.map((row, index) => {
             const tracker = row.data
             const net = tracker?.summary.totalNetPnlEur ?? 0

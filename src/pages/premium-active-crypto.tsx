@@ -542,7 +542,9 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
             { label: 'Standaard', strategy: 'standard' },
             { label: 'Grote moves', strategy: 'high_move' },
             { label: 'Lagere confidence', strategy: 'high_move_relaxed' },
-            { label: 'Beste 1 tegelijk', strategy: 'best_single' },
+            { label: 'Beste 1 (1x)', strategy: 'best_single' },
+            { label: 'Beste 1 (2x)', strategy: 'best_single_2x' },
+            { label: 'Beste 1 (5x)', strategy: 'best_single_5x' },
           ]}
         />
 
@@ -573,8 +575,24 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           assetType="crypto"
           sourceMode={effectiveSourceMode}
           strategy="best_single"
-          title="Forward test beste 1 crypto tegelijk"
-          description="Deze variant gebruikt steeds maar één positie van €1000. Hij kiest alleen de best gerankte crypto op basis van het confluence-model (hoogste netto edge en confidence). Pas als die trade sluit, mag de volgende beste crypto openen."
+          title="Forward test beste 1 crypto tegelijk (1x)"
+          description="Deze variant gebruikt steeds maar één positie van €1000 zonder leverage. Hij kiest alleen de best gerankte crypto op basis van het confluence-model (hoogste netto edge en confidence). Pas als die trade sluit, mag de volgende beste crypto openen."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_2x"
+          title="Forward test beste 1 crypto tegelijk (2x leverage)"
+          description="Dit is dezelfde single-crypto strategie, maar met 2x leverage op €1000 margin. Er staat dus nog steeds maar één coin tegelijk open, alleen met dubbele notional zodat je de netto impact direct kunt vergelijken."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_5x"
+          title="Forward test beste 1 crypto tegelijk (5x leverage)"
+          description="Dit is dezelfde single-crypto strategie, maar met 5x leverage op €1000 margin. Er blijft maximaal één coin tegelijk open; alleen de exposure is groter, zodat je precies ziet hoe de winst, het verlies en de kostendruk opschalen."
         />
       </main>
     </>

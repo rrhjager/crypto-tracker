@@ -4,7 +4,13 @@ import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
 export type ForwardSourceMode = 'audit' | 'fallback' | 'raw'
-export type ForwardStrategy = 'standard' | 'high_move' | 'high_move_relaxed' | 'best_single'
+export type ForwardStrategy =
+  | 'standard'
+  | 'high_move'
+  | 'high_move_relaxed'
+  | 'best_single'
+  | 'best_single_2x'
+  | 'best_single_5x'
 export type ForwardSide = 'BUY' | 'SELL'
 export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell'
 
@@ -222,14 +228,28 @@ type TrackerCostModel = {
 }
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  if (strategy === 'high_move' || strategy === 'high_move_relaxed' || strategy === 'best_single') {
+  if (
+    strategy === 'high_move' ||
+    strategy === 'high_move_relaxed' ||
+    strategy === 'best_single' ||
+    strategy === 'best_single_2x' ||
+    strategy === 'best_single_5x'
+  ) {
     return `paper-forward:v1:${assetType}:${strategy}`
   }
   return `paper-forward:v${TRACKER_VERSION_BY_ASSET[assetType]}:${assetType}`
 }
 
 function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  if (strategy === 'high_move' || strategy === 'high_move_relaxed' || strategy === 'best_single') return 1
+  if (
+    strategy === 'high_move' ||
+    strategy === 'high_move_relaxed' ||
+    strategy === 'best_single' ||
+    strategy === 'best_single_2x' ||
+    strategy === 'best_single_5x'
+  ) {
+    return 1
+  }
   return TRACKER_VERSION_BY_ASSET[assetType]
 }
 
@@ -638,6 +658,18 @@ function isHighMoveCryptoStrategy(
   return strategy === 'high_move' || strategy === 'high_move_relaxed'
 }
 
+function isBestSingleCryptoStrategy(
+  strategy: ForwardStrategy
+): strategy is Extract<ForwardStrategy, 'best_single' | 'best_single_2x' | 'best_single_5x'> {
+  return strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
+}
+
+function bestSingleLeverageMultiplier(strategy: ForwardStrategy) {
+  if (strategy === 'best_single_5x') return 5
+  if (strategy === 'best_single_2x') return 2
+  return 1
+}
+
 function highMoveConfidenceFloor(strategy: ForwardStrategy) {
   return strategy === 'high_move_relaxed' ? HIGH_MOVE_CRYPTO_RELAXED_MIN_CONFIDENCE : HIGH_MOVE_CRYPTO_MIN_CONFIDENCE
 }
@@ -767,18 +799,19 @@ export async function syncForwardTracker(
 
   const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
   const sourceMode = currentSignalsResp.sourceMode
+  const isBestSingleCrypto = assetType === 'crypto' && isBestSingleCryptoStrategy(strategy)
   const bestSingleCandidates =
-    assetType === 'crypto' && strategy === 'best_single'
+    isBestSingleCrypto
       ? await rankBestSingleCryptoSignals(origin, currentSignalsResp.signals)
       : null
   let signals =
     assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
       ? await filterHighMoveCryptoSignals(origin, currentSignalsResp.signals, strategy)
-      : assetType === 'crypto' && strategy === 'best_single'
+      : isBestSingleCrypto
         ? []
       : currentSignalsResp.signals
 
-  if (assetType === 'crypto' && strategy === 'best_single') {
+  if (isBestSingleCrypto) {
     const existingOpen = Object.values(current.openPositions)
       .sort((a, b) => b.openedAtMs - a.openedAtMs)[0]
     if (existingOpen) {
@@ -795,6 +828,7 @@ export async function syncForwardTracker(
   const symbolsForPricing = [...new Set([...signals.map((s) => s.symbol), ...Object.keys(current.openPositions)])]
   const priceMap = await getCurrentPrices(origin, assetType, symbolsForPricing)
   const stamp = nowStamp()
+  const leverageMultiplier = isBestSingleCrypto ? bestSingleLeverageMultiplier(strategy) : 1
   const isEquity = assetType === 'equity'
   const isHighMoveCrypto = assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
   const usesStickyExits = isEquity || isHighMoveCrypto
@@ -902,7 +936,7 @@ export async function syncForwardTracker(
   }
 
   let entrySignals = signals
-  if (assetType === 'crypto' && strategy === 'best_single' && Object.keys(nextState.openPositions).length === 0) {
+  if (isBestSingleCrypto && Object.keys(nextState.openPositions).length === 0) {
     entrySignals = (bestSingleCandidates || []).slice(0, 1)
   }
 
@@ -917,7 +951,7 @@ export async function syncForwardTracker(
       openedAt: stamp.iso,
       openedAtMs: stamp.ms,
       entryPrice: currentPrice,
-      quantity: PRINCIPAL_PER_TRADE_EUR / currentPrice,
+      quantity: (PRINCIPAL_PER_TRADE_EUR * leverageMultiplier) / currentPrice,
       principalEur: PRINCIPAL_PER_TRADE_EUR,
       sourceModeAtOpen: signal.sourceMode,
       lastPrice: currentPrice,
@@ -958,8 +992,10 @@ export async function syncForwardTracker(
       currentSignals: signals.length,
       note: isEquity
         ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
-        : assetType === 'crypto' && strategy === 'best_single'
-          ? 'Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan. Alleen de best gerankte coin op basis van het confluence-model (hoogste netto edge + confidence) mag openen; na sluiten wordt pas de volgende beste gekozen.'
+        : isBestSingleCrypto
+          ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
+              PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
+            ).toFixed(0)} notional). Alleen de best gerankte coin op basis van het confluence-model (hoogste netto edge + confidence) mag openen; na sluiten wordt pas de volgende beste gekozen.`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy

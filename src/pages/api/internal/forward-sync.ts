@@ -20,6 +20,8 @@ type Resp = {
   cryptoHighMove: SyncSummary
   cryptoHighMoveRelaxed: SyncSummary
   cryptoBestSingle: SyncSummary
+  cryptoBestSingle2x: SyncSummary
+  cryptoBestSingle5x: SyncSummary
 }
 
 function summarize(data: Awaited<ReturnType<typeof syncForwardTracker>>): SyncSummary {
@@ -42,12 +44,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     res.setHeader('Cache-Control', 'no-store')
 
-    const [equity, crypto, cryptoHighMove, cryptoHighMoveRelaxed, cryptoBestSingle] = await Promise.all([
+    const [equity, crypto, cryptoHighMove, cryptoHighMoveRelaxed, cryptoBestSingle, cryptoBestSingle2x, cryptoBestSingle5x] = await Promise.all([
       syncForwardTracker(req, 'equity'),
       syncForwardTracker(req, 'crypto'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move_relaxed'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_2x'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_5x'),
     ])
 
     return res.status(200).json({
@@ -58,6 +62,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       cryptoHighMove: summarize(cryptoHighMove),
       cryptoHighMoveRelaxed: summarize(cryptoHighMoveRelaxed),
       cryptoBestSingle: summarize(cryptoBestSingle),
+      cryptoBestSingle2x: summarize(cryptoBestSingle2x),
+      cryptoBestSingle5x: summarize(cryptoBestSingle5x),
     })
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message || e) })
