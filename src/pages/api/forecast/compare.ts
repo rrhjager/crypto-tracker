@@ -11,9 +11,16 @@ import {
 } from '@/lib/forecastEngine'
 
 type ErrorResp = { error: string }
+type CompareUnavailableResp = {
+  available: false
+  symbol: string
+  assetType: ForecastAssetType
+  horizon: ForecastHorizon
+  message: string
+}
 
 const TTL_SEC = 300
-const FORECAST_COMPARE_VER = 'v1'
+const FORECAST_COMPARE_VER = 'v2'
 
 function parseAssetType(raw: string | string[] | undefined): ForecastAssetType {
   const value = String(Array.isArray(raw) ? raw[0] : raw || 'crypto').trim().toLowerCase()
@@ -31,7 +38,10 @@ function parseNum(raw: string | string[] | undefined, fallback: number) {
   return Number.isFinite(value) ? value : fallback
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<ForecastCompareOutput | ErrorResp>) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<ForecastCompareOutput | CompareUnavailableResp | ErrorResp>
+) {
   try {
     cache5min(res, 300, 1800)
 
@@ -79,6 +89,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=1800')
     return res.status(200).json(compare)
   } catch (e: any) {
+    const message = String(e?.message || e)
+    const symbol = String(Array.isArray(req.query.symbol) ? req.query.symbol[0] : req.query.symbol || '')
+      .trim()
+      .toUpperCase()
+    const assetType = parseAssetType(req.query.assetType)
+    const horizon = parseHorizon(req.query.horizon)
+
+    if (message === 'Not enough history for scenario comparison') {
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=1800')
+      return res.status(200).json({
+        available: false,
+        symbol,
+        assetType,
+        horizon,
+        message: 'Te weinig historie voor een betrouwbare modelvergelijking op deze coin.',
+      })
+    }
+
     return res.status(500).json({ error: String(e?.message || e) })
   }
 }

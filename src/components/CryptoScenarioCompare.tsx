@@ -28,7 +28,8 @@ type Scenario = {
   }
 }
 
-type CompareResp = {
+type CompareAvailableResp = {
+  available?: true
   symbol: string
   assetType: 'crypto' | 'equity'
   horizon: 7 | 14 | 30
@@ -45,6 +46,16 @@ type CompareResp = {
   }
   scenarios: Scenario[]
 }
+
+type CompareUnavailableResp = {
+  available: false
+  symbol: string
+  assetType: 'crypto' | 'equity'
+  horizon: 7 | 14 | 30
+  message: string
+}
+
+type CompareResp = CompareAvailableResp | CompareUnavailableResp
 
 type Props = {
   candidates: Candidate[]
@@ -169,7 +180,13 @@ export function CryptoScenarioCompare({ candidates, horizon }: Props) {
         </div>
       ) : null}
 
-      {data ? (
+      {data && data.available === false ? (
+        <div className="mt-4 rounded-2xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+          {data.message} Kies een andere coin hierboven voor een volledige vergelijking.
+        </div>
+      ) : null}
+
+      {data && data.available !== false ? (
         <>
           <div className="mt-4 rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-3 text-[12px] text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
             <span className="font-medium text-slate-900 dark:text-white">{data.symbol}</span> tegen benchmark{' '}
