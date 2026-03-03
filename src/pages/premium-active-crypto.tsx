@@ -3,6 +3,7 @@ import type { GetServerSideProps } from 'next'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { COIN_SET, coinHref } from '@/lib/coins'
+import { BestCryptoStrategyPanel } from '@/components/BestCryptoStrategyPanel'
 import { CryptoScenarioCompare } from '@/components/CryptoScenarioCompare'
 import { ForecastPanel } from '@/components/ForecastPanel'
 import { ForwardTrackerCompare } from '@/components/ForwardTrackerCompare'
@@ -300,6 +301,14 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
   const featuredSells = sellPicks.slice(0, 5)
   const hiddenBuys = Math.max(0, buyPicks.length - featuredBuys.length)
   const hiddenSells = Math.max(0, sellPicks.length - featuredSells.length)
+  const trackerRows = [
+    { label: 'Standaard', strategy: 'standard' as const },
+    { label: 'Grote moves', strategy: 'high_move' as const },
+    { label: 'Lagere confidence', strategy: 'high_move_relaxed' as const },
+    { label: 'Beste 1 (1x)', strategy: 'best_single' as const },
+    { label: 'Beste 1 (2x)', strategy: 'best_single_2x' as const },
+    { label: 'Beste 1 (5x)', strategy: 'best_single_5x' as const },
+  ]
   const horizonOptions: Array<7 | 14 | 30> = [7, 14, 30]
   const scenarioCandidates = [...featuredBuys, ...featuredSells].slice(0, 6).map((item) => ({
     symbol: item.symbol,
@@ -538,14 +547,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
         <ForwardTrackerCompare
           assetType="crypto"
           sourceMode={effectiveSourceMode}
-          rows={[
-            { label: 'Standaard', strategy: 'standard' },
-            { label: 'Grote moves', strategy: 'high_move' },
-            { label: 'Lagere confidence', strategy: 'high_move_relaxed' },
-            { label: 'Beste 1 (1x)', strategy: 'best_single' },
-            { label: 'Beste 1 (2x)', strategy: 'best_single_2x' },
-            { label: 'Beste 1 (5x)', strategy: 'best_single_5x' },
-          ]}
+          rows={trackerRows}
         />
 
         <ForwardTrackerPanel
@@ -594,6 +596,8 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           title="Forward test beste 1 crypto tegelijk (5x leverage)"
           description="Dit is dezelfde single-crypto strategie, maar met 5x leverage op €1000 margin. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, maar dan met grotere exposure."
         />
+
+        <BestCryptoStrategyPanel sourceMode={effectiveSourceMode} rows={trackerRows} />
       </main>
     </>
   )
