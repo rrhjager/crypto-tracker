@@ -31,6 +31,7 @@ function parseStrategy(raw: string | string[] | undefined): ForwardStrategy {
   if (value === 'best_single_5x') return 'best_single_5x'
   if (value === 'best_single_2x') return 'best_single_2x'
   if (value === 'best_single') return 'best_single'
+  if (value === 'best_single_high_hit') return 'best_single_high_hit'
   if (value === 'high_move_relaxed') return 'high_move_relaxed'
   return value === 'high_move' ? 'high_move' : 'standard'
 }

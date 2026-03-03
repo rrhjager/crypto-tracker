@@ -50,7 +50,12 @@ function sidePill(side: 'BUY' | 'SELL') {
 }
 
 function isBestSingleStrategy(strategy: ForwardStrategy) {
-  return strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
+  return (
+    strategy === 'best_single_high_hit' ||
+    strategy === 'best_single' ||
+    strategy === 'best_single_2x' ||
+    strategy === 'best_single_5x'
+  )
 }
 
 export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standard', title, description }: Props) {

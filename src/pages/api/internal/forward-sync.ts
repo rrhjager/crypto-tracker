@@ -19,6 +19,7 @@ type Resp = {
   crypto: SyncSummary
   cryptoHighMove: SyncSummary
   cryptoHighMoveRelaxed: SyncSummary
+  cryptoBestSingleHighHit: SyncSummary
   cryptoBestSingle: SyncSummary
   cryptoBestSingle2x: SyncSummary
   cryptoBestSingle5x: SyncSummary
@@ -44,11 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   try {
     res.setHeader('Cache-Control', 'no-store')
 
-    const [equity, crypto, cryptoHighMove, cryptoHighMoveRelaxed, cryptoBestSingle, cryptoBestSingle2x, cryptoBestSingle5x] = await Promise.all([
+    const [equity, crypto, cryptoHighMove, cryptoHighMoveRelaxed, cryptoBestSingleHighHit, cryptoBestSingle, cryptoBestSingle2x, cryptoBestSingle5x] = await Promise.all([
       syncForwardTracker(req, 'equity'),
       syncForwardTracker(req, 'crypto'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move'),
       syncForwardTracker(req, 'crypto', undefined, 'high_move_relaxed'),
+      syncForwardTracker(req, 'crypto', undefined, 'best_single_high_hit'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single_2x'),
       syncForwardTracker(req, 'crypto', undefined, 'best_single_5x'),
@@ -61,6 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       crypto: summarize(crypto),
       cryptoHighMove: summarize(cryptoHighMove),
       cryptoHighMoveRelaxed: summarize(cryptoHighMoveRelaxed),
+      cryptoBestSingleHighHit: summarize(cryptoBestSingleHighHit),
       cryptoBestSingle: summarize(cryptoBestSingle),
       cryptoBestSingle2x: summarize(cryptoBestSingle2x),
       cryptoBestSingle5x: summarize(cryptoBestSingle5x),

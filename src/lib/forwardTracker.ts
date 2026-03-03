@@ -9,11 +9,18 @@ export type ForwardStrategy =
   | 'standard'
   | 'high_move'
   | 'high_move_relaxed'
+  | 'best_single_high_hit'
   | 'best_single'
   | 'best_single_2x'
   | 'best_single_5x'
 export type ForwardSide = 'BUY' | 'SELL'
-export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell' | 'bitunix_risk_stop'
+export type ForwardExitReason =
+  | 'signal_removed'
+  | 'flip_to_buy'
+  | 'flip_to_sell'
+  | 'bitunix_risk_stop'
+  | 'take_profit_hit'
+  | 'stop_loss_hit'
 
 export type ForwardSignal = {
   symbol: string
@@ -206,6 +213,13 @@ const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
 const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.5
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
+const HIGH_HIT_CRYPTO_MIN_CONFIDENCE = 70
+const HIGH_HIT_CRYPTO_MIN_DIRECTIONAL_PROB = 0.58
+const HIGH_HIT_CRYPTO_MIN_EXPECTED_PCT = 1.5
+const HIGH_HIT_CRYPTO_MIN_HOLD_MS = 24 * 60 * 60 * 1000
+const HIGH_HIT_CRYPTO_EXIT_CONFIRMATIONS = 2
+const HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT = 2.5
+const HIGH_HIT_CRYPTO_STOP_LOSS_PCT = 4.5
 const BITUNIX_TIER1_MMR_DEFAULT = 0.0065
 const BITUNIX_TIER1_MMR_MAJOR = 0.005
 const BITUNIX_TIER1_MMR_BTC_ETH = 0.004
@@ -230,6 +244,7 @@ function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
   if (
     strategy === 'high_move' ||
     strategy === 'high_move_relaxed' ||
+    strategy === 'best_single_high_hit' ||
     strategy === 'best_single' ||
     strategy === 'best_single_2x' ||
     strategy === 'best_single_5x'
@@ -243,6 +258,7 @@ function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) 
   if (
     strategy === 'high_move' ||
     strategy === 'high_move_relaxed' ||
+    strategy === 'best_single_high_hit' ||
     strategy === 'best_single' ||
     strategy === 'best_single_2x' ||
     strategy === 'best_single_5x'
@@ -679,8 +695,8 @@ function isHighMoveCryptoStrategy(
 
 function isBestSingleCryptoStrategy(
   strategy: ForwardStrategy
-): strategy is Extract<ForwardStrategy, 'best_single' | 'best_single_2x' | 'best_single_5x'> {
-  return strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
+): strategy is Extract<ForwardStrategy, 'best_single_high_hit' | 'best_single' | 'best_single_2x' | 'best_single_5x'> {
+  return strategy === 'best_single_high_hit' || strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
 }
 
 function isLeveragedBestSingleCryptoStrategy(
@@ -693,6 +709,12 @@ function bestSingleLeverageMultiplier(strategy: ForwardStrategy) {
   if (strategy === 'best_single_5x') return 5
   if (strategy === 'best_single_2x') return 2
   return 1
+}
+
+function isHighHitCryptoStrategy(
+  strategy: ForwardStrategy
+): strategy is Extract<ForwardStrategy, 'best_single_high_hit'> {
+  return strategy === 'best_single_high_hit'
 }
 
 function bitunixTier1MaintenanceMarginRate(symbol: string) {
@@ -841,6 +863,37 @@ async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSigna
   return rows
 }
 
+async function rankHighHitCryptoSignals(origin: string): Promise<ForwardSignal[]> {
+  const rows = await rankBestSingleCryptoSignals(origin)
+  if (!rows.length) return []
+
+  const filtered = await Promise.all(
+    rows.map(async (signal) => {
+      const forecast = await getCryptoForecast14d(signal.symbol)
+      const probUp = safeNumber(forecast?.probUp)
+      const confidence = safeNumber(forecast?.confidence)
+      const expectedReturn = safeNumber(forecast?.expectedReturn)
+      if (probUp == null || confidence == null) return null
+      if (confidence < HIGH_HIT_CRYPTO_MIN_CONFIDENCE) return null
+
+      const side = signal.side
+      const directionalProb = side === 'BUY' ? probUp : 1 - probUp
+      if (directionalProb < HIGH_HIT_CRYPTO_MIN_DIRECTIONAL_PROB) return null
+
+      const directionalExpectedReturn = expectedReturn == null ? 0 : side === 'BUY' ? expectedReturn : -expectedReturn
+      if (directionalExpectedReturn < HIGH_HIT_CRYPTO_MIN_EXPECTED_PCT) return null
+
+      const rankScore = (confidence * 1.5) + (directionalProb * 180) + (directionalExpectedReturn * 2)
+      return { signal, rankScore }
+    })
+  )
+
+  return filtered
+    .filter((row): row is NonNullable<(typeof filtered)[number]> => row != null)
+    .sort((a, b) => b.rankScore - a.rankScore)
+    .map((row) => row.signal)
+}
+
 export async function syncForwardTracker(
   req: NextApiRequest,
   assetType: ForwardAssetType,
@@ -854,10 +907,9 @@ export async function syncForwardTracker(
   const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
   const sourceMode = currentSignalsResp.sourceMode
   const isBestSingleCrypto = assetType === 'crypto' && isBestSingleCryptoStrategy(strategy)
+  const isHighHitCrypto = assetType === 'crypto' && isHighHitCryptoStrategy(strategy)
   const bestSingleCandidates =
-    isBestSingleCrypto
-      ? await rankBestSingleCryptoSignals(origin)
-      : null
+    isBestSingleCrypto ? (isHighHitCrypto ? await rankHighHitCryptoSignals(origin) : await rankBestSingleCryptoSignals(origin)) : null
   let signals =
     assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
       ? await filterHighMoveCryptoSignals(origin, currentSignalsResp.signals, strategy)
@@ -885,7 +937,7 @@ export async function syncForwardTracker(
   const leverageMultiplier = isBestSingleCrypto ? bestSingleLeverageMultiplier(strategy) : 1
   const isEquity = assetType === 'equity'
   const isHighMoveCrypto = assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
-  const usesStickyExits = isEquity || isHighMoveCrypto
+  const usesStickyExits = isEquity || isHighMoveCrypto || isHighHitCrypto
   const qualifyingSignalCount =
     isBestSingleCrypto
       ? (bestSingleCandidates || []).length
@@ -910,6 +962,24 @@ export async function syncForwardTracker(
     if (currentPrice != null && currentPrice > 0) {
       open.lastPrice = currentPrice
       open.lastMarkedAt = stamp.iso
+    }
+
+    if (isHighHitCrypto && currentPrice != null && currentPrice > 0) {
+      const marked = computeMarkedTrade(assetType, open.side, open.quantity, open.entryPrice, currentPrice, open.principalEur)
+      if (marked.grossReturnPct >= HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT) {
+        nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'take_profit_hit', stamp.ms))
+        delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
+        blockedEntrySymbols.add(symbol)
+        continue
+      }
+      if (marked.grossReturnPct <= -HIGH_HIT_CRYPTO_STOP_LOSS_PCT) {
+        nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'stop_loss_hit', stamp.ms))
+        delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
+        blockedEntrySymbols.add(symbol)
+        continue
+      }
     }
 
     if (currentPrice != null && currentPrice > 0 && leveragedBitunixRiskStopReached(assetType, strategy, open, currentPrice)) {
@@ -944,6 +1014,21 @@ export async function syncForwardTracker(
         }
         const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_MOVE_CRYPTO_MIN_HOLD_MS
         if (!heldLongEnough || seenCount < HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS) continue
+      }
+      if (isHighHitCrypto) {
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === 'signal_removed' ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason: 'signal_removed',
+          firstSeenAt: pending?.reason === 'signal_removed' ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === 'signal_removed' ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_HIT_CRYPTO_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < HIGH_HIT_CRYPTO_EXIT_CONFIRMATIONS) continue
       }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
@@ -985,6 +1070,22 @@ export async function syncForwardTracker(
         }
         const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_MOVE_CRYPTO_MIN_HOLD_MS
         if (!heldLongEnough || seenCount < HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS) continue
+      }
+      if (isHighHitCrypto) {
+        const reason = liveSignal.side === 'BUY' ? 'flip_to_buy' : 'flip_to_sell'
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === reason ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason,
+          firstSeenAt: pending?.reason === reason ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === reason ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        const heldLongEnough = stamp.ms - open.openedAtMs >= HIGH_HIT_CRYPTO_MIN_HOLD_MS
+        if (!heldLongEnough || seenCount < HIGH_HIT_CRYPTO_EXIT_CONFIRMATIONS) continue
       }
       if (currentPrice != null && currentPrice > 0) {
         nextState.closedTrades.unshift(
@@ -1066,7 +1167,7 @@ export async function syncForwardTracker(
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
-            ).toFixed(0)} notional). Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
+            ).toFixed(0)} notional). ${isHighHitCryptoStrategy(strategy) ? `Deze high hit-rate variant neemt alleen de allersterkste 14D setups (hoge confidence + hoge directionele kans), houdt maximaal 1 coin tegelijk aan en sluit sneller op een kleine take-profit (${HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT.toFixed(1)}%) of ruimere stop (${HIGH_HIT_CRYPTO_STOP_LOSS_PCT.toFixed(1)}%) om de trefkans op te voeren.` : `Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`}${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy

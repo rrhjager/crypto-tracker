@@ -305,6 +305,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
     { label: 'Standaard', strategy: 'standard' as const },
     { label: 'Grote moves', strategy: 'high_move' as const },
     { label: 'Lagere confidence', strategy: 'high_move_relaxed' as const },
+    { label: 'Beste 1 (high hit-rate)', strategy: 'best_single_high_hit' as const },
     { label: 'Beste 1 (1x)', strategy: 'best_single' as const },
     { label: 'Beste 1 (2x)', strategy: 'best_single_2x' as const },
     { label: 'Beste 1 (5x)', strategy: 'best_single_5x' as const },
@@ -585,6 +586,14 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           strategy="best_single"
           title="Forward test beste 1 crypto tegelijk (1x)"
           description="Deze variant gebruikt steeds maar één positie van €1000 zonder leverage. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT. Pas als die trade sluit, mag de volgende beste crypto openen."
+        />
+
+        <ForwardTrackerPanel
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          strategy="best_single_high_hit"
+          title="Forward test beste 1 crypto tegelijk (high hit-rate)"
+          description="Dit is de nieuwe hitrate-variant. Hij kiest ook maar 1 crypto tegelijk, maar alleen bij veel hogere confidence en directionele kans. Hij pakt sneller winst op kleine moves en accepteert een ruimere stop om de trefkans op te voeren."
         />
 
         <ForwardTrackerPanel
