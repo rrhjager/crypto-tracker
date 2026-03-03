@@ -173,6 +173,7 @@ type FoldPrediction = {
   regime: ForecastRegime
   ma200Long: boolean
   momentumLong: boolean
+  featureMap: FeatureMap
 }
 
 type StrategyDailyPoint = {
@@ -206,6 +207,48 @@ export type RegimeSummary = {
   avgProbUp: number | null
   brier: number | null
   hitRateAboveEntry: number | null
+}
+
+export type ForecastScenarioName = 'baseline' | 'btc_relative' | 'breakout_squeeze' | 'confluence'
+
+export type ForecastScenarioOutput = {
+  key: ForecastScenarioName
+  label: string
+  modelType: string
+  probUp: number
+  confidence: number
+  expectedReturn: number | null
+  edgeAfterCosts: number | null
+  action: ForecastAction
+  positionSize: number
+  summary: string
+  topReasons: string[]
+  evaluation: {
+    auc: number | null
+    brier: number | null
+    hitRate: number | null
+    avgTradeReturnPct: number | null
+    turnover: number | null
+    compoundedValueOf100: number | null
+  }
+}
+
+export type ForecastCompareOutput = {
+  symbol: string
+  assetType: ForecastAssetType
+  horizon: ForecastHorizon
+  regime: ForecastRegime
+  benchmark: string | null
+  featureSnapshot: {
+    relBench20: number
+    relBench60: number
+    breakoutStrength: number
+    atrPct14: number
+    realizedVol20: number
+    priceVs200dPct: number
+    benchmarkTrend20: number
+  }
+  scenarios: ForecastScenarioOutput[]
 }
 
 type WalkForwardResult = {
@@ -992,6 +1035,7 @@ function walkForwardEvaluate(rows: Observation[], assetType: ForecastAssetType, 
         regime: testRows[i].regime,
         ma200Long: testRows[i].featureMap.priceVs200dPct > 0,
         momentumLong: testRows[i].featureMap.ret20 > 0 && testRows[i].featureMap.rsi14 >= 52,
+        featureMap: testRows[i].featureMap,
       })
     }
 
@@ -1106,6 +1150,191 @@ function inferExpectedReturn(rows: Observation[], model: ReturnType<typeof fitFi
   }
 }
 
+function computeConfidenceValue(
+  walk: WalkForwardResult,
+  liveProb: number,
+  agreement: number
+) {
+  const calibrationScore = 1 - clamp((walk.classification.calibrationError ?? 0.25) / 0.25, 0, 1)
+  const edge = Math.abs(liveProb - 0.5) * 2
+  return Math.round(
+    clamp(
+      (0.35 * edge) +
+        (0.25 * calibrationScore) +
+        (0.20 * agreement) +
+        (0.20 * clamp(walk.predictions.length / 120, 0, 1)),
+      0,
+      1
+    ) * 100
+  )
+}
+
+function deriveActionAndSize(
+  probUp: number,
+  confidence: number,
+  regime: ForecastRegime,
+  currentVol: number
+) {
+  const volScalar = currentVol > 0 ? clamp(3.5 / currentVol, 0.15, 1) : 0.6
+  const uncertaintyScalar = clamp(confidence / 100, 0.15, 1)
+  const action: ForecastAction =
+    regime === 'RISK_OFF'
+      ? 'EXIT'
+      : probUp >= ENTRY_THRESHOLD
+        ? 'LONG'
+        : probUp <= EXIT_THRESHOLD
+          ? 'EXIT'
+          : 'HOLD'
+  const sizeEdge = clamp((probUp - EXIT_THRESHOLD) / Math.max(ENTRY_THRESHOLD - EXIT_THRESHOLD, 0.01), 0, 1)
+  const positionSize =
+    action === 'LONG' ? Number(clamp(sizeEdge * volScalar * uncertaintyScalar, 0, 1).toFixed(2)) : 0
+  return { action, positionSize }
+}
+
+function scenarioExpectedEdge(expectedReturn: number | null, assetType: ForecastAssetType, costs: ForecastCosts) {
+  if (expectedReturn == null || !Number.isFinite(expectedReturn)) return null
+  return expectedReturn - (tradeCostPct(assetType, costs) * 100)
+}
+
+function relStrengthAdjustment(featureMap: FeatureMap) {
+  const rel20 = clamp(featureMap.relBench20 / 10, -1, 1)
+  const rel60 = clamp(featureMap.relBench60 / 16, -1, 1)
+  const benchTrend = clamp(featureMap.benchmarkTrend20 / 8, -1, 1)
+  return clamp((0.08 * rel20) + (0.05 * rel60) + (0.02 * benchTrend), -0.16, 0.16)
+}
+
+function breakoutSqueezeAdjustment(featureMap: FeatureMap) {
+  const breakout = clamp(featureMap.breakoutStrength, -1, 1)
+  const trendBias = clamp(featureMap.priceVs200dPct / 12, -1, 1)
+  const squeeze = clamp((4.5 - Math.max(featureMap.atrPct14, featureMap.realizedVol20)) / 4.5, -1, 1)
+  const alignment =
+    breakout > 0.08 ? squeeze : breakout < -0.08 ? -squeeze : 0
+  return clamp((0.09 * breakout) + (0.04 * trendBias) + (0.05 * alignment), -0.18, 0.18)
+}
+
+function confluenceAdjustment(featureMap: FeatureMap) {
+  const trendCore = clamp(
+    (featureMap.priceVs200dPct / 14) +
+      (featureMap.ma50200SpreadPct / 12) +
+      (featureMap.ma50SlopePct / 5),
+    -1,
+    1
+  )
+  const relCore = clamp((featureMap.relBench20 / 10) + (featureMap.relBench60 / 18), -1, 1)
+  const breakoutCore = clamp(featureMap.breakoutStrength * 1.4, -1, 1)
+  const drawdownPenalty = featureMap.drawdown63Pct < -18 ? -0.05 : 0
+  return clamp((0.06 * trendCore) + (0.06 * relCore) + (0.07 * breakoutCore) + drawdownPenalty, -0.2, 0.2)
+}
+
+function adjustedExpectedReturn(baseExpectedReturn: number | null, probDelta: number) {
+  if (baseExpectedReturn == null || !Number.isFinite(baseExpectedReturn)) return null
+  return baseExpectedReturn + (probDelta * 18)
+}
+
+function scenarioProb(
+  baseProb: number,
+  featureMap: FeatureMap,
+  scenario: ForecastScenarioName
+) {
+  if (scenario === 'baseline') return clamp(baseProb, 0.02, 0.98)
+  if (scenario === 'btc_relative') return clamp(baseProb + relStrengthAdjustment(featureMap), 0.02, 0.98)
+  if (scenario === 'breakout_squeeze') return clamp(baseProb + breakoutSqueezeAdjustment(featureMap), 0.02, 0.98)
+
+  const rel = relStrengthAdjustment(featureMap)
+  const breakout = breakoutSqueezeAdjustment(featureMap)
+  const confluence = confluenceAdjustment(featureMap)
+  return clamp(baseProb + (0.45 * rel) + (0.35 * breakout) + confluence, 0.02, 0.98)
+}
+
+function scenarioConfidence(
+  baseConfidence: number,
+  baseProb: number,
+  nextProb: number,
+  scenario: ForecastScenarioName
+) {
+  if (scenario === 'baseline') return baseConfidence
+  const delta = Math.abs(nextProb - baseProb)
+  const boost = scenario === 'confluence' ? 22 : scenario === 'breakout_squeeze' ? 16 : 14
+  return Math.round(clamp(baseConfidence + (delta * 100 * boost * 0.1), 10, 99))
+}
+
+function scenarioLabel(scenario: ForecastScenarioName) {
+  if (scenario === 'baseline') return 'Baseline ensemble'
+  if (scenario === 'btc_relative') return 'BTC-relative strength'
+  if (scenario === 'breakout_squeeze') return 'Breakout + squeeze'
+  return 'Confluence model'
+}
+
+function scenarioModelType(scenario: ForecastScenarioName) {
+  if (scenario === 'baseline') return 'Bestaande probabilistische ensemble'
+  if (scenario === 'btc_relative') return 'Baseline + relative strength vs BTC'
+  if (scenario === 'breakout_squeeze') return 'Baseline + breakout/squeeze overlay'
+  return 'Samengevoegde confluence overlay'
+}
+
+function scenarioSummary(scenario: ForecastScenarioName) {
+  if (scenario === 'baseline') return 'Huidige leakage-free forecast zonder extra crypto-overlays.'
+  if (scenario === 'btc_relative') return 'Zwaarder gewicht voor alt-strength versus BTC en benchmarktrend.'
+  if (scenario === 'breakout_squeeze') return 'Zoekt compressie + breakoutkwaliteit om grotere swings te isoleren.'
+  return 'Combineert trend, BTC-relative strength en breakoutdruk in één strenger model.'
+}
+
+function scenarioReasons(
+  featureMap: FeatureMap,
+  scenario: ForecastScenarioName,
+  action: ForecastAction
+) {
+  if (scenario === 'baseline') return makeReasons(featureMap, 'NEUTRAL', action)
+
+  const reasons: string[] = []
+  if (scenario === 'btc_relative' || scenario === 'confluence') {
+    reasons.push(`Rel. sterkte 20D vs BTC: ${featureMap.relBench20.toFixed(1)}%`)
+    reasons.push(`Rel. sterkte 60D vs BTC: ${featureMap.relBench60.toFixed(1)}%`)
+  }
+  if (scenario === 'breakout_squeeze' || scenario === 'confluence') {
+    reasons.push(`Breakoutdruk: ${featureMap.breakoutStrength.toFixed(2)}`)
+    reasons.push(`ATR ${featureMap.atrPct14.toFixed(2)}% en realized vol ${featureMap.realizedVol20.toFixed(2)}%`)
+  }
+  if (scenario === 'confluence') {
+    reasons.push(`Prijs vs 200D: ${featureMap.priceVs200dPct.toFixed(1)}%`)
+    reasons.push(`Benchmarktrend 20D: ${featureMap.benchmarkTrend20.toFixed(1)}%`)
+  }
+  if (action === 'EXIT') reasons.push('Model drukt onder de exit-zone na extra crypto-filters')
+  if (!reasons.length) reasons.push('Geen extra crypto-filter actief')
+  return reasons.slice(0, 5)
+}
+
+function transformScenarioPredictions(
+  rows: FoldPrediction[],
+  scenario: ForecastScenarioName
+) {
+  return rows.map((row) => ({
+    ...row,
+    probUp: scenarioProb(row.probUp, row.featureMap, scenario),
+  }))
+}
+
+function evaluateScenarioPredictions(
+  rows: FoldPrediction[],
+  assetType: ForecastAssetType,
+  costs: ForecastCosts
+) {
+  const y = rows.map((row) => row.target)
+  const p = rows.map((row) => row.probUp)
+  const strategy = simulateLongCashStrategy(
+    rows,
+    assetType,
+    costs,
+    (row) => row.probUp >= ENTRY_THRESHOLD && row.regime !== 'RISK_OFF',
+    (row) => row.probUp <= EXIT_THRESHOLD || row.regime === 'RISK_OFF'
+  )
+  return {
+    auc: aucScore(y, p),
+    brier: brierScore(y, p),
+    strategy,
+  }
+}
+
 function makeReasons(featureMap: FeatureMap, regime: ForecastRegime, action: ForecastAction) {
   const reasons: string[] = []
   if (featureMap.priceVs200dPct > 0) reasons.push(`Prijs ligt ${featureMap.priceVs200dPct.toFixed(1)}% boven 200D gemiddelde`)
@@ -1142,25 +1371,11 @@ export async function buildForecast(input: ForecastInput): Promise<ForecastOutpu
   const walk = walkForwardEvaluate(dataset.rows, input.assetType, horizon, costs)
   const finalFit = fitFinalForecast(dataset.rows)
   const live = inferExpectedReturn(dataset.rows, finalFit, dataset.latest.features)
-  const calibrationScore = 1 - clamp((walk.classification.calibrationError ?? 0.25) / 0.25, 0, 1)
-  const edge = Math.abs(live.probUp - 0.5) * 2
-  const confidence = Math.round(clamp((0.35 * edge) + (0.25 * calibrationScore) + (0.20 * live.agreement) + (0.20 * clamp(walk.predictions.length / 120, 0, 1)), 0, 1) * 100)
+  const confidence = computeConfidenceValue(walk, live.probUp, live.agreement)
 
   const currentVol = Math.max(dataset.latest.featureMap.atrPct14, dataset.latest.featureMap.realizedVol20)
-  const volScalar = currentVol > 0 ? clamp(3.5 / currentVol, 0.15, 1) : 0.6
-  const uncertaintyScalar = clamp(confidence / 100, 0.15, 1)
   const regime = dataset.latest.regime
-  const action: ForecastAction = regime === 'RISK_OFF'
-    ? 'EXIT'
-    : live.probUp >= ENTRY_THRESHOLD
-      ? 'LONG'
-      : live.probUp <= EXIT_THRESHOLD
-        ? 'EXIT'
-        : 'HOLD'
-  const sizeEdge = clamp((live.probUp - EXIT_THRESHOLD) / Math.max(ENTRY_THRESHOLD - EXIT_THRESHOLD, 0.01), 0, 1)
-  const positionSize = action === 'LONG'
-    ? Number(clamp(sizeEdge * volScalar * uncertaintyScalar, 0, 1).toFixed(2))
-    : 0
+  const { action, positionSize } = deriveActionAndSize(live.probUp, confidence, regime, currentVol)
 
   return {
     symbol,
@@ -1214,5 +1429,87 @@ export async function buildForecast(input: ForecastInput): Promise<ForecastOutpu
       market: asset.market,
       benchmark: asset.benchmark,
     },
+  }
+}
+
+export async function buildForecastCompare(input: ForecastInput): Promise<ForecastCompareOutput> {
+  const symbol = String(input.symbol || '').trim().toUpperCase()
+  if (!symbol) throw new Error('Missing symbol')
+  const horizon = normalizeHorizon(input.horizon)
+  const costs = getCosts(input)
+
+  const asset = await fetchAssetHistory({ ...input, symbol, horizon })
+  const benchmarkCloses = await fetchBenchmarkHistory(asset.market)
+  const dataset = buildDataset(asset.data, benchmarkCloses, asset.market, horizon)
+  if (dataset.rows.length < 120) {
+    throw new Error('Not enough history for scenario comparison')
+  }
+
+  const walk = walkForwardEvaluate(dataset.rows, input.assetType, horizon, costs)
+  const finalFit = fitFinalForecast(dataset.rows)
+  const live = inferExpectedReturn(dataset.rows, finalFit, dataset.latest.features)
+  const baseConfidence = computeConfidenceValue(walk, live.probUp, live.agreement)
+  const currentVol = Math.max(dataset.latest.featureMap.atrPct14, dataset.latest.featureMap.realizedVol20)
+  const regime = dataset.latest.regime
+
+  const scenarios: ForecastScenarioName[] = ['baseline', 'btc_relative', 'breakout_squeeze', 'confluence']
+  const scenarioRowsMap = new Map<ForecastScenarioName, FoldPrediction[]>()
+  scenarioRowsMap.set('baseline', walk.predictions)
+  for (const scenario of scenarios) {
+    if (scenario === 'baseline') continue
+    scenarioRowsMap.set(scenario, transformScenarioPredictions(walk.predictions, scenario))
+  }
+
+  const out: ForecastScenarioOutput[] = scenarios.map((scenario) => {
+    const probUp = scenarioProb(live.probUp, dataset.latest.featureMap, scenario)
+    const confidence = scenarioConfidence(baseConfidence, live.probUp, probUp, scenario)
+    const expectedReturn = adjustedExpectedReturn(live.expectedReturn, probUp - live.probUp)
+    const edgeAfterCosts = scenarioExpectedEdge(expectedReturn, input.assetType, costs)
+    const { action, positionSize } = deriveActionAndSize(probUp, confidence, regime, currentVol)
+    const evaluated = evaluateScenarioPredictions(
+      scenarioRowsMap.get(scenario) || walk.predictions,
+      input.assetType,
+      costs
+    )
+
+    return {
+      key: scenario,
+      label: scenarioLabel(scenario),
+      modelType: scenarioModelType(scenario),
+      probUp: Number(clamp(probUp, 0, 1).toFixed(4)),
+      confidence,
+      expectedReturn: expectedReturn != null ? Number(expectedReturn.toFixed(2)) : null,
+      edgeAfterCosts: edgeAfterCosts != null ? Number(edgeAfterCosts.toFixed(2)) : null,
+      action,
+      positionSize,
+      summary: scenarioSummary(scenario),
+      topReasons: scenarioReasons(dataset.latest.featureMap, scenario, action),
+      evaluation: {
+        auc: evaluated.auc != null ? Number(evaluated.auc.toFixed(4)) : null,
+        brier: evaluated.brier != null ? Number(evaluated.brier.toFixed(4)) : null,
+        hitRate: evaluated.strategy.hitRate,
+        avgTradeReturnPct: evaluated.strategy.avgTradeReturnPct,
+        turnover: evaluated.strategy.turnover,
+        compoundedValueOf100: evaluated.strategy.compoundedValueOf100,
+      },
+    }
+  })
+
+  return {
+    symbol,
+    assetType: input.assetType,
+    horizon,
+    regime,
+    benchmark: asset.benchmark,
+    featureSnapshot: {
+      relBench20: Number(dataset.latest.featureMap.relBench20.toFixed(2)),
+      relBench60: Number(dataset.latest.featureMap.relBench60.toFixed(2)),
+      breakoutStrength: Number(dataset.latest.featureMap.breakoutStrength.toFixed(3)),
+      atrPct14: Number(dataset.latest.featureMap.atrPct14.toFixed(2)),
+      realizedVol20: Number(dataset.latest.featureMap.realizedVol20.toFixed(2)),
+      priceVs200dPct: Number(dataset.latest.featureMap.priceVs200dPct.toFixed(2)),
+      benchmarkTrend20: Number(dataset.latest.featureMap.benchmarkTrend20.toFixed(2)),
+    },
+    scenarios: out,
   }
 }
