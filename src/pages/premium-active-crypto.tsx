@@ -576,7 +576,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           sourceMode={effectiveSourceMode}
           strategy="best_single"
           title="Forward test beste 1 crypto tegelijk (1x)"
-          description="Deze variant gebruikt steeds maar één positie van €1000 zonder leverage. Hij kiest alleen de best gerankte crypto op basis van het confluence-model (hoogste netto edge en confidence). Pas als die trade sluit, mag de volgende beste crypto openen."
+          description="Deze variant gebruikt steeds maar één positie van €1000 zonder leverage. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT. Pas als die trade sluit, mag de volgende beste crypto openen."
         />
 
         <ForwardTrackerPanel
@@ -584,7 +584,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           sourceMode={effectiveSourceMode}
           strategy="best_single_2x"
           title="Forward test beste 1 crypto tegelijk (2x leverage)"
-          description="Dit is dezelfde single-crypto strategie, maar met 2x leverage op €1000 margin. Er staat dus nog steeds maar één coin tegelijk open, alleen met dubbele notional zodat je de netto impact direct kunt vergelijken."
+          description="Dit is dezelfde single-crypto strategie, maar met 2x leverage op €1000 margin. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, maar dan met dubbele notional."
         />
 
         <ForwardTrackerPanel
@@ -592,7 +592,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           sourceMode={effectiveSourceMode}
           strategy="best_single_5x"
           title="Forward test beste 1 crypto tegelijk (5x leverage)"
-          description="Dit is dezelfde single-crypto strategie, maar met 5x leverage op €1000 margin. Er blijft maximaal één coin tegelijk open; alleen de exposure is groter, zodat je precies ziet hoe de winst, het verlies en de kostendruk opschalen."
+          description="Dit is dezelfde single-crypto strategie, maar met 5x leverage op €1000 margin. Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, maar dan met grotere exposure."
         />
       </main>
     </>

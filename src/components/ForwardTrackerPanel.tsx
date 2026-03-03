@@ -156,7 +156,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
           <div className="mt-4 rounded-2xl border border-slate-300/45 bg-white/75 px-4 py-3 text-[12px] text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/65">
             <span className="font-medium text-slate-900 dark:text-white">{data.meta.note}</span> Gestart op{' '}
             {formatDateTime(data.meta.startedAt)}. Nu open kapitaal: {formatMoney(data.summary.totalCommittedEur)}. Huidige signalen
-            in de bronlaag: {data.meta.currentSignals}. Kostenmodel: {data.meta.costs.feeBpsRoundTrip} bps fee +{' '}
+            in deze strategie: {data.meta.currentSignals}. Kostenmodel: {data.meta.costs.feeBpsRoundTrip} bps fee +{' '}
             {data.meta.costs.slippageBpsRoundTrip} bps slippage round-trip ({data.meta.costs.totalBpsRoundTrip} bps totaal). Totale
             kostendruk nu: {formatMoney(data.summary.totalCostsEur)}. De tracker wordt elk uur server-side ververst en synct ook
             opnieuw wanneer deze pagina opent.

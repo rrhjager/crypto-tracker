@@ -172,22 +172,6 @@ type ForecastApiResponse = {
   regime?: 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL'
 }
 
-type ForecastCompareApiResponse = {
-  scenarios?: Array<{
-    key?: string
-    probUp?: number
-    confidence?: number
-    expectedReturn?: number | null
-    edgeAfterCosts?: number | null
-    action?: 'LONG' | 'HOLD' | 'EXIT'
-    positionSize?: number
-    evaluation?: {
-      hitRate?: number | null
-      compoundedValueOf100?: number | null
-    }
-  }>
-}
-
 type CoinHomeBuysResponse = {
   items?: Array<{ symbol?: string; name?: string; score?: number }>
 }
@@ -216,7 +200,8 @@ const HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT = 4
 const HIGH_MOVE_CRYPTO_MIN_CONFIDENCE = 60
 const HIGH_MOVE_CRYPTO_RELAXED_MIN_CONFIDENCE = 55
 const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
-const BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS = 0.5
+const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.55
+const BEST_SINGLE_CRYPTO_MAX_BEARISH_PROB_UP = 0.45
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
 
@@ -727,52 +712,39 @@ async function rankBestSingleCryptoSignals(origin: string, signals: ForwardSigna
 
   const ranked = await Promise.all(
     deduped.map(async (signal) => {
-      const compare = await fetchJson<ForecastCompareApiResponse>(
-        `${origin}/api/forecast/compare?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
+      const forecast = await fetchJson<ForecastApiResponse>(
+        `${origin}/api/forecast?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
       )
-      const confluence = (compare?.scenarios || []).find((row) => String(row?.key || '').trim() === 'confluence')
-      if (!confluence) return null
+      const probUp = safeNumber(forecast?.probUp)
+      const confidence = safeNumber(forecast?.confidence)
+      const expectedReturn = safeNumber(forecast?.expectedReturn)
+      const positionSize = safeNumber(forecast?.positionSize)
+      const action = forecast?.action
+      const regime = forecast?.regime
 
-      const probUp = safeNumber(confluence.probUp)
-      const confidence = safeNumber(confluence.confidence)
-      const edgeAfterCosts = safeNumber(confluence.edgeAfterCosts)
-      const positionSize = safeNumber(confluence.positionSize)
-      const hitRate = safeNumber(confluence.evaluation?.hitRate)
-      const compoundedValueOf100 = safeNumber(confluence.evaluation?.compoundedValueOf100)
-      const action = confluence.action
-
-      if (
-        probUp == null ||
-        confidence == null ||
-        edgeAfterCosts == null ||
-        positionSize == null ||
-        hitRate == null ||
-        compoundedValueOf100 == null ||
-        !action
-      ) {
+      if (probUp == null || confidence == null || !action || !regime) {
         return null
       }
 
       if (signal.side === 'BUY') {
         if (action !== 'LONG') return null
+        if (regime === 'RISK_OFF') return null
         if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
-        if (edgeAfterCosts < BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS) return null
-        if (positionSize < 0.2) return null
+        if (probUp < BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
+        if (expectedReturn != null && expectedReturn <= 0) return null
+        if (positionSize == null || positionSize < 0.15) return null
       } else {
-        if (action !== 'EXIT') return null
         if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
-        if (edgeAfterCosts > -BEST_SINGLE_CRYPTO_MIN_EDGE_AFTER_COSTS) return null
-        if (probUp > 0.45) return null
+        if (probUp > BEST_SINGLE_CRYPTO_MAX_BEARISH_PROB_UP) return null
+        if (expectedReturn != null && expectedReturn >= 0) return null
       }
 
       const directionalProb = signal.side === 'BUY' ? probUp : 1 - probUp
       const rankScore =
         (directionalProb * 100) +
-        (confidence * 0.7) +
-        (Math.abs(edgeAfterCosts) * 12) +
-        (hitRate * 30) +
-        (Math.max(0, compoundedValueOf100 - 100) * 0.25) +
-        (positionSize * 15)
+        (confidence * 0.9) +
+        ((expectedReturn ?? 0) * (signal.side === 'BUY' ? 6 : -6)) +
+        ((positionSize ?? 0) * 20)
 
       return {
         signal,
@@ -832,6 +804,10 @@ export async function syncForwardTracker(
   const isEquity = assetType === 'equity'
   const isHighMoveCrypto = assetType === 'crypto' && isHighMoveCryptoStrategy(strategy)
   const usesStickyExits = isEquity || isHighMoveCrypto
+  const qualifyingSignalCount =
+    isBestSingleCrypto
+      ? (bestSingleCandidates || []).length
+      : signals.length
 
   const nextState: ForwardTrackerState = {
     ...current,
@@ -989,13 +965,13 @@ export async function syncForwardTracker(
       lastSyncAt: nextState.lastSyncAt,
       principalPerTradeEur: nextState.principalPerTradeEur,
       sourceMode,
-      currentSignals: signals.length,
+      currentSignals: qualifyingSignalCount,
       note: isEquity
         ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
-            ).toFixed(0)} notional). Alleen de best gerankte coin op basis van het confluence-model (hoogste netto edge + confidence) mag openen; na sluiten wordt pas de volgende beste gekozen.`
+            ).toFixed(0)} notional). Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy
