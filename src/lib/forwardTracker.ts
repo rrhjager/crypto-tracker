@@ -20,6 +20,7 @@ export type ForwardSignal = {
   name: string
   side: ForwardSide
   sourceMode: ForwardSourceMode
+  selectionReasons?: string[]
 }
 
 type PersistedOpenPosition = {
@@ -34,6 +35,7 @@ type PersistedOpenPosition = {
   sourceModeAtOpen: ForwardSourceMode
   lastPrice: number
   lastMarkedAt: string
+  selectionReasons?: string[]
 }
 
 type PersistedPendingExit = {
@@ -773,6 +775,7 @@ async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSigna
           name: coin.name,
           side,
           sourceMode: 'raw' as const,
+          selectionReasons: Array.isArray(forecast.topReasons) ? forecast.topReasons.slice(0, 4) : [],
         },
         rankScore,
       }
@@ -965,6 +968,7 @@ export async function syncForwardTracker(
       sourceModeAtOpen: signal.sourceMode,
       lastPrice: currentPrice,
       lastMarkedAt: stamp.iso,
+      selectionReasons: signal.selectionReasons,
     }
     delete nextState.pendingExits?.[signal.symbol]
   }

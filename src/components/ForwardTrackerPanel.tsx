@@ -49,6 +49,10 @@ function sidePill(side: 'BUY' | 'SELL') {
     : 'bg-rose-600 text-white'
 }
 
+function isBestSingleStrategy(strategy: ForwardStrategy) {
+  return strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
+}
+
 export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standard', title, description }: Props) {
   const { data, error } = useSWR<ForwardTrackerResponse>(
     `/api/market/forward-tracker?assetType=${assetType}&sourceMode=${sourceMode}&strategy=${strategy}`,
@@ -106,6 +110,33 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
 
       {data ? (
         <>
+          {assetType === 'crypto' && isBestSingleStrategy(data.meta.strategy) && data.openPositions[0] ? (
+            <div className="mt-4 rounded-2xl border border-cyan-300/45 bg-cyan-50/70 px-4 py-4 dark:border-cyan-500/25 dark:bg-cyan-950/10">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-900/70 dark:text-cyan-200/70">
+                    Gekozen nu
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className="text-base font-semibold text-slate-900 dark:text-white">{data.openPositions[0].symbol}</span>
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${sidePill(data.openPositions[0].side)}`}>
+                      {data.openPositions[0].side === 'BUY' ? 'KOOP' : 'SHORT'}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/65">{data.openPositions[0].name}</div>
+                </div>
+              </div>
+
+              {Array.isArray(data.openPositions[0].selectionReasons) && data.openPositions[0].selectionReasons.length > 0 ? (
+                <ul className="mt-3 space-y-1 text-[12px] text-slate-700/85 dark:text-white/70">
+                  {data.openPositions[0].selectionReasons.map((reason) => (
+                    <li key={reason}>- {reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Open trades</div>
