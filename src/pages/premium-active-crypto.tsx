@@ -4,6 +4,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { COIN_SET, coinHref } from '@/lib/coins'
 import { ForecastPanel } from '@/components/ForecastPanel'
+import { ForwardTrackerCompare } from '@/components/ForwardTrackerCompare'
 import { ForwardTrackerPanel } from '@/components/ForwardTrackerPanel'
 
 type CryptoPick = {
@@ -526,6 +527,16 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           <span className="font-medium text-slate-900 dark:text-white">{hiddenSells}</span> SELL-signalen staan niet in de bovenste blokken,
           maar wel in de volledige audit-lijsten hieronder.
         </section>
+
+        <ForwardTrackerCompare
+          assetType="crypto"
+          sourceMode={effectiveSourceMode}
+          rows={[
+            { label: 'Standaard', strategy: 'standard' },
+            { label: 'Grote moves', strategy: 'high_move' },
+            { label: 'Lagere confidence', strategy: 'high_move_relaxed' },
+          ]}
+        />
 
         <ForwardTrackerPanel
           assetType="crypto"
