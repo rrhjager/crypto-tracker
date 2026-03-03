@@ -13,7 +13,7 @@ export type ForwardStrategy =
   | 'best_single_2x'
   | 'best_single_5x'
 export type ForwardSide = 'BUY' | 'SELL'
-export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell'
+export type ForwardExitReason = 'signal_removed' | 'flip_to_buy' | 'flip_to_sell' | 'bitunix_risk_stop'
 
 export type ForwardSignal = {
   symbol: string
@@ -206,6 +206,10 @@ const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
 const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.5
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
+const BITUNIX_TIER1_MMR_DEFAULT = 0.0065
+const BITUNIX_TIER1_MMR_MAJOR = 0.005
+const BITUNIX_TIER1_MMR_BTC_ETH = 0.004
+const BITUNIX_RISK_STOP_BUFFER_FRACTION = 0.4
 
 type TrackerCostModel = {
   feeBpsRoundTrip: number
@@ -679,10 +683,52 @@ function isBestSingleCryptoStrategy(
   return strategy === 'best_single' || strategy === 'best_single_2x' || strategy === 'best_single_5x'
 }
 
+function isLeveragedBestSingleCryptoStrategy(
+  strategy: ForwardStrategy
+): strategy is Extract<ForwardStrategy, 'best_single_2x' | 'best_single_5x'> {
+  return strategy === 'best_single_2x' || strategy === 'best_single_5x'
+}
+
 function bestSingleLeverageMultiplier(strategy: ForwardStrategy) {
   if (strategy === 'best_single_5x') return 5
   if (strategy === 'best_single_2x') return 2
   return 1
+}
+
+function bitunixTier1MaintenanceMarginRate(symbol: string) {
+  const key = symbol.trim().toUpperCase()
+  if (key === 'BTC' || key === 'ETH') return BITUNIX_TIER1_MMR_BTC_ETH
+  if (key === 'BNB' || key === 'DOGE' || key === 'SOL' || key === 'XRP') return BITUNIX_TIER1_MMR_MAJOR
+  return BITUNIX_TIER1_MMR_DEFAULT
+}
+
+function leveragedBitunixRiskStopReached(
+  assetType: ForwardAssetType,
+  strategy: ForwardStrategy,
+  position: PersistedOpenPosition,
+  currentPrice: number
+) {
+  if (assetType !== 'crypto') return false
+  if (!isLeveragedBestSingleCryptoStrategy(strategy)) return false
+  if (!(currentPrice > 0) || !(position.entryPrice > 0)) return false
+
+  const leverage = bestSingleLeverageMultiplier(strategy)
+  if (leverage <= 1) return false
+
+  const adverseMove =
+    position.side === 'BUY'
+      ? (position.entryPrice - currentPrice) / position.entryPrice
+      : (currentPrice - position.entryPrice) / position.entryPrice
+
+  if (adverseMove <= 0) return false
+
+  const mmr = bitunixTier1MaintenanceMarginRate(position.symbol)
+  const model = getCostModel(assetType)
+  const feesReserve = model.totalBpsRoundTrip / 10_000
+  const liquidationDistance = clamp((1 / leverage) - mmr - feesReserve, 0.01, 0.95)
+  const riskStopDistance = liquidationDistance * BITUNIX_RISK_STOP_BUFFER_FRACTION
+
+  return adverseMove >= riskStopDistance
 }
 
 function highMoveConfidenceFloor(strategy: ForwardStrategy) {
@@ -853,6 +899,7 @@ export async function syncForwardTracker(
     pendingExits: { ...(current.pendingExits || {}) },
     closedTrades: [...current.closedTrades],
   }
+  const blockedEntrySymbols = new Set<string>()
 
   const currentOpenSymbols = Object.keys(nextState.openPositions)
   for (const symbol of currentOpenSymbols) {
@@ -863,6 +910,14 @@ export async function syncForwardTracker(
     if (currentPrice != null && currentPrice > 0) {
       open.lastPrice = currentPrice
       open.lastMarkedAt = stamp.iso
+    }
+
+    if (currentPrice != null && currentPrice > 0 && leveragedBitunixRiskStopReached(assetType, strategy, open, currentPrice)) {
+      nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'bitunix_risk_stop', stamp.ms))
+      delete nextState.openPositions[symbol]
+      delete nextState.pendingExits?.[symbol]
+      blockedEntrySymbols.add(symbol)
+      continue
     }
 
     if (usesStickyExits && liveSignal?.side === open.side) {
@@ -949,10 +1004,12 @@ export async function syncForwardTracker(
 
   let entrySignals = signals
   if (isBestSingleCrypto && Object.keys(nextState.openPositions).length === 0) {
-    entrySignals = (bestSingleCandidates || []).slice(0, 1)
+    entrySignals = bestSingleCandidates || []
   }
 
   for (const signal of entrySignals) {
+    if (isBestSingleCrypto && Object.keys(nextState.openPositions).length > 0) break
+    if (blockedEntrySymbols.has(signal.symbol)) continue
     if (nextState.openPositions[signal.symbol]) continue
     const currentPrice = priceMap[signal.symbol]
     if (currentPrice == null || currentPrice <= 0) continue
@@ -971,6 +1028,7 @@ export async function syncForwardTracker(
       selectionReasons: signal.selectionReasons,
     }
     delete nextState.pendingExits?.[signal.symbol]
+    if (isBestSingleCrypto) break
   }
 
   if (nextState.closedTrades.length > MAX_CLOSED_TRADES) {
@@ -1008,7 +1066,7 @@ export async function syncForwardTracker(
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier
-            ).toFixed(0)} notional). Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.`
+            ).toFixed(0)} notional). Hij gebruikt dezelfde 14D forecast-score als de kaarten hierboven en kiest de beste huidige LONG of SHORT, afhankelijk van welke richting de hoogste kans heeft. Pas na sluiten wordt de volgende beste coin gekozen.${isLeveragedBestSingleCryptoStrategy(strategy) ? ' Voor 2x/5x geldt daarnaast een conservatieve Bitunix-achtige isolated risicostop: op basis van mark-price benadering en tier-1 maintenance margin sluit de trade vroegtijdig rond 40% van de theoretische liquidatiebuffer.' : ''}`
         : isHighMoveCrypto
           ? `Forward-test start vanaf de eerste sync. Deze crypto-variant opent alleen entries met een 14D forecast van minimaal ±4% en confidence >= ${highMoveConfidenceFloor(
               strategy
