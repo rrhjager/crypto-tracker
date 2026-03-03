@@ -1,5 +1,6 @@
 import type { NextApiRequest } from 'next'
 import { COINS, COIN_SET, findCoin } from '@/lib/coins'
+import { buildForecast, type ForecastOutput } from '@/lib/forecastEngine'
 import { kvGetJSON, kvSetJSON } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
@@ -217,6 +218,7 @@ let bestSingleUniverseCache:
       rows: ForwardSignal[]
     }
   | null = null
+const cryptoForecastCache = new Map<string, { expiresAtMs: number; value: ForecastOutput | null }>()
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
   if (
@@ -321,6 +323,26 @@ async function fetchJson<T>(url: string): Promise<T | null> {
     if (!res.ok) return null
     return (await res.json()) as T
   } catch {
+    return null
+  }
+}
+
+async function getCryptoForecast14d(symbol: string): Promise<ForecastOutput | null> {
+  const key = symbol.trim().toUpperCase()
+  const cached = cryptoForecastCache.get(key)
+  const nowMs = Date.now()
+  if (cached && cached.expiresAtMs > nowMs) return cached.value
+
+  try {
+    const value = await buildForecast({
+      symbol: key,
+      assetType: 'crypto',
+      horizon: 14,
+    })
+    cryptoForecastCache.set(key, { expiresAtMs: nowMs + 5 * 60_000, value })
+    return value
+  } catch {
+    cryptoForecastCache.set(key, { expiresAtMs: nowMs + 60_000, value: null })
     return null
   }
 }
@@ -676,9 +698,7 @@ async function filterHighMoveCryptoSignals(
 
   const results = await Promise.all(
     deduped.map(async (signal) => {
-      const forecast = await fetchJson<ForecastApiResponse>(
-        `${origin}/api/forecast?symbol=${encodeURIComponent(signal.symbol)}&assetType=crypto&horizon=14`
-      )
+      const forecast = await getCryptoForecast14d(signal.symbol)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
       const confidence = safeNumber(forecast?.confidence)
       const probUp = safeNumber(forecast?.probUp)
@@ -725,9 +745,7 @@ async function rankBestSingleCryptoSignals(origin: string): Promise<ForwardSigna
 
   const ranked = await Promise.all(
     universe.map(async (coin) => {
-      const forecast = await fetchJson<ForecastApiResponse>(
-        `${origin}/api/forecast?symbol=${encodeURIComponent(coin.symbol)}&assetType=crypto&horizon=14`
-      )
+      const forecast = await getCryptoForecast14d(coin.symbol)
       const probUp = safeNumber(forecast?.probUp)
       const confidence = safeNumber(forecast?.confidence)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
