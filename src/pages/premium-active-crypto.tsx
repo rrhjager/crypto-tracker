@@ -348,6 +348,12 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
               >
                 Open audit
               </Link>
+              <a
+                href="#beste-strategie"
+                className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[12px] font-medium text-emerald-900 hover:bg-emerald-500/20 dark:text-emerald-200"
+              >
+                Spring naar winnaar
+              </a>
               <Link
                 href="/"
                 className="rounded-full border border-cyan-500/35 bg-cyan-500/10 px-4 py-2 text-[12px] font-medium text-cyan-900 hover:bg-cyan-500/20 dark:text-cyan-200"

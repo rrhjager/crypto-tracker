@@ -102,9 +102,40 @@ export function BestCryptoStrategyPanel({ sourceMode, rows }: Props) {
       row.data.summary.openTrades > 0 ||
       Math.abs(row.data.summary.totalNetPnlEur) > 0.0001
   )
+  const bestWinrateValue = valid
+    .filter((row) => row.data.summary.closedTrades > 0 && row.data.summary.winRateClosedNet != null)
+    .reduce((max, row) => Math.max(max, row.data.summary.winRateClosedNet ?? -1), -1)
+  const profitableRows = valid.filter((row) => row.data.summary.totalNetPnlEur > 0)
+  const lowestProfitableCost =
+    profitableRows.length > 0
+      ? profitableRows.reduce((min, row) => Math.min(min, row.data.summary.totalCostsEur), Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY
+  const winningReasons =
+    best && hasMeaningfulHistory
+      ? [
+          'Hoogste totale netto resultaat van alle actieve crypto-varianten.',
+          best.data.summary.realizedNetPnlEur >= Math.max(...valid.map((row) => row.data.summary.realizedNetPnlEur))
+            ? 'Ook de hoogste gerealiseerde netto winst tot nu toe.'
+            : null,
+          best.data.summary.closedTrades > 0 &&
+          best.data.summary.winRateClosedNet != null &&
+          best.data.summary.winRateClosedNet >= bestWinrateValue
+            ? 'Ook de beste netto winrate van de varianten met gesloten trades.'
+            : null,
+          best.data.summary.totalNetPnlEur > 0 && best.data.summary.totalCostsEur <= lowestProfitableCost
+            ? 'Laagste kostendruk binnen de momenteel winstgevende varianten.'
+            : null,
+          best.data.summary.closedTrades >= Math.max(...valid.map((row) => row.data.summary.closedTrades))
+            ? 'Deze variant heeft ook de grootste afgesloten sample binnen de huidige set.'
+            : null,
+        ].filter((reason): reason is string => !!reason)
+      : []
 
   return (
-    <section className="rounded-3xl border border-emerald-300/45 bg-emerald-50/70 p-5 dark:border-emerald-500/25 dark:bg-emerald-950/10">
+    <section
+      id="beste-strategie"
+      className="rounded-3xl border border-emerald-300/45 bg-emerald-50/70 p-5 dark:border-emerald-500/25 dark:bg-emerald-950/10"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Meest winstgevende strategie nu</h2>
@@ -186,6 +217,19 @@ export function BestCryptoStrategyPanel({ sourceMode, rows }: Props) {
               ? ` De huidige open positie is ${best.data.openPositions[0].symbol} (${sideLabel(best.data.openPositions[0].side)}).`
               : ' Er staat nu geen open positie in deze strategie.'}
           </div>
+
+          {winningReasons.length > 0 ? (
+            <div className="mt-4 rounded-2xl border border-slate-300/45 bg-white/70 px-4 py-4 dark:border-white/10 dark:bg-white/5">
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-600 dark:text-white/55">
+                Waarom deze wint
+              </div>
+              <ul className="mt-3 space-y-1 text-sm text-slate-700 dark:text-white/70">
+                {winningReasons.map((reason) => (
+                  <li key={reason}>- {reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>
