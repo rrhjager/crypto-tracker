@@ -200,8 +200,7 @@ const HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT = 4
 const HIGH_MOVE_CRYPTO_MIN_CONFIDENCE = 60
 const HIGH_MOVE_CRYPTO_RELAXED_MIN_CONFIDENCE = 55
 const BEST_SINGLE_CRYPTO_MIN_CONFIDENCE = 55
-const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.55
-const BEST_SINGLE_CRYPTO_MAX_BEARISH_PROB_UP = 0.45
+const BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB = 0.5
 const HIGH_MOVE_CRYPTO_MIN_HOLD_MS = 48 * 60 * 60 * 1000
 const HIGH_MOVE_CRYPTO_EXIT_CONFIRMATIONS = 2
 
@@ -719,32 +718,27 @@ async function rankBestSingleCryptoSignals(origin: string, signals: ForwardSigna
       const confidence = safeNumber(forecast?.confidence)
       const expectedReturn = safeNumber(forecast?.expectedReturn)
       const positionSize = safeNumber(forecast?.positionSize)
-      const action = forecast?.action
-      const regime = forecast?.regime
 
-      if (probUp == null || confidence == null || !action || !regime) {
+      if (probUp == null || confidence == null) {
         return null
       }
 
       if (signal.side === 'BUY') {
-        if (action !== 'LONG') return null
-        if (regime === 'RISK_OFF') return null
         if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
         if (probUp < BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
-        if (expectedReturn != null && expectedReturn <= 0) return null
-        if (positionSize == null || positionSize < 0.15) return null
       } else {
         if (confidence < BEST_SINGLE_CRYPTO_MIN_CONFIDENCE) return null
-        if (probUp > BEST_SINGLE_CRYPTO_MAX_BEARISH_PROB_UP) return null
-        if (expectedReturn != null && expectedReturn >= 0) return null
+        if (probUp > 1 - BEST_SINGLE_CRYPTO_MIN_DIRECTIONAL_PROB) return null
       }
 
       const directionalProb = signal.side === 'BUY' ? probUp : 1 - probUp
+      const directionalExpectedReturn =
+        expectedReturn == null ? 0 : signal.side === 'BUY' ? expectedReturn : -expectedReturn
       const rankScore =
-        (directionalProb * 100) +
-        (confidence * 0.9) +
-        ((expectedReturn ?? 0) * (signal.side === 'BUY' ? 6 : -6)) +
-        ((positionSize ?? 0) * 20)
+        (directionalProb * 120) +
+        (confidence * 1.0) +
+        (directionalExpectedReturn * 4) +
+        ((positionSize ?? 0) * 10)
 
       return {
         signal,
