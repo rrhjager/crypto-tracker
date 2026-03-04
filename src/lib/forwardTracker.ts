@@ -1,7 +1,7 @@
 import type { NextApiRequest } from 'next'
 import { COINS, COIN_SET, findCoin } from '@/lib/coins'
 import { buildForecast, type ForecastHorizon, type ForecastOutput } from '@/lib/forecastEngine'
-import { kvGetJSON, kvSetJSON } from '@/lib/kv'
+import { kvGetJSONResult, kvSetJSONStrict } from '@/lib/kv'
 
 export type ForwardAssetType = 'equity' | 'crypto'
 export type ForwardSourceMode = 'audit' | 'fallback' | 'raw'
@@ -239,20 +239,7 @@ const bestSingleUniverseCache = new Map<string, { expiresAtMs: number; rows: For
 const cryptoForecastCache = new Map<string, { expiresAtMs: number; value: ForecastOutput | null }>()
 
 function trackerKey(assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  if (
-    strategy === 'high_move' ||
-    strategy === 'high_move_relaxed' ||
-    strategy === 'best_single_high_hit' ||
-    strategy === 'best_single' ||
-    strategy === 'best_single_1d' ||
-    strategy === 'best_single_3d' ||
-    strategy === 'best_single_5d' ||
-    strategy === 'best_single_2x' ||
-    strategy === 'best_single_5x'
-  ) {
-    return `paper-forward:v1:${assetType}:${strategy}`
-  }
-  return `paper-forward:v${TRACKER_VERSION_BY_ASSET[assetType]}:${assetType}`
+  return trackerKeyAtVersion(assetType, strategy, trackerVersion(assetType, strategy))
 }
 
 function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) {
@@ -270,6 +257,32 @@ function trackerVersion(assetType: ForwardAssetType, strategy: ForwardStrategy) 
     return 1
   }
   return TRACKER_VERSION_BY_ASSET[assetType]
+}
+
+function trackerKeyAtVersion(assetType: ForwardAssetType, strategy: ForwardStrategy, version: number) {
+  if (
+    strategy === 'high_move' ||
+    strategy === 'high_move_relaxed' ||
+    strategy === 'best_single_high_hit' ||
+    strategy === 'best_single' ||
+    strategy === 'best_single_1d' ||
+    strategy === 'best_single_3d' ||
+    strategy === 'best_single_5d' ||
+    strategy === 'best_single_2x' ||
+    strategy === 'best_single_5x'
+  ) {
+    return `paper-forward:v${version}:${assetType}:${strategy}`
+  }
+  return `paper-forward:v${version}:${assetType}`
+}
+
+function trackerLegacyKeys(assetType: ForwardAssetType, strategy: ForwardStrategy) {
+  const currentVersion = trackerVersion(assetType, strategy)
+  const keys: string[] = []
+  for (let version = currentVersion - 1; version >= 1; version -= 1) {
+    keys.push(trackerKeyAtVersion(assetType, strategy, version))
+  }
+  return keys
 }
 
 function msToIso(ms: number) {
@@ -462,6 +475,97 @@ function createEmptyState(assetType: ForwardAssetType, strategy: ForwardStrategy
     pendingExits: {},
     closedTrades: [],
   }
+}
+
+function normalizeTrackerState(
+  candidate: Partial<ForwardTrackerState> | null | undefined,
+  assetType: ForwardAssetType,
+  strategy: ForwardStrategy
+): ForwardTrackerState {
+  const fallback = createEmptyState(assetType, strategy)
+
+  const startedAt = typeof candidate?.startedAt === 'string' ? candidate.startedAt : fallback.startedAt
+  const lastSyncAt = typeof candidate?.lastSyncAt === 'string' ? candidate.lastSyncAt : startedAt
+  const startedAtMs =
+    safeNumber(candidate?.startedAtMs) ??
+    (() => {
+      const parsed = Date.parse(startedAt)
+      return Number.isFinite(parsed) ? parsed : fallback.startedAtMs
+    })()
+  const lastSyncAtMs =
+    safeNumber(candidate?.lastSyncAtMs) ??
+    (() => {
+      const parsed = Date.parse(lastSyncAt)
+      return Number.isFinite(parsed) ? parsed : startedAtMs
+    })()
+
+  return {
+    version: trackerVersion(assetType, strategy),
+    assetType,
+    principalPerTradeEur: safeNumber(candidate?.principalPerTradeEur) ?? PRINCIPAL_PER_TRADE_EUR,
+    startedAt,
+    startedAtMs,
+    lastSyncAt,
+    lastSyncAtMs,
+    openPositions:
+      candidate?.openPositions && typeof candidate.openPositions === 'object'
+        ? candidate.openPositions as Record<string, PersistedOpenPosition>
+        : {},
+    pendingExits:
+      candidate?.pendingExits && typeof candidate.pendingExits === 'object'
+        ? candidate.pendingExits as Record<string, PersistedPendingExit>
+        : {},
+    closedTrades: Array.isArray(candidate?.closedTrades)
+      ? candidate.closedTrades.slice(0, MAX_CLOSED_TRADES) as PersistedClosedTrade[]
+      : [],
+  }
+}
+
+function trackerStateRank(state: ForwardTrackerState) {
+  return (state.closedTrades.length * 10_000) + (Object.keys(state.openPositions).length * 100) - state.startedAtMs
+}
+
+async function loadTrackerState(key: string, assetType: ForwardAssetType, strategy: ForwardStrategy) {
+  const currentRead = await kvGetJSONResult<ForwardTrackerState>(key)
+  if (!currentRead.ok) {
+    throw new Error('Tracker storage read failed')
+  }
+
+  const legacyKeys = trackerLegacyKeys(assetType, strategy)
+  let bestLegacy: ForwardTrackerState | null = null
+
+  for (const legacyKey of legacyKeys) {
+    const legacyRead = await kvGetJSONResult<ForwardTrackerState>(legacyKey)
+    if (!legacyRead.ok) {
+      throw new Error('Tracker storage read failed')
+    }
+    if (!legacyRead.found) continue
+    const normalizedLegacy = normalizeTrackerState(legacyRead.value, assetType, strategy)
+    if (!bestLegacy || trackerStateRank(normalizedLegacy) > trackerStateRank(bestLegacy)) {
+      bestLegacy = normalizedLegacy
+    }
+  }
+
+  if (!currentRead.found) {
+    if (bestLegacy) {
+      await kvSetJSONStrict(key, bestLegacy)
+      return bestLegacy
+    }
+    return createEmptyState(assetType, strategy)
+  }
+
+  const current = normalizeTrackerState(currentRead.value, assetType, strategy)
+  if (
+    bestLegacy &&
+    current.closedTrades.length === 0 &&
+    bestLegacy.startedAtMs < current.startedAtMs &&
+    trackerStateRank(bestLegacy) > trackerStateRank(current)
+  ) {
+    await kvSetJSONStrict(key, bestLegacy)
+    return bestLegacy
+  }
+
+  return current
 }
 
 function closePosition(
@@ -933,7 +1037,7 @@ export async function syncForwardTracker(
 ): Promise<ForwardTrackerResponse> {
   const origin = baseUrl(req)
   const key = trackerKey(assetType, strategy)
-  const current = (await kvGetJSON<ForwardTrackerState>(key)) || createEmptyState(assetType, strategy)
+  const current = await loadTrackerState(key, assetType, strategy)
 
   const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
   const sourceMode = currentSignalsResp.sourceMode
@@ -1169,7 +1273,7 @@ export async function syncForwardTracker(
     nextState.closedTrades = nextState.closedTrades.slice(0, MAX_CLOSED_TRADES)
   }
 
-  await kvSetJSON(key, nextState)
+  await kvSetJSONStrict(key, nextState)
 
   const openPositions = Object.values(nextState.openPositions)
     .map((position) => hydrateOpenPosition(assetType, position, priceMap[position.symbol] ?? position.lastPrice, stamp.ms))
