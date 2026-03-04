@@ -82,9 +82,15 @@ export function ForecastPanel({ symbol, assetType, horizon, marketHint }: Foreca
   }
 
   if (error || !data) {
+    const msg = String(error?.message || '')
+    const historyLimited =
+      msg.includes('Not enough history for leakage-free forecast evaluation') ||
+      msg.includes('Not enough history for scenario comparison')
     return (
       <div className="mt-4 rounded-2xl border border-rose-500/35 bg-rose-500/10 p-4 text-sm text-rose-700 dark:text-rose-200">
-        Forecast tijdelijk niet beschikbaar.
+        {historyLimited
+          ? 'Forecast nog niet beschikbaar: te weinig historie voor dit model.'
+          : 'Forecast tijdelijk niet beschikbaar.'}
       </div>
     )
   }

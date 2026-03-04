@@ -262,7 +262,10 @@ type WalkForwardResult = {
 const ENTRY_THRESHOLD = 0.60
 const EXIT_THRESHOLD = 0.50
 const MIN_HOLD_DAYS = 3
-const FEATURE_START = 220
+const FEATURE_START_EQUITY = 220
+const FEATURE_START_CRYPTO = 140
+const MIN_DATASET_ROWS_EQUITY = 120
+const MIN_DATASET_ROWS_CRYPTO = 80
 const FEATURE_NAMES: Array<keyof FeatureMap> = [
   'priceVs200dPct',
   'ma50200SpreadPct',
@@ -289,6 +292,14 @@ const FEATURE_NAMES: Array<keyof FeatureMap> = [
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
 const EPS = 1e-9
+
+function featureStartFor(assetType: ForecastAssetType) {
+  return assetType === 'crypto' ? FEATURE_START_CRYPTO : FEATURE_START_EQUITY
+}
+
+function minDatasetRowsFor(assetType: ForecastAssetType) {
+  return assetType === 'crypto' ? MIN_DATASET_ROWS_CRYPTO : MIN_DATASET_ROWS_EQUITY
+}
 
 function mean(nums: number[]) {
   if (!nums.length) return 0
@@ -592,11 +603,17 @@ function computeFeatureRow(data: MarketData, benchmarkCloses: number[] | null, m
   return { featureMap, features: featureVector(featureMap), regime, reasons }
 }
 
-function buildDataset(data: MarketData, benchmarkCloses: number[] | null, market: ScoreMarket, horizon: ForecastHorizon) {
+function buildDataset(
+  data: MarketData,
+  benchmarkCloses: number[] | null,
+  market: ScoreMarket,
+  horizon: ForecastHorizon,
+  featureStart: number
+) {
   const rows: Observation[] = []
   const latest = computeFeatureRow(data, benchmarkCloses, market, data.closes.length - 1)
 
-  for (let i = FEATURE_START; i + horizon < data.closes.length; i++) {
+  for (let i = featureStart; i + horizon < data.closes.length; i++) {
     const featureRow = computeFeatureRow(data, benchmarkCloses, market, i)
     const fLog = logReturn(data.closes[i], data.closes[i + horizon])
     const fPct = pct(data.closes[i], data.closes[i + horizon])
@@ -1363,8 +1380,14 @@ export async function buildForecast(input: ForecastInput): Promise<ForecastOutpu
 
   const asset = await fetchAssetHistory({ ...input, symbol, horizon })
   const benchmarkCloses = await fetchBenchmarkHistory(asset.market)
-  const dataset = buildDataset(asset.data, benchmarkCloses, asset.market, horizon)
-  if (dataset.rows.length < 120) {
+  const dataset = buildDataset(
+    asset.data,
+    benchmarkCloses,
+    asset.market,
+    horizon,
+    featureStartFor(input.assetType)
+  )
+  if (dataset.rows.length < minDatasetRowsFor(input.assetType)) {
     throw new Error('Not enough history for leakage-free forecast evaluation')
   }
 
@@ -1394,7 +1417,9 @@ export async function buildForecast(input: ForecastInput): Promise<ForecastOutpu
     regime,
     topReasons: makeReasons(dataset.latest.featureMap, regime, action),
     labels: {
-      featureWindow: 'Features gebruiken alleen candles t/m dag t (rolling lookback, start na ~220 dagen geschiedenis).',
+      featureWindow: input.assetType === 'crypto'
+        ? 'Features gebruiken alleen candles t/m dag t (rolling lookback, crypto start na ~140 dagen geschiedenis om 300D datasets bruikbaar te houden).'
+        : 'Features gebruiken alleen candles t/m dag t (rolling lookback, start na ~220 dagen geschiedenis).',
       labelDefinition: `prob_up = P(log_return(${horizon}D) > 0), met label y_t = 1 als ln(close[t+${horizon}] / close[t]) > 0, anders 0.`,
       alignment: 'Featurevector op dag t wordt alleen gematcht met future return vanaf t+1 t/m t+horizon; walk-forward gebruikt purge/embargo van horizon-dagen tussen train, calibratie en test.',
       thresholds: `LONG bij prob_up >= ${ENTRY_THRESHOLD.toFixed(2)}, EXIT bij prob_up <= ${EXIT_THRESHOLD.toFixed(2)}, minimum hold ${MIN_HOLD_DAYS} dagen in evaluatie.`,
@@ -1440,8 +1465,14 @@ export async function buildForecastCompare(input: ForecastInput): Promise<Foreca
 
   const asset = await fetchAssetHistory({ ...input, symbol, horizon })
   const benchmarkCloses = await fetchBenchmarkHistory(asset.market)
-  const dataset = buildDataset(asset.data, benchmarkCloses, asset.market, horizon)
-  if (dataset.rows.length < 120) {
+  const dataset = buildDataset(
+    asset.data,
+    benchmarkCloses,
+    asset.market,
+    horizon,
+    featureStartFor(input.assetType)
+  )
+  if (dataset.rows.length < minDatasetRowsFor(input.assetType)) {
     throw new Error('Not enough history for scenario comparison')
   }
 
