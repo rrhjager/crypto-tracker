@@ -181,6 +181,62 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
             </div>
           ) : null}
 
+          {assetType === 'crypto' && !isBestSingleStrategy(data.meta.strategy) && data.openPositions.length > 0 ? (
+            <div className="mt-4 rounded-2xl border border-cyan-300/45 bg-cyan-50/70 px-4 py-4 dark:border-cyan-500/25 dark:bg-cyan-950/10">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-900/70 dark:text-cyan-200/70">
+                    Open nu (totaal)
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                    {data.openPositions.length} open crypto-posities
+                  </div>
+                  <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/65">
+                    Huidige open winst/verlies van alle open trades samen, ook zolang ze nog niet gesloten zijn.
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Bruto nu
+                  </div>
+                  <div className={`mt-1 text-sm font-semibold ${pnlClass(data.summary.unrealizedPnlEur)}`}>
+                    {formatMoney(data.summary.unrealizedPnlEur)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Netto nu
+                  </div>
+                  <div className={`mt-1 text-sm font-semibold ${pnlClass(data.summary.unrealizedNetPnlEur)}`}>
+                    {formatMoney(data.summary.unrealizedNetPnlEur)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Open kapitaal
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                    {formatMoney(data.summary.totalCommittedEur)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Waarde nu
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                    {formatMoney(data.summary.totalCommittedEur + data.summary.unrealizedPnlEur)}
+                  </div>
+                  <div className="text-[11px] text-slate-700/75 dark:text-white/55">
+                    Netto {formatMoney(data.summary.totalCommittedEur + data.summary.unrealizedNetPnlEur)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-2xl border border-slate-300/45 bg-white/75 p-4 dark:border-white/10 dark:bg-white/5">
               <div className="text-[11px] font-medium text-slate-600 dark:text-white/55">Open trades</div>
