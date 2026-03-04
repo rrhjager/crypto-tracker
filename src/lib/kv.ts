@@ -1,38 +1,54 @@
 // src/lib/kv.ts
 import { kv } from '@vercel/kv'
 
-/** Get JSON from Vercel KV. Returns undefined on miss or error. */
-export async function kvGetJSON<T>(key: string): Promise<T | undefined> {
+export type KvJsonReadResult<T> =
+  | { ok: true; found: true; value: T }
+  | { ok: true; found: false }
+  | { ok: false; error: unknown }
+
+export async function kvGetJSONResult<T>(key: string): Promise<KvJsonReadResult<T>> {
   try {
     const raw = await kv.get(key)
-    if (raw == null) return undefined
-    if (typeof raw === 'string') return JSON.parse(raw) as T
-    return raw as T
-  } catch {
-    return undefined
+    if (raw == null) return { ok: true, found: false }
+    if (typeof raw === 'string') return { ok: true, found: true, value: JSON.parse(raw) as T }
+    return { ok: true, found: true, value: raw as T }
+  } catch (error) {
+    return { ok: false, error }
   }
+}
+
+/** Get JSON from Vercel KV. Returns undefined on miss or error. */
+export async function kvGetJSON<T>(key: string): Promise<T | undefined> {
+  const result = await kvGetJSONResult<T>(key)
+  if (!result.ok || !result.found) return undefined
+  return result.value
 }
 
 /** Sidecar key to estimate age when TTL is not exposed. */
 const tsKey = (key: string) => `${key}__ts`
 
+/** Set JSON into KV with optional TTL seconds. Throws on write failure. */
+export async function kvSetJSONStrict(key: string, value: unknown, ttlSec?: number) {
+  const payload = JSON.stringify(value)
+  const now = Date.now()
+  if (ttlSec && Number.isFinite(ttlSec)) {
+    const ex = Math.max(1, Math.floor(ttlSec))
+    await Promise.all([
+      kv.set(key, payload, { ex }),
+      kv.set(tsKey(key), String(now), { ex }),
+    ])
+  } else {
+    await Promise.all([
+      kv.set(key, payload),
+      kv.set(tsKey(key), String(now)),
+    ])
+  }
+}
+
 /** Set JSON into KV with optional TTL seconds. Also writes sidecar timestamp. */
 export async function kvSetJSON(key: string, value: unknown, ttlSec?: number) {
   try {
-    const payload = JSON.stringify(value)
-    const now = Date.now()
-    if (ttlSec && Number.isFinite(ttlSec)) {
-      const ex = Math.max(1, Math.floor(ttlSec))
-      await Promise.all([
-        kv.set(key, payload, { ex }),
-        kv.set(tsKey(key), String(now), { ex }),
-      ])
-    } else {
-      await Promise.all([
-        kv.set(key, payload),
-        kv.set(tsKey(key), String(now)),
-      ])
-    }
+    await kvSetJSONStrict(key, value, ttlSec)
   } catch {
     // swallow — caller will still have 'value'
   }
