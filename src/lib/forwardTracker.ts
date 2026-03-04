@@ -121,6 +121,8 @@ export type ForwardTrackerResponse = {
     sourceMode: ForwardSourceMode
     currentSignals: number
     note: string
+    stateStatus?: 'fresh' | 'recovered'
+    stateStatusNote?: string | null
     costs: {
       feeBpsRoundTrip: number
       slippageBpsRoundTrip: number
@@ -525,6 +527,12 @@ function trackerStateRank(state: ForwardTrackerState) {
   return (state.closedTrades.length * 10_000) + (Object.keys(state.openPositions).length * 100) - state.startedAtMs
 }
 
+type LoadedTrackerState = {
+  state: ForwardTrackerState
+  stateStatus?: 'fresh' | 'recovered'
+  stateStatusNote?: string | null
+}
+
 async function loadTrackerState(key: string, assetType: ForwardAssetType, strategy: ForwardStrategy) {
   const currentRead = await kvGetJSONResult<ForwardTrackerState>(key)
   if (!currentRead.ok) {
@@ -549,9 +557,17 @@ async function loadTrackerState(key: string, assetType: ForwardAssetType, strate
   if (!currentRead.found) {
     if (bestLegacy) {
       await kvSetJSONStrict(key, bestLegacy)
-      return bestLegacy
+      return {
+        state: bestLegacy,
+        stateStatus: 'recovered',
+        stateStatusNote: 'Eerdere trackerstate hersteld uit een oudere key; open P/L loopt door vanaf de bestaande tradehistorie.',
+      } satisfies LoadedTrackerState
     }
-    return createEmptyState(assetType, strategy)
+    return {
+      state: createEmptyState(assetType, strategy),
+      stateStatus: 'fresh',
+      stateStatusNote: 'Deze tracker is net vers gestart; bruto open P/L blijft vaak eerst rond nul totdat de koers sinds entry beweegt.',
+    } satisfies LoadedTrackerState
   }
 
   const current = normalizeTrackerState(currentRead.value, assetType, strategy)
@@ -562,10 +578,18 @@ async function loadTrackerState(key: string, assetType: ForwardAssetType, strate
     trackerStateRank(bestLegacy) > trackerStateRank(current)
   ) {
     await kvSetJSONStrict(key, bestLegacy)
-    return bestLegacy
+    return {
+      state: bestLegacy,
+      stateStatus: 'recovered',
+      stateStatusNote: 'Een oudere, rijkere trackerstate is hersteld; daardoor blijven eerdere open posities en P/L behouden.',
+    } satisfies LoadedTrackerState
   }
 
-  return current
+  return {
+    state: current,
+    stateStatus: undefined,
+    stateStatusNote: null,
+  } satisfies LoadedTrackerState
 }
 
 function closePosition(
@@ -1037,7 +1061,8 @@ export async function syncForwardTracker(
 ): Promise<ForwardTrackerResponse> {
   const origin = baseUrl(req)
   const key = trackerKey(assetType, strategy)
-  const current = await loadTrackerState(key, assetType, strategy)
+  const loadedState = await loadTrackerState(key, assetType, strategy)
+  const current = loadedState.state
 
   const currentSignalsResp = await getCurrentSignals(origin, assetType, preferredSourceMode)
   const sourceMode = currentSignalsResp.sourceMode
@@ -1310,6 +1335,8 @@ export async function syncForwardTracker(
               strategy
             )}. Hij houdt minimaal 48 uur vast en sluit pas na 2 opeenvolgende exitsignalen.`
         : 'Forward-test start vanaf de eerste sync. Elke nieuwe BUY/SELL opent fictief een trade van €1000. Trades sluiten bij statusflip of wanneer het signaal verdwijnt. Netto rekent round-trip kosten mee.',
+      stateStatus: loadedState.stateStatus,
+      stateStatusNote: loadedState.stateStatusNote,
       costs: {
         feeBpsRoundTrip: costModel.feeBpsRoundTrip,
         slippageBpsRoundTrip: costModel.slippageBpsRoundTrip,

@@ -118,6 +118,15 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
 
       {data ? (
         <>
+          {data.meta.stateStatus && data.meta.stateStatusNote ? (
+            <div className="mt-4 rounded-2xl border border-amber-300/50 bg-amber-50/75 px-4 py-3 text-[12px] text-amber-900 dark:border-amber-500/25 dark:bg-amber-950/10 dark:text-amber-100/85">
+              <span className="font-semibold">
+                {data.meta.stateStatus === 'recovered' ? 'Trackerstate hersteld' : 'Tracker net gestart'}
+              </span>{' '}
+              {data.meta.stateStatusNote}
+            </div>
+          ) : null}
+
           {assetType === 'crypto' && isBestSingleStrategy(data.meta.strategy) && data.openPositions[0] ? (
             <div className="mt-4 rounded-2xl border border-cyan-300/45 bg-cyan-50/70 px-4 py-4 dark:border-cyan-500/25 dark:bg-cyan-950/10">
               <div className="flex flex-wrap items-center justify-between gap-3">
