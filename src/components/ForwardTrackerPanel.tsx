@@ -61,6 +61,13 @@ function isBestSingleStrategy(strategy: ForwardStrategy) {
   )
 }
 
+function shouldShowStateWarning(data: ForwardTrackerResponse) {
+  if (!data.meta.stateStatus || !data.meta.stateStatusNote) return false
+  if (data.summary.closedTrades > 0) return false
+  if (data.openPositions.length === 0) return false
+  return data.openPositions.every((position) => Math.abs(position.unrealizedPnlEur) < 0.01)
+}
+
 export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standard', title, description }: Props) {
   const { data, error } = useSWR<ForwardTrackerResponse>(
     `/api/market/forward-tracker?assetType=${assetType}&sourceMode=${sourceMode}&strategy=${strategy}`,
@@ -118,7 +125,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
 
       {data ? (
         <>
-          {data.meta.stateStatus && data.meta.stateStatusNote ? (
+          {shouldShowStateWarning(data) ? (
             <div className="mt-4 rounded-2xl border border-amber-300/50 bg-amber-50/75 px-4 py-3 text-[12px] text-amber-900 dark:border-amber-500/25 dark:bg-amber-950/10 dark:text-amber-100/85">
               <span className="font-semibold">
                 {data.meta.stateStatus === 'recovered' ? 'Trackerstate hersteld' : 'Tracker net gestart'}
