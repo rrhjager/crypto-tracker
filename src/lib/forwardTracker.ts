@@ -533,51 +533,72 @@ type LoadedTrackerState = {
   stateStatusNote?: string | null
 }
 
-async function loadTrackerState(key: string, assetType: ForwardAssetType, strategy: ForwardStrategy) {
-  const currentRead = await kvGetJSONResult<ForwardTrackerState>(key)
-  if (!currentRead.ok) {
-    throw new Error('Tracker storage read failed')
+async function readTrackerStateFromKey(
+  key: string,
+  assetType: ForwardAssetType,
+  strategy: ForwardStrategy
+): Promise<{ state: ForwardTrackerState | null; hadError: boolean }> {
+  const read = await kvGetJSONResult<ForwardTrackerState>(key)
+  if (!read.ok) return { state: null, hadError: true }
+  if (!read.found) return { state: null, hadError: false }
+  return {
+    state: normalizeTrackerState(read.value, assetType, strategy),
+    hadError: false,
   }
+}
+
+async function loadTrackerState(key: string, assetType: ForwardAssetType, strategy: ForwardStrategy) {
+  const currentRead = await readTrackerStateFromKey(key, assetType, strategy)
 
   const legacyKeys = trackerLegacyKeys(assetType, strategy)
   let bestLegacy: ForwardTrackerState | null = null
+  let sawReadError = currentRead.hadError
 
   for (const legacyKey of legacyKeys) {
-    const legacyRead = await kvGetJSONResult<ForwardTrackerState>(legacyKey)
-    if (!legacyRead.ok) {
-      throw new Error('Tracker storage read failed')
-    }
-    if (!legacyRead.found) continue
-    const normalizedLegacy = normalizeTrackerState(legacyRead.value, assetType, strategy)
-    if (!bestLegacy || trackerStateRank(normalizedLegacy) > trackerStateRank(bestLegacy)) {
-      bestLegacy = normalizedLegacy
+    const legacyRead = await readTrackerStateFromKey(legacyKey, assetType, strategy)
+    sawReadError ||= legacyRead.hadError
+    if (!legacyRead.state) continue
+    if (!bestLegacy || trackerStateRank(legacyRead.state) > trackerStateRank(bestLegacy)) {
+      bestLegacy = legacyRead.state
     }
   }
 
-  if (!currentRead.found) {
+  if (!currentRead.state) {
     if (bestLegacy) {
-      await kvSetJSONStrict(key, bestLegacy)
+      try {
+        await kvSetJSONStrict(key, bestLegacy)
+      } catch {
+        // keep serving the recovered state even if the write-back fails
+      }
       return {
         state: bestLegacy,
         stateStatus: 'recovered',
-        stateStatusNote: 'Eerdere trackerstate hersteld uit een oudere key; open P/L loopt door vanaf de bestaande tradehistorie.',
+        stateStatusNote: sawReadError
+          ? 'Trackerstate hersteld uit oudere data nadat de huidige storage-state niet leesbaar was; open P/L loopt door vanaf de bestaande tradehistorie.'
+          : 'Eerdere trackerstate hersteld uit een oudere key; open P/L loopt door vanaf de bestaande tradehistorie.',
       } satisfies LoadedTrackerState
     }
     return {
       state: createEmptyState(assetType, strategy),
       stateStatus: 'fresh',
-      stateStatusNote: 'Deze tracker is net vers gestart; bruto open P/L blijft vaak eerst rond nul totdat de koers sinds entry beweegt.',
+      stateStatusNote: sawReadError
+        ? 'Trackerstorage was niet leesbaar; deze tracker is tijdelijk opnieuw gestart. Bruto open P/L blijft vaak eerst rond nul totdat de koers sinds entry beweegt.'
+        : 'Deze tracker is net vers gestart; bruto open P/L blijft vaak eerst rond nul totdat de koers sinds entry beweegt.',
     } satisfies LoadedTrackerState
   }
 
-  const current = normalizeTrackerState(currentRead.value, assetType, strategy)
+  const current = currentRead.state
   if (
     bestLegacy &&
     current.closedTrades.length === 0 &&
     bestLegacy.startedAtMs < current.startedAtMs &&
     trackerStateRank(bestLegacy) > trackerStateRank(current)
   ) {
-    await kvSetJSONStrict(key, bestLegacy)
+    try {
+      await kvSetJSONStrict(key, bestLegacy)
+    } catch {
+      // keep serving the recovered state even if the write-back fails
+    }
     return {
       state: bestLegacy,
       stateStatus: 'recovered',
@@ -1298,7 +1319,11 @@ export async function syncForwardTracker(
     nextState.closedTrades = nextState.closedTrades.slice(0, MAX_CLOSED_TRADES)
   }
 
-  await kvSetJSONStrict(key, nextState)
+  try {
+    await kvSetJSONStrict(key, nextState)
+  } catch {
+    // keep returning live-computed state even if persistence is temporarily unavailable
+  }
 
   const openPositions = Object.values(nextState.openPositions)
     .map((position) => hydrateOpenPosition(assetType, position, priceMap[position.symbol] ?? position.lastPrice, stamp.ms))
