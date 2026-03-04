@@ -138,7 +138,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
               <div className="mt-3 grid gap-2 sm:grid-cols-3">
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Bruto nu
+                    Bruto als nu sluiten
                   </div>
                   <div className={`mt-1 text-sm font-semibold ${pnlClass(data.openPositions[0].unrealizedPnlEur)}`}>
                     {formatMoney(data.openPositions[0].unrealizedPnlEur)}
@@ -149,7 +149,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 </div>
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Netto nu
+                    Netto als nu sluiten
                   </div>
                   <div className={`mt-1 text-sm font-semibold ${pnlClass(data.openPositions[0].unrealizedNetPnlEur)}`}>
                     {formatMoney(data.openPositions[0].unrealizedNetPnlEur)}
@@ -160,7 +160,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 </div>
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Waarde nu
+                    Waarde bij nu sluiten
                   </div>
                   <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
                     {formatMoney(data.openPositions[0].currentValueEur)}
@@ -200,7 +200,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
               <div className="mt-3 grid gap-2 sm:grid-cols-4">
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Bruto nu
+                    Bruto als nu sluiten
                   </div>
                   <div className={`mt-1 text-sm font-semibold ${pnlClass(data.summary.unrealizedPnlEur)}`}>
                     {formatMoney(data.summary.unrealizedPnlEur)}
@@ -208,7 +208,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 </div>
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Netto nu
+                    Netto als nu sluiten
                   </div>
                   <div className={`mt-1 text-sm font-semibold ${pnlClass(data.summary.unrealizedNetPnlEur)}`}>
                     {formatMoney(data.summary.unrealizedNetPnlEur)}
@@ -224,7 +224,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 </div>
                 <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
-                    Waarde nu
+                    Waarde bij nu sluiten
                   </div>
                   <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
                     {formatMoney(data.summary.totalCommittedEur + data.summary.unrealizedPnlEur)}
