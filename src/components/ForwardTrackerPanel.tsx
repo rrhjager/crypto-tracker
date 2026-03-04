@@ -135,6 +135,42 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 </div>
               </div>
 
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Bruto nu
+                  </div>
+                  <div className={`mt-1 text-sm font-semibold ${pnlClass(data.openPositions[0].unrealizedPnlEur)}`}>
+                    {formatMoney(data.openPositions[0].unrealizedPnlEur)}
+                  </div>
+                  <div className={`text-[11px] ${pnlClass(data.openPositions[0].unrealizedPnlEur)}`}>
+                    {formatPct(data.openPositions[0].unrealizedReturnPct)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Netto nu
+                  </div>
+                  <div className={`mt-1 text-sm font-semibold ${pnlClass(data.openPositions[0].unrealizedNetPnlEur)}`}>
+                    {formatMoney(data.openPositions[0].unrealizedNetPnlEur)}
+                  </div>
+                  <div className={`text-[11px] ${pnlClass(data.openPositions[0].unrealizedNetPnlEur)}`}>
+                    {formatPct(data.openPositions[0].unrealizedNetReturnPct)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-300/45 bg-white/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-600 dark:text-white/50">
+                    Waarde nu
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                    {formatMoney(data.openPositions[0].currentValueEur)}
+                  </div>
+                  <div className="text-[11px] text-slate-700/75 dark:text-white/55">
+                    Netto {formatMoney(data.openPositions[0].netCurrentValueEur)}
+                  </div>
+                </div>
+              </div>
+
               {Array.isArray(data.openPositions[0].selectionReasons) && data.openPositions[0].selectionReasons.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-[12px] text-slate-700/85 dark:text-white/70">
                   {data.openPositions[0].selectionReasons.map((reason) => (
