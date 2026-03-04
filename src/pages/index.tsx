@@ -9,7 +9,6 @@ import useSWR from 'swr'
 import { AEX } from '@/lib/aex'
 import ScoreBadge from '@/components/ScoreBadge'
 import { computeScoreStatus } from '@/lib/taScore'
-import { HC_MARKET_META, HC_MARKET_ORDER, type HCAssetAdvice, type HCResponse } from '@/lib/highConfidence'
 
 import { SP500 } from '@/lib/sp500'
 import { NASDAQ } from '@/lib/nasdaq'
@@ -54,7 +53,7 @@ type HomeSnapshot = {
 }
 
 type Briefing = { advice: string }
-type HomeProps = { snapshot: HomeSnapshot | null; briefing: Briefing | null; highConfidence: HCResponse | null }
+type HomeProps = { snapshot: HomeSnapshot | null; briefing: Briefing | null }
 
 /* ---------------- utils ---------------- */
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n))
@@ -394,13 +393,6 @@ export default function Homepage(props: HomeProps) {
   )
   const [coinErr, setCoinErr] = useState<string | null>(null)
   const [tradesErr, setTradesErr] = useState<string | null>(null)
-  const [highConf, setHighConf] = useState<HCResponse | null>(
-    props.highConfidence ?? getCache<HCResponse>('home:high-confidence') ?? null
-  )
-  const [loadingHighConf, setLoadingHighConf] = useState(
-    !(props.highConfidence?.markets?.length || getCache<HCResponse>('home:high-confidence')?.markets?.length)
-  )
-  const [highConfErr, setHighConfErr] = useState<string | null>(null)
 
   // AI briefing state (SSR + client fallback)
   const [briefing, setBriefing] = useState<string>(props.briefing?.advice || '')
@@ -472,39 +464,6 @@ export default function Homepage(props: HomeProps) {
       } catch {}
     })()
     return () => { stop = true }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ---------- HIGH CONFIDENCE ---------- */
-  useEffect(() => {
-    let aborted = false
-    async function load(force = false) {
-      if (!force && highConf?.markets?.length) {
-        setLoadingHighConf(false)
-      }
-      try {
-        if (!aborted) {
-          setLoadingHighConf(true)
-          setHighConfErr(null)
-        }
-        const r = await fetch('/api/market/high-confidence?targetWinrate=0.8&minCoverage=0.12&minTrades=8', { cache: 'no-store' })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const data = (await r.json()) as HCResponse
-        if (aborted) return
-        setHighConf(data)
-        setCache('home:high-confidence', data)
-      } catch (e: any) {
-        if (aborted) return
-        setHighConfErr(String(e?.message || e))
-      } finally {
-        if (!aborted) setLoadingHighConf(false)
-      }
-    }
-    load()
-    const id = setInterval(() => load(true), 5 * 60_000)
-    return () => {
-      aborted = true
-      clearInterval(id)
-    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- NEWS warm-up (SWR prime) ---------- */
@@ -821,98 +780,6 @@ export default function Homepage(props: HomeProps) {
 
   const equityHref = (symbol: string) => `/stocks/${encodeURIComponent(symbol)}`
   const coinHref = (symbol: string) => `/crypto/${symbol.toLowerCase()}`
-  const fmtRatioPct = (v: number | null | undefined, d = 1) =>
-    Number.isFinite(v as number) ? `${((v as number) * 100).toFixed(d)}%` : '—'
-  const fmtRetPct = (v: number | null | undefined, d = 2) =>
-    Number.isFinite(v as number) ? `${(Number(v) >= 0 ? '+' : '')}${Number(v).toFixed(d)}%` : '—'
-  const sideTextClass = (status: 'BUY' | 'SELL') =>
-    status === 'BUY' ? 'text-emerald-800 dark:text-emerald-200' : 'text-rose-800 dark:text-rose-200'
-  const sideBadgeClass = (status: 'BUY' | 'SELL') =>
-    status === 'BUY' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-  const sideCardClass = (status: 'BUY' | 'SELL', subtle = false) =>
-    status === 'BUY'
-      ? subtle
-        ? 'border-emerald-300/50 bg-emerald-500/5 hover:bg-emerald-500/10 dark:border-emerald-500/30'
-        : 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15'
-      : subtle
-        ? 'border-rose-300/50 bg-rose-500/5 hover:bg-rose-500/10 dark:border-rose-500/30'
-        : 'border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/15'
-
-  const activeAssetRows = highConf?.assets?.active || []
-  const waitingAssetRows = highConf?.assets?.waiting || []
-  const activeEquityRows = activeAssetRows.filter((a) => a.market !== 'CRYPTO')
-  const activeCryptoRows = activeAssetRows.filter((a) => a.market === 'CRYPTO')
-  const waitingEquityRows = waitingAssetRows.filter((a) => a.market !== 'CRYPTO')
-  const waitingCryptoRows = waitingAssetRows.filter((a) => a.market === 'CRYPTO')
-  const byMarketAssets = highConf?.assets?.byMarket || ({} as any)
-  const marketAssetBlocks = useMemo(() => {
-    return HC_MARKET_ORDER.map((market) => ({
-      market,
-      label: HC_MARKET_META[market].label,
-      href: HC_MARKET_META[market].href,
-      items: Array.isArray(byMarketAssets[market]) ? byMarketAssets[market] : [],
-    }))
-  }, [byMarketAssets])
-  const equityMarketAssetBlocks = marketAssetBlocks.filter((m) => m.market !== 'CRYPTO')
-  const cryptoMarketAssetBlocks = marketAssetBlocks.filter((m) => m.market === 'CRYPTO')
-  const generatedAt = highConf?.meta?.generatedAt ? new Date(highConf.meta.generatedAt).toLocaleString('nl-NL') : null
-
-  const renderActiveRows = (rows: HCAssetAdvice[], keyPrefix: string) => {
-    if (rows.length === 0) {
-      return <div className="text-[12px] text-slate-600 dark:text-white/65">Geen actieve assets nu.</div>
-    }
-    return (
-      <ul className="space-y-2">
-        {rows.slice(0, 6).map((a) => (
-          <li key={`${keyPrefix}-hc-ok-${a.market}-${a.symbol}`}>
-            <Link
-              href={a.href}
-              className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 transition ${sideCardClass(a.status)}`}
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-[13px] text-slate-900 dark:text-white">{a.symbol}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
-                  <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">ACTIEF</span>
-                </div>
-                <div className="text-[11px] text-slate-700/80 dark:text-white/65">
-                  {HC_MARKET_META[a.market].label} • sterkte {a.strength} • score {a.score} • cutoff {a.cutoff}
-                </div>
-              </div>
-              <div className="text-right text-[11px]">
-                <div className={`font-semibold ${sideTextClass(a.status)}`}>{fmtRatioPct(a.expectedWinrate)}</div>
-                <div className="text-slate-700/80 dark:text-white/60">{fmtRetPct(a.expectedReturnPct)}</div>
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    )
-  }
-
-  const renderWaitingRows = (rows: HCAssetAdvice[], keyPrefix: string) => {
-    if (rows.length === 0) {
-      return <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst.</div>
-    }
-    return (
-      <div className="grid gap-2">
-        {rows.slice(0, 8).map((a) => (
-          <Link
-            key={`${keyPrefix}-hc-wait-home-${a.market}-${a.symbol}`}
-            href={a.href}
-            className={`rounded-lg border px-3 py-2 text-[11px] text-slate-700 transition dark:bg-white/5 dark:text-white/70 ${sideCardClass(a.status, true)}`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-slate-900 dark:text-white">{a.symbol}</span>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(a.status)}`}>{a.status}</span>
-            </div>
-            <div className="truncate">{HC_MARKET_META[a.market].label} • sterkte {a.strength} • score {a.score}</div>
-          </Link>
-        ))}
-      </div>
-    )
-  }
-
   /* ---------------- render ---------------- */
   return (
     <>
@@ -1016,200 +883,6 @@ export default function Homepage(props: HomeProps) {
                 High-Confidence
               </Link>
             </div>
-          </div>
-        </section>
-
-        {/* HIGH CONFIDENCE ADVICE */}
-        <section className="mb-8 overflow-hidden rounded-3xl border border-emerald-300/40 bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 p-5 shadow-[0_20px_70px_-30px_rgba(0,128,128,0.35)] dark:border-emerald-500/30 dark:from-emerald-950/35 dark:via-cyan-950/25 dark:to-slate-950">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white">High-Confidence Advies (80% target)</h2>
-              <p className="text-[12px] text-slate-700/80 dark:text-white/65">
-                Actieve zekerheid staat nu op losse aandelen/coins, niet op hele markten.
-              </p>
-            </div>
-            <Link
-              href="/high-confidence"
-              className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-[12px] font-medium text-emerald-800 hover:bg-emerald-500/20 dark:text-emerald-200"
-            >
-              Volledig overzicht
-            </Link>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
-            <span className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-1 text-emerald-900 dark:text-emerald-200">
-              Actieve assets: {highConf?.summary?.activeAssets ?? activeAssetRows.length}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Wacht assets: {highConf?.summary?.waitingAssets ?? waitingAssetRows.length}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Gem. winrate: {fmtRatioPct(highConf?.summary?.avgWinrate ?? null)}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Gem. return: {fmtRetPct(highConf?.summary?.avgReturnPct ?? null)}
-            </span>
-            <span className="rounded-full border border-slate-400/30 bg-white/60 px-3 py-1 text-slate-700 dark:border-white/20 dark:bg-white/5 dark:text-white/70">
-              Laatste update: {generatedAt || '—'}
-            </span>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-emerald-400/35 bg-white/70 p-3 dark:border-emerald-500/35 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Actieve zekerheden</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{highConf?.summary?.activeAssets ?? 0}</div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Losse assets met ACTIEF</div>
-            </div>
-            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Gem. coverage</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{fmtRatioPct(highConf?.summary?.avgCoverage ?? null)}</div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Signalen boven cutoff</div>
-            </div>
-            <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-              <div className="text-[11px] text-slate-600 dark:text-white/55">Signalen met BUY/SELL</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{highConf?.summary?.assetsWithSignal ?? 0}</div>
-              <div className="text-[11px] text-slate-700/75 dark:text-white/60">Uit {highConf?.summary?.assetsScanned ?? 0} gescande assets</div>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-emerald-500/25 bg-white/75 p-4 dark:bg-white/5">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Actieve zekerheden (assets)</h3>
-              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Gesplitst in Aandelen en Crypto. BUY is groen, SELL is rood.</p>
-
-              {highConfErr && <div className="text-[12px] text-rose-500 dark:text-rose-300 mb-2">Fout: {highConfErr}</div>}
-              {loadingHighConf ? (
-                <div className="text-[12px] text-slate-600 dark:text-white/65">Berekenen…</div>
-              ) : activeAssetRows.length === 0 ? (
-                <div className="text-[12px] text-slate-600 dark:text-white/65">Geen actieve assets nu. Advies: wachten.</div>
-              ) : (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
-                      <span className="text-[10px] text-slate-600 dark:text-white/60">{activeEquityRows.length} actief</span>
-                    </div>
-                    {renderActiveRows(activeEquityRows, 'eq')}
-                  </div>
-                  <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
-                      <span className="text-[10px] text-slate-600 dark:text-white/60">{activeCryptoRows.length} actief</span>
-                    </div>
-                    {renderActiveRows(activeCryptoRows, 'cr')}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-slate-300/40 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Advies per markt (assets)</h3>
-              <p className="text-[11px] text-slate-700/80 dark:text-white/60 mb-3">Top-advies per markt, apart voor Aandelen en Crypto.</p>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
-                    <span className="text-[10px] text-slate-600 dark:text-white/60">{equityMarketAssetBlocks.length} markten</span>
-                  </div>
-                  <ul className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
-                    {equityMarketAssetBlocks.map((m) => {
-                      const top = m.items?.[0]
-                      return (
-                        <li key={`hc-advice-eq-${m.market}`}>
-                          <Link href={m.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
-                            <div className="min-w-0">
-                              <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
-                              <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
-                                {top ? (
-                                  <>
-                                    {top.symbol} • <span className={sideTextClass(top.status)}>{top.status}</span> • sterkte {top.strength}
-                                  </>
-                                ) : (
-                                  'Geen BUY/SELL signaal nu'
-                                )}
-                              </div>
-                            </div>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                top?.advice === 'ACTIEF'
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
-                              }`}
-                            >
-                              {top?.advice || 'WACHT'}
-                            </span>
-                          </Link>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-
-                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
-                    <span className="text-[10px] text-slate-600 dark:text-white/60">{cryptoMarketAssetBlocks.length} markt</span>
-                  </div>
-                  <ul className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
-                    {cryptoMarketAssetBlocks.map((m) => {
-                      const top = m.items?.[0]
-                      return (
-                        <li key={`hc-advice-cr-${m.market}`}>
-                          <Link href={m.href} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-white/70 dark:hover:bg-white/8 transition">
-                            <div className="min-w-0">
-                              <div className="text-[12px] font-medium text-slate-900 dark:text-white">{m.label}</div>
-                              <div className="text-[10px] text-slate-600 dark:text-white/55 truncate">
-                                {top ? (
-                                  <>
-                                    {top.symbol} • <span className={sideTextClass(top.status)}>{top.status}</span> • sterkte {top.strength}
-                                  </>
-                                ) : (
-                                  'Geen BUY/SELL signaal nu'
-                                )}
-                              </div>
-                            </div>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                top?.advice === 'ACTIEF'
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-slate-200 text-slate-700 dark:bg-white/15 dark:text-white/70'
-                              }`}
-                            >
-                              {top?.advice || 'WACHT'}
-                            </span>
-                          </Link>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-2xl border border-slate-300/40 bg-white/75 p-4 dark:border-white/15 dark:bg-white/5">
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Wachtlijst (assets)</h3>
-            <p className="mb-3 text-[11px] text-slate-700/80 dark:text-white/60">Wel signaal, maar nog niet zeker genoeg.</p>
-            {waitingAssetRows.length === 0 ? (
-              <div className="text-[12px] text-slate-600 dark:text-white/65">Geen wachtlijst.</div>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Aandelen</h4>
-                    <span className="text-[10px] text-slate-600 dark:text-white/60">{waitingEquityRows.length} op wacht</span>
-                  </div>
-                  {renderWaitingRows(waitingEquityRows, 'eq')}
-                </div>
-                <div className="rounded-xl border border-slate-300/45 bg-white/70 p-3 dark:border-white/15 dark:bg-white/5">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h4 className="text-[12px] font-semibold text-slate-900 dark:text-white">Crypto</h4>
-                    <span className="text-[10px] text-slate-600 dark:text-white/60">{waitingCryptoRows.length} op wacht</span>
-                  </div>
-                  {renderWaitingRows(waitingCryptoRows, 'cr')}
-                </div>
-              </div>
-            )}
           </div>
         </section>
 
@@ -1493,15 +1166,10 @@ export const getServerSideProps: GetServerSideProps<HomeProps> = async () => {
 
     const resSnap = await fetch(`${base}/api/home/snapshot`, { cache: 'no-store' })
     const snapshot = resSnap.ok ? (await resSnap.json() as HomeSnapshot) : null
-    const resHighConf = await fetch(
-      `${base}/api/market/high-confidence?targetWinrate=0.8&minCoverage=0.12&minTrades=8`,
-      { cache: 'no-store' }
-    )
-    const highConfidence = resHighConf.ok ? (await resHighConf.json() as HCResponse) : null
 
     // Step B: briefing niet meer in SSR (client fallback blijft)
-    return { props: { snapshot, briefing: null, highConfidence } }
+    return { props: { snapshot, briefing: null } }
   } catch {
-    return { props: { snapshot: null, briefing: null, highConfidence: null } }
+    return { props: { snapshot: null, briefing: null } }
   }
 }
