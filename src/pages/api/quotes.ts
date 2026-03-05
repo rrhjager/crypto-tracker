@@ -1,5 +1,6 @@
 // src/pages/api/quotes.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { COIN_SET } from '@/lib/coins'
 
 type Quote = {
   symbol: string
@@ -91,15 +92,15 @@ function toCryptoSym(token: string): string | null {
   if (!raw) return null
   // direct ticker?
   const up = raw.toUpperCase()
-  if (/^[A-Z0-9]{2,6}$/.test(up)) return up
+  if (/^[A-Z0-9]{2,6}$/.test(up) && COIN_SET.has(up)) return up
 
   // CoinGecko id?
   const id = raw.toLowerCase()
-  if (CG_ID_TO_SYM[id]) return CG_ID_TO_SYM[id]
+  if (CG_ID_TO_SYM[id] && COIN_SET.has(CG_ID_TO_SYM[id])) return CG_ID_TO_SYM[id]
 
   // Naam?
   const normName = up.replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ')
-  if (NAME_TO_SYM[normName]) return NAME_TO_SYM[normName]
+  if (NAME_TO_SYM[normName] && COIN_SET.has(NAME_TO_SYM[normName])) return NAME_TO_SYM[normName]
 
   return null
 }
