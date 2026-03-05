@@ -74,8 +74,8 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
     fetcher,
     {
       revalidateOnFocus: false,
-      refreshInterval: 3_600_000,
-      dedupingInterval: 60_000,
+      refreshInterval: 120_000,
+      dedupingInterval: 15_000,
     }
   )
 
@@ -90,7 +90,7 @@ export function ForwardTrackerPanel({ assetType, sourceMode, strategy = 'standar
                 Elke nieuwe {assetType === 'equity' ? 'aandelen' : 'crypto'}-status opent fictief een trade van{' '}
                 <span className="font-medium text-slate-900 dark:text-white">€1000</span>.{' '}
                 {assetType === 'equity'
-                  ? 'Aandelen openen alleen uit audit/fallback en sluiten alleen op een tegengesteld signaal, na bevestiging en minimaal 24 uur hold.'
+                  ? 'Aandelen openen alleen uit audit/fallback en sluiten op tegengesteld signaal (met bevestiging), bij signaal weg, of door koersdoel/stop.'
                   : 'Bij een statusflip of wanneer het signaal verdwijnt, sluit de trade automatisch.'}{' '}
                 Bruto toont alleen de pure koersverandering. Netto trekt fees en slippage af.
               </>

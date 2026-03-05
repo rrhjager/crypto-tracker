@@ -82,8 +82,8 @@ export function ForwardTrackerCompare({ assetType, sourceMode, rows }: Props) {
     },
     {
       revalidateOnFocus: false,
-      refreshInterval: 3_600_000,
-      dedupingInterval: 60_000,
+      refreshInterval: 120_000,
+      dedupingInterval: 15_000,
     }
   )
 

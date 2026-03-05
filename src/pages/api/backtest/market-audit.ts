@@ -296,9 +296,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { data, stale } = await getOrRefreshSnap(kvKey, compute, {
-      freshMs: 30 * 60_000,
-      staleMs: 12 * 60 * 60_000,
-      ttlMs: 24 * 60 * 60_000,
+      freshMs: 10 * 60_000,
+      staleMs: 60 * 60_000,
+      ttlMs: 6 * 60 * 60_000,
     })
 
     return res.status(200).json({

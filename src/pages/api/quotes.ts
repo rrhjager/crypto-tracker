@@ -35,6 +35,11 @@ const getCache = (sym: string): Quote | null => {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 async function okJson<T>(r: Response): Promise<T> { return r.json() as any }
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
 
 // ================= Crypto normalisatie (ids/namen → tickers) =================
 // Veelvoorkomende CoinGecko ids → tickers
@@ -102,7 +107,7 @@ function toCryptoSym(token: string): string | null {
 function parseSymbols(q: string | string[] | undefined): string[] {
   if (!q) return []
   const raw = Array.isArray(q) ? q.join(',') : q
-  return raw.split(',').map(s => s.trim()).filter(Boolean)
+  return raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 }
 
 function isLikelyCryptoList(input: string[]): { allCrypto: boolean; mapped: string[] } {
@@ -112,11 +117,45 @@ function isLikelyCryptoList(input: string[]): { allCrypto: boolean; mapped: stri
   return { allCrypto: ok, mapped: (mapped.filter(Boolean) as string[]) }
 }
 
-// ================= Yahoo chart (equities/overige) =================
+// ================= Yahoo quote/chart (equities/overige) =================
+async function fetchQuotesFromBatch(symbols: string[]): Promise<Record<string, Quote>> {
+  const out: Record<string, Quote> = {}
+  const groups = chunk(symbols, 40)
+  for (const group of groups) {
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(group.join(','))}`
+    const r = await fetch(url, { cache: 'no-store' })
+    if (!r.ok) continue
+    const j: any = await okJson(r)
+    const rows: any[] = Array.isArray(j?.quoteResponse?.result) ? j.quoteResponse.result : []
+    for (const row of rows) {
+      const symbol = String(row?.symbol || '').trim().toUpperCase()
+      if (!symbol) continue
+      const regular = Number(row?.regularMarketPrice)
+      const pre = Number(row?.preMarketPrice)
+      const post = Number(row?.postMarketPrice)
+      const price = Number.isFinite(regular) ? regular : Number.isFinite(pre) ? pre : Number.isFinite(post) ? post : null
+      const change = Number(row?.regularMarketChange)
+      const changePct = Number(row?.regularMarketChangePercent)
+      out[symbol] = {
+        symbol,
+        longName: typeof row?.longName === 'string' ? row.longName : undefined,
+        shortName: typeof row?.shortName === 'string' ? row.shortName : undefined,
+        regularMarketPrice: price,
+        regularMarketChange: Number.isFinite(change) ? change : null,
+        regularMarketChangePercent: Number.isFinite(changePct) ? changePct : null,
+        currency: typeof row?.currency === 'string' ? row.currency : undefined,
+        marketState: typeof row?.marketState === 'string' ? row.marketState : undefined,
+      }
+    }
+  }
+  return out
+}
+
 /** Pak laatste en voorlaatste geldige close uit chart API en bereken change/% */
 async function fetchQuoteFromChart(symbol: string): Promise<Quote> {
-  // chart combos; 1d is vaak robuust
+  // fallback als quote endpoint niets teruggeeft
   const combos: Array<[string, string]> = [
+    ['5m', '5d'],
     ['1d', '1mo'],
     ['1d', '3mo'],
     ['1wk', '1y'],
@@ -209,7 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(200).json(j)
     }
 
-    // 2) Anders: equity/overige → haal via Yahoo chart (met kleine cache)
+    // 2) Anders: equity/overige → realtime via Yahoo quote endpoint, chart als fallback
     const symbols = [...new Set(rawInput)]
     const hits: Quote[] = []
     const need: string[] = []
@@ -220,23 +259,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     const errors: string[] = []
-    const fetched: Quote[] = need.length
-      ? (await mapWithPool(need, 4, async (sym) => {
-          try {
-            const q = await fetchQuoteFromChart(sym)
-            setCache(q)
-            return q
-          } catch (e: any) {
-            errors.push(`${sym}: ${String(e?.message || e)}`)
-            return {
-              symbol: sym,
-              regularMarketPrice: null,
-              regularMarketChange: null,
-              regularMarketChangePercent: null,
-            } as Quote
+    const fetched: Quote[] = []
+    const unresolved: string[] = []
+
+    if (need.length) {
+      try {
+        const batchQuotes = await fetchQuotesFromBatch(need)
+        for (const sym of need) {
+          const row = batchQuotes[sym]
+          if (row && row.regularMarketPrice != null) {
+            setCache(row)
+            fetched.push(row)
+            continue
           }
-        }))
-      : []
+          unresolved.push(sym)
+        }
+      } catch (e: any) {
+        errors.push(`quote-batch: ${String(e?.message || e)}`)
+        unresolved.push(...need)
+      }
+    }
+
+    if (unresolved.length) {
+      const fallbackRows = await mapWithPool(unresolved, 4, async (sym) => {
+        try {
+          const q = await fetchQuoteFromChart(sym)
+          setCache(q)
+          return q
+        } catch (e: any) {
+          errors.push(`${sym}: ${String(e?.message || e)}`)
+          return {
+            symbol: sym,
+            regularMarketPrice: null,
+            regularMarketChange: null,
+            regularMarketChangePercent: null,
+          } as Quote
+        }
+      })
+      fetched.push(...fallbackRows)
+    }
 
     const all = [...hits, ...fetched]
     const map: Record<string, Quote> = {}
@@ -249,7 +310,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         received: all.filter(q => q.regularMarketPrice != null).length,
         partial: all.some(q => q.regularMarketPrice == null),
         errors: errors.length ? errors.slice(0, 8) : undefined,
-        used: 'quotes: equity→yahoo (with 20s mem-cache)',
+        used: 'quotes: equity→yahoo quote+chart fallback (with 20s mem-cache)',
       }
     })
   } catch (e: any) {

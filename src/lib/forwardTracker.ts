@@ -211,6 +211,9 @@ const FEE_BPS_CRYPTO_ROUND_TRIP = 20
 const SLIPPAGE_BPS_ROUND_TRIP = 10
 const EQUITY_MIN_HOLD_MS = 24 * 60 * 60 * 1000
 const EQUITY_EXIT_CONFIRMATIONS = 2
+const EQUITY_SIGNAL_REMOVED_EXIT_CONFIRMATIONS = 2
+const EQUITY_TAKE_PROFIT_PCT = 10
+const EQUITY_STOP_LOSS_PCT = 7
 const HIGH_MOVE_CRYPTO_MIN_EXPECTED_PCT = 4
 const HIGH_MOVE_CRYPTO_MIN_CONFIDENCE = 60
 const HIGH_MOVE_CRYPTO_RELAXED_MIN_CONFIDENCE = 55
@@ -1147,6 +1150,24 @@ export async function syncForwardTracker(
       open.lastMarkedAt = stamp.iso
     }
 
+    if (isEquity && currentPrice != null && currentPrice > 0) {
+      const marked = computeMarkedTrade(assetType, open.side, open.quantity, open.entryPrice, currentPrice, open.principalEur)
+      if (marked.grossReturnPct >= EQUITY_TAKE_PROFIT_PCT) {
+        nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'take_profit_hit', stamp.ms))
+        delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
+        blockedEntrySymbols.add(symbol)
+        continue
+      }
+      if (marked.grossReturnPct <= -EQUITY_STOP_LOSS_PCT) {
+        nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'stop_loss_hit', stamp.ms))
+        delete nextState.openPositions[symbol]
+        delete nextState.pendingExits?.[symbol]
+        blockedEntrySymbols.add(symbol)
+        continue
+      }
+    }
+
     if (isHighHitCrypto && currentPrice != null && currentPrice > 0) {
       const marked = computeMarkedTrade(assetType, open.side, open.quantity, open.entryPrice, currentPrice, open.principalEur)
       if (marked.grossReturnPct >= HIGH_HIT_CRYPTO_TAKE_PROFIT_PCT) {
@@ -1180,7 +1201,24 @@ export async function syncForwardTracker(
 
     if (!liveSignal) {
       if (isEquity) {
-        delete nextState.pendingExits?.[symbol]
+        const pending = nextState.pendingExits?.[symbol]
+        const seenCount = pending?.reason === 'signal_removed' ? pending.seenCount + 1 : 1
+        nextState.pendingExits![symbol] = {
+          symbol,
+          reason: 'signal_removed',
+          firstSeenAt: pending?.reason === 'signal_removed' ? pending.firstSeenAt : stamp.iso,
+          firstSeenAtMs: pending?.reason === 'signal_removed' ? pending.firstSeenAtMs : stamp.ms,
+          lastSeenAt: stamp.iso,
+          lastSeenAtMs: stamp.ms,
+          seenCount,
+        }
+        if (seenCount < EQUITY_SIGNAL_REMOVED_EXIT_CONFIRMATIONS) continue
+        if (currentPrice != null && currentPrice > 0) {
+          nextState.closedTrades.unshift(closePosition(assetType, open, currentPrice, 'signal_removed', stamp.ms))
+          delete nextState.openPositions[symbol]
+          delete nextState.pendingExits?.[symbol]
+          blockedEntrySymbols.add(symbol)
+        }
         continue
       }
       if (isHighMoveCrypto) {
@@ -1350,7 +1388,9 @@ export async function syncForwardTracker(
       sourceMode,
       currentSignals: qualifyingSignalCount,
       note: isEquity
-        ? 'Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten alleen op een tegengesteld signaal, pas na minimaal 24 uur open én na 2 opeenvolgende exitsignalen. Netto rekent round-trip kosten mee.'
+        ? `Forward-test start vanaf de eerste sync. Equity entries komen alleen uit audit/fallback, nooit uit raw. Aandelen sluiten op (1) tegengesteld signaal na minimaal 24 uur open en 2 bevestigingen, (2) signaal verdwijnt na 2 bevestigingen, of (3) koersdoel/stop (${EQUITY_TAKE_PROFIT_PCT.toFixed(
+            1
+          )}% / ${EQUITY_STOP_LOSS_PCT.toFixed(1)}%). Netto rekent round-trip kosten mee.`
         : isBestSingleCrypto
           ? `Forward-test start vanaf de eerste sync. Deze variant houdt maximaal 1 crypto tegelijk aan met ${leverageMultiplier}x leverage op €1000 margin (€${(
               PRINCIPAL_PER_TRADE_EUR * leverageMultiplier

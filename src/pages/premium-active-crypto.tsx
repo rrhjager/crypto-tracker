@@ -327,7 +327,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
           name="description"
           content="Alleen audit-gevalideerde live crypto-signalen. Deze pagina toont uitsluitend huidige BUY- en SELL-signalen die out-of-sample door de backtest zijn gekomen."
         />
-        <meta httpEquiv="refresh" content="3600" />
+        <meta httpEquiv="refresh" content="300" />
       </Head>
 
       <main className="max-w-screen-xl mx-auto px-4 pt-10 pb-16 space-y-6">
@@ -405,7 +405,7 @@ export default function PremiumActiveCryptoPage({ error, generatedAt, picks, sel
               <div className="mt-1 text-3xl font-semibold text-slate-900 dark:text-white">
                 {effectiveSourceMode === 'audit' ? 'Audit' : effectiveSourceMode === 'fallback' ? 'Fallback' : 'Live score'}
               </div>
-              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh elk uur</div>
+              <div className="mt-1 text-[12px] text-slate-700/80 dark:text-white/60">Update {generatedAt} · auto refresh elke 5 min</div>
             </div>
           </div>
         </section>
